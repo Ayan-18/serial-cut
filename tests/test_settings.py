@@ -33,3 +33,13 @@ def test_effective_settings_keep_env_tools_and_apply_ui_overrides(session, tmp_p
     assert merged.ffmpeg_path == "custom-ffmpeg"
     assert merged.ffprobe_path == "custom-ffprobe"
     assert merged.render_use_nvenc is True
+
+
+def test_settings_parse_empty_and_csv_telegram_user_ids_from_dotenv(tmp_path: Path):
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("SERIALCUTS_TELEGRAM_ALLOWED_USER_IDS=\n", encoding="utf-8")
+    csv_env = tmp_path / "csv.env"
+    csv_env.write_text("SERIALCUTS_TELEGRAM_ALLOWED_USER_IDS=111, 222\n", encoding="utf-8")
+
+    assert Settings(_env_file=empty_env).telegram_allowed_user_ids == []
+    assert Settings(_env_file=csv_env).telegram_allowed_user_ids == [111, 222]
