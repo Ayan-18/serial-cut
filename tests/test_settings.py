@@ -23,15 +23,31 @@ def test_effective_settings_keep_env_tools_and_apply_ui_overrides(session, tmp_p
     env = Settings(
         ffmpeg_path="custom-ffmpeg",
         ffprobe_path="custom-ffprobe",
+        asr_adapter="faster-whisper",
+        llm_adapter="llama-cpp-http",
+        llm_base_url="http://127.0.0.1:8081",
         cache_dir=tmp_path / "cache",
         output_dir=tmp_path / "out",
     )
-    save_runtime_settings(session, get_runtime_settings(session, env).model_copy(update={"render_use_nvenc": True}))
+    save_runtime_settings(
+        session,
+        get_runtime_settings(session, env).model_copy(
+            update={
+                "render_use_nvenc": True,
+                "asr_adapter": "stub",
+                "llm_adapter": "stub",
+                "llm_base_url": "http://stale-setting.invalid",
+            }
+        ),
+    )
 
     merged = effective_settings(session, env)
 
     assert merged.ffmpeg_path == "custom-ffmpeg"
     assert merged.ffprobe_path == "custom-ffprobe"
+    assert merged.asr_adapter == "faster-whisper"
+    assert merged.llm_adapter == "llama-cpp-http"
+    assert merged.llm_base_url == "http://127.0.0.1:8081"
     assert merged.render_use_nvenc is True
 
 

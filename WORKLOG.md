@@ -2,6 +2,32 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-30 - Real Local Models And One-Command Launch
+
+Enabled the complete privacy-first local pipeline on this computer:
+
+- Installed official llama.cpp and downloaded pinned `faster-whisper-small` plus verified
+  `Qwen3-4B-Q4_K_M.gguf` under ignored `data/models` (about 3 GB total).
+- Added an explicit-confirmation model installer with a fixed Qwen SHA-256.
+- Added CPU `int8` ASR plus CUDA-to-CPU fallback and configured this machine for reliable CPU ASR.
+- Migrated the llama.cpp adapter to local `/v1/chat/completions`, disabled Qwen thinking, and added
+  strict structured output validation.
+- Made the episode outline deterministic from transcript timestamps so a verbose 4B model cannot
+  block candidate analysis.
+- Split candidate generation into three episode sections and enforce the configured 35-59 second
+  range, which prevents first-minute-only and too-short results.
+- Kept adapter/model connection settings owned by `.env`, so stale persisted UI values cannot
+  silently switch real processing back to stubs.
+- Added `scripts/run_local.ps1` to start and stop the local Qwen server with the app and keep its
+  logs under `data/logs`.
+
+Real verification: full Stage 2 on an 11:42 episode produced 137 transcript segments and 194 scenes
+in roughly 3-4 minutes. Real Stage 3 completed in about 53 seconds and produced 5 candidates spread
+across the episode at 35-59 seconds each. The one-command launcher started both health endpoints and
+cleanly stopped its owned LLM process. Backend verification passed (`38 passed, 1 upstream warning`),
+the frontend production build passed, and every system check passed. Original media remained read-only
+and no content was uploaded.
+
 ## 2026-08-30 - Visible Media Progress And Labeled Settings
 
 Improved feedback and clarity in the React panel:

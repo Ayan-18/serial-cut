@@ -9,7 +9,14 @@ from app.application.stage2 import MediaPrepResult, run_stage2_media_analysis
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
 from app.media.scenes import SceneInterval, StubSceneDetector, save_scenes
-from app.media.transcription import StubTranscriber, TranscriptChunk, TranscriptResult, Word, save_transcript
+from app.media.transcription import (
+    FasterWhisperTranscriber,
+    StubTranscriber,
+    TranscriptChunk,
+    TranscriptResult,
+    Word,
+    save_transcript,
+)
 from app.models.entities import Episode, Scene, TranscriptSegment, WordTimestamp
 
 
@@ -79,4 +86,21 @@ def test_stage2_smoke_with_stub_models(session, tmp_path: Path):
     assert Path(episode.proxy_path).exists()
     assert session.scalar(select(TranscriptSegment).where(TranscriptSegment.episode_id == episode.id)) is not None
     assert session.scalar(select(Scene).where(Scene.episode_id == episode.id)) is not None
+
+
+def test_faster_whisper_auto_device_falls_back_to_cpu(monkeypatch, tmp_path: Path):
+    transcriber = FasterWhisperTranscriber("small", "int8_float16", "int8", device="auto")
+    calls: list[tuple[str, str]] = []
+    expected = TranscriptResult(language="ru", segments=[])
+
+    def fake_transcribe(device: str, compute_type: str, audio_path: Path):
+        calls.append((device, compute_type))
+        if device == "cuda":
+            raise RuntimeError("CUDA runtime is unavailable")
+        return expected
+
+    monkeypatch.setattr(transcriber, "_transcribe_with", fake_transcribe)
+
+    assert transcriber.transcribe(tmp_path / "audio.wav") is expected
+    assert calls == [("cuda", "int8_float16"), ("cuda", "int8"), ("cpu", "int8")]
 

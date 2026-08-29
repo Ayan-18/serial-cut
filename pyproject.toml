@@ -16,6 +16,7 @@ dependencies = [
   "SQLAlchemy==2.0.52",
   "alembic==1.19.1",
   "python-dotenv==1.1.1",
+  "requests==2.34.2",
   "faster-whisper==1.2.0",
   "ctranslate2==4.6.0",
   "scenedetect-headless==0.7.1",

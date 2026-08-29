@@ -12,18 +12,37 @@ SerialCuts - локальное Windows-приложение для поиска
 
 Следующий срез добавил первые продуктовые фичи: автоматический режим, локально сохраняемые настройки UI, сезонную очередь с pause/resume/run-next/cancel/retry и улучшенный render с пресетами YouTube Shorts / Instagram Reels, NVENC auto-detect, экспортом без субтитров и опциональным двухпроходным loudnorm.
 
-## Быстрый старт Windows
+## Быстрый старт Windows с реальными моделями
 
-Требуется Python 3.11.x, Node.js 22+ или 24+, FFmpeg/ffprobe в `PATH`.
+Требуется Python 3.11.x, Node.js 22+ или 24+, FFmpeg/ffprobe и `llama-server` в `PATH`.
+PowerShell-команды ниже используют разовый обход Execution Policy и не меняют системную политику.
 
 ```powershell
 Copy-Item .env.example .env
-.\scripts\setup.ps1
-.\scripts\check_system.ps1
-.\scripts\run.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+winget install --exact --id ggml.llamacpp
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_models.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 ```
 
-Панель откроется по адресу `http://127.0.0.1:8090`.
+Чтобы включить реальные адаптеры, задайте в `.env`:
+
+```env
+SERIALCUTS_ASR_ADAPTER=faster-whisper
+SERIALCUTS_ASR_MODEL_NAME=./data/models/faster-whisper-small
+SERIALCUTS_ASR_DEVICE=cpu
+SERIALCUTS_LLM_ADAPTER=llama-cpp-http
+```
+
+Запуск приложения и локальной Qwen одной командой:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
+```
+
+Откройте `http://127.0.0.1:8090`. Модель Qwen запускается скрыто только на `127.0.0.1` и
+останавливается вместе с приложением. Логи находятся в `data/logs`. Вариант без моделей для
+быстрой проверки интерфейса остаётся доступен через адаптеры `stub` и `scripts/run.ps1`.
 
 ## Работа Через Codex На Двух Компьютерах
 
@@ -74,8 +93,9 @@ Pop-Location
 
 ```env
 SERIALCUTS_ASR_ADAPTER=faster-whisper
-SERIALCUTS_ASR_MODEL_NAME=large-v3-turbo
-SERIALCUTS_ASR_COMPUTE_TYPE=int8_float16
+SERIALCUTS_ASR_MODEL_NAME=./data/models/faster-whisper-small
+SERIALCUTS_ASR_DEVICE=cpu
+SERIALCUTS_ASR_COMPUTE_TYPE=int8
 SERIALCUTS_ASR_FALLBACK_COMPUTE_TYPE=int8
 ```
 
@@ -88,10 +108,13 @@ FFmpeg-команды строятся только как массив аргу
 ```env
 SERIALCUTS_LLM_ADAPTER=llama-cpp-http
 SERIALCUTS_LLM_BASE_URL=http://127.0.0.1:8081
-SERIALCUTS_LLM_MODEL_HINT=Qwen3-8B-Instruct-GGUF-Q4
+SERIALCUTS_LLM_MODEL_HINT=Qwen3-4B-GGUF-Q4_K_M
 ```
 
-Адаптер ожидает endpoint `/completion`, совместимый с llama.cpp server. Ответ кандидатов валидируется через Pydantic и затем детерминированно корректируется по словам/сценам.
+Адаптер использует локальный endpoint `/v1/chat/completions` с JSON Schema. Расшифровка делится
+на три временные части, чтобы кандидаты искались по всему эпизоду, а не только в начале. Ответы
+валидируются через Pydantic, короткие границы расширяются до настроенного минимума и затем
+корректируются по словам/сценам.
 
 ## Auto Mode И Очередь
 
@@ -123,6 +146,9 @@ SERIALCUTS_TELEGRAM_ALLOWED_USER_IDS=111111111,222222222
 
 Callbacks `approve`, `reject`, `export` идемпотентны: повторное нажатие той же кнопки возвращает сохранённый результат операции.
 
-## Удаление cache и моделей
+## Cache и модели
 
-Пока модели не скачиваются автоматически. Cache можно удалить вручную из папки, указанной в `SERIALCUTS_CACHE_DIR`; готовые ролики лежат отдельно в `SERIALCUTS_OUTPUT_DIR`. Не удаляйте папки с исходными сериями.
+Модели скачиваются только после явного подтверждения командой `scripts/install_models.ps1` и
+хранятся в `data/models` (около 3 GB). Cache можно удалить вручную из папки, указанной в
+`SERIALCUTS_CACHE_DIR`; готовые ролики лежат отдельно в `SERIALCUTS_OUTPUT_DIR`. Не удаляйте
+папки с исходными сериями.

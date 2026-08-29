@@ -22,10 +22,14 @@ def adjust_candidate_boundaries(
     start, end = _snap_to_scene_edges(start, end, scenes)
     duration = end - start
     if duration < min_seconds:
-        end = min(end + (min_seconds - duration), candidate.end_time + 8.0)
+        episode_end = max((scene.end_time for scene in scenes), default=start + min_seconds)
+        end = min(start + min_seconds, episode_end)
+        if end - start < min_seconds:
+            start = max(0.0, end - min_seconds)
+        start, end = _snap_to_scene_edges(start, end, scenes)
     if end - start > max_seconds:
         end = start + max_seconds
-    if end <= start or end - start < max(3, min_seconds * 0.35):
+    if end <= start or end - start < min_seconds:
         return None
     return candidate.model_copy(update={"start_time": round(start, 3), "end_time": round(end, 3)})
 

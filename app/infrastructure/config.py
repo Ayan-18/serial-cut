@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     proxy_width: int = 640
     proxy_crf: int = 28
     asr_adapter: Literal["stub", "faster-whisper"] = "stub"
-    asr_model_name: str = "large-v3-turbo"
+    asr_model_name: str = "small"
+    asr_device: Literal["auto", "cuda", "cpu"] = "auto"
     asr_compute_type: str = "int8_float16"
     asr_fallback_compute_type: str = "int8"
     llm_adapter: Literal["stub", "llama-cpp-http"] = "stub"

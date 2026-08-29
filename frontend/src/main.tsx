@@ -272,7 +272,7 @@ function App() {
           <LoaderCircle className="spinner" size={24} />
           <div>
             <strong>Медиа-анализ выполняется: {mediaProgress.fileName}</strong>
-            <span>FFmpeg создаёт рабочие файлы и ищет сцены · прошло {formatElapsed(mediaElapsedSeconds)}</span>
+            <span>Готовим файлы, распознаём речь и ищем сцены · прошло {formatElapsed(mediaElapsedSeconds)}</span>
           </div>
         </div>
       )}

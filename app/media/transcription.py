@@ -64,7 +64,7 @@ class FasterWhisperTranscriber:
         model_name: str,
         compute_type: str,
         fallback_compute_type: str,
-        device: str = "cuda",
+        device: str = "auto",
         language: str = "ru",
     ) -> None:
         self.model_name = model_name
@@ -74,17 +74,29 @@ class FasterWhisperTranscriber:
         self.language = language
 
     def transcribe(self, audio_path: Path) -> TranscriptResult:
-        try:
-            return self._transcribe_with(self.compute_type, audio_path)
-        except RuntimeError:
-            if self.compute_type == self.fallback_compute_type:
-                raise
-            return self._transcribe_with(self.fallback_compute_type, audio_path)
+        last_error: RuntimeError | None = None
+        for device, compute_type in self._attempts():
+            try:
+                return self._transcribe_with(device, compute_type, audio_path)
+            except RuntimeError as exc:
+                last_error = exc
+        raise RuntimeError("Не удалось запустить faster-whisper на CUDA или CPU") from last_error
 
-    def _transcribe_with(self, compute_type: str, audio_path: Path) -> TranscriptResult:
+    def _attempts(self) -> list[tuple[str, str]]:
+        if self.device == "cpu":
+            return [("cpu", "int8")]
+        attempts = [(self.device, self.compute_type)]
+        if self.fallback_compute_type != self.compute_type:
+            attempts.append((self.device, self.fallback_compute_type))
+        if self.device == "auto":
+            attempts = [("cuda", compute_type) for _, compute_type in attempts]
+            attempts.append(("cpu", "int8"))
+        return list(dict.fromkeys(attempts))
+
+    def _transcribe_with(self, device: str, compute_type: str, audio_path: Path) -> TranscriptResult:
         from faster_whisper import WhisperModel
 
-        model = WhisperModel(self.model_name, device=self.device, compute_type=compute_type)
+        model = WhisperModel(self.model_name, device=device, compute_type=compute_type)
         segments, info = model.transcribe(
             str(audio_path),
             language=self.language,

@@ -1,6 +1,25 @@
 # Установка моделей
 
-SerialCuts не скачивает многогигабайтные модели молча. На следующих этапах будет добавлена отдельная команда установки моделей с показом размера и явным подтверждением.
+SerialCuts не скачивает многогигабайтные модели молча. Установщик сначала показывает размер и
+требует явное подтверждение. Все модели остаются в `data/models`; исходные видео, аудио и
+расшифровки не отправляются во внешние AI-сервисы.
+
+## Установка
+
+```powershell
+winget install --exact --id ggml.llamacpp
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_models.ps1
+```
+
+Будут скачаны:
+
+- `Systran/faster-whisper-small`, около 486 MB, закреплённая ревизия;
+- `ggml-org/Qwen3-4B-GGUF`, файл `Qwen3-4B-Q4_K_M.gguf`, около 2.5 GB.
+
+Для Qwen установщик вычисляет SHA-256 и принимает только
+`ab27b9bfa375a178d6cba48f3ad892b94b7739659dcc7aae8058ce0ffed6b328`. Это файлы весов
+моделей, а не исполняемые программы. Исполняемый `llama-server` устанавливается отдельно через
+официальный пакет llama.cpp в winget.
 
 ## Выбранные версии библиотек
 
@@ -24,34 +43,38 @@ SerialCuts не скачивает многогигабайтные модели
 
 ## ASR
 
-Рекомендуемый профиль:
+Рабочий профиль для этой машины:
 
-- модель: `large-v3-turbo` для faster-whisper;
+- модель: локальная `faster-whisper-small`;
 - язык: `ru`;
 - timestamps: segment + word timestamps;
 - VAD: включён;
-- GPU compute: сначала `int8_float16`, fallback `int8` при нехватке VRAM.
+- CPU compute: `int8`.
 
-Для Windows GPU-режима проверьте CUDA 12/cuDNN 9. Если на машине установлены более старые CUDA/cuDNN, нужно закрепить совместимый `ctranslate2` согласно документации faster-whisper.
+CPU выбран как надёжный профиль для GTX 1660 SUPER: современный faster-whisper GPU-режим требует
+совместимые CUDA 12 и cuDNN 9. Код умеет попробовать CUDA и автоматически перейти на CPU `int8`,
+если в `.env` задано `SERIALCUTS_ASR_DEVICE=auto`.
 
 В текущем коде реальный adapter включается через `.env`:
 
 ```env
 SERIALCUTS_ASR_ADAPTER=faster-whisper
+SERIALCUTS_ASR_MODEL_NAME=./data/models/faster-whisper-small
+SERIALCUTS_ASR_DEVICE=cpu
 ```
 
 Без этой настройки используется `stub`, чтобы проверить UI, БД и media-стадии без скачивания модели.
 
 ## LLM
 
-Рекомендуемый профиль:
+Рабочий профиль:
 
-- `Qwen3` instruct-класса 8B в GGUF Q4;
+- `Qwen3-4B` в GGUF `Q4_K_M`;
 - `llama.cpp` HTTP server только на `127.0.0.1`;
 - режим без thinking;
-- анализ длинной расшифровки иерархически.
+- анализ расшифровки тремя временными частями.
 
-В MVP adapter использует llama.cpp-compatible `/completion`:
+Адаптер использует llama.cpp-compatible `/v1/chat/completions` и строгую JSON Schema:
 
 ```env
 SERIALCUTS_LLM_ADAPTER=llama-cpp-http
@@ -59,6 +82,18 @@ SERIALCUTS_LLM_BASE_URL=http://127.0.0.1:8081
 ```
 
 Для проверки без модели оставьте `SERIALCUTS_LLM_ADAPTER=stub`.
+
+## Запуск
+
+Одна команда запускает скрытый `llama-server`, ждёт его готовности, применяет миграции и запускает
+SerialCuts:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
+```
+
+Для диагностики LLM отдельно используйте `scripts/run_llm.ps1`. После первого скачивания интернет
+для распознавания, анализа и рендера не нужен.
 
 ## VLM
 
@@ -75,3 +110,7 @@ SERIALCUTS_LLM_BASE_URL=http://127.0.0.1:8081
 ```
 
 Проверка должна показать Python 3.11+, FFmpeg, ffprobe, `nvidia-smi`, доступность cache/output и свободное место.
+
+На проверочном эпизоде длительностью 11:42 Stage 2 занял около 3-4 минут на CPU и сохранил 137
+реплик и 194 сцены. Stage 3 занял около минуты на GTX 1660 SUPER и выдал 5 кандидатов из разных
+частей эпизода. Время зависит от длительности видео и железа.

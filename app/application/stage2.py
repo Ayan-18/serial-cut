@@ -127,5 +127,6 @@ def _build_transcriber(settings: Settings) -> Transcriber:
         model_name=settings.asr_model_name,
         compute_type=settings.asr_compute_type,
         fallback_compute_type=settings.asr_fallback_compute_type,
+        device=settings.asr_device,
     )
 
