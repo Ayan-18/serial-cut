@@ -2,6 +2,18 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-30 - Visible Media Progress And Labeled Settings
+
+Improved feedback and clarity in the React panel:
+
+- Direct Stage 2 media analysis now immediately shows an animated status banner, episode name, and elapsed time.
+- The active episode's Media/Candidates/Auto controls are disabled during processing to prevent duplicate or conflicting requests.
+- Media errors are reported in the panel and controls are restored in a `finally` path.
+- Settings are grouped into Files, Analysis and Auto, and Render sections.
+- Every settings control now has a Russian label, units where relevant, and a short explanation.
+
+Verification: frontend production build passed; the UI was inspected in the running local app; the timer advanced and cleared after Stage 2 completed; browser console contained no errors.
+
 ## 2026-08-30 - Empty Telegram Whitelist Setting
 
 Fixed startup with the default `.env.example` value `SERIALCUTS_TELEGRAM_ALLOWED_USER_IDS=`. The field now bypasses automatic JSON decoding and uses the existing validator, so an empty value becomes an empty whitelist and comma-separated IDs remain supported.

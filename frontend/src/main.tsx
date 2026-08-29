@@ -5,6 +5,7 @@ import {
   Clapperboard,
   FolderPlus,
   ListVideo,
+  LoaderCircle,
   Pause,
   Play,
   RefreshCcw,
@@ -65,6 +66,7 @@ type Candidate = {
   crop_mode: "auto-follow" | "center-crop" | "blurred-background";
   status: string;
 };
+type MediaProgress = { episodeId: number; fileName: string; startedAt: number };
 
 function App() {
   const [rootPath, setRootPath] = useState("");
@@ -76,6 +78,8 @@ function App() {
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<number | null>(null);
   const [edits, setEdits] = useState<Record<number, { start: string; end: string; crop: string }>>({});
   const [message, setMessage] = useState("");
+  const [mediaProgress, setMediaProgress] = useState<MediaProgress | null>(null);
+  const [mediaElapsedSeconds, setMediaElapsedSeconds] = useState(0);
 
   async function api<T>(url: string, init?: RequestInit): Promise<T> {
     const response = await fetch(url, init);
@@ -133,10 +137,20 @@ function App() {
     await refresh();
   }
 
-  async function runStage2(episodeId: number) {
-    const data = await api<{ transcript_segments: number; scenes: number }>(`/api/episodes/${episodeId}/stage2`, { method: "POST" });
-    setMessage(`Медиа-анализ готов: сегментов ${data.transcript_segments}, сцен ${data.scenes}`);
-    await refresh();
+  async function runStage2(episode: Episode) {
+    if (mediaProgress) return;
+    setMediaProgress({ episodeId: episode.id, fileName: episode.file_name, startedAt: Date.now() });
+    setMediaElapsedSeconds(0);
+    setMessage(`Медиа-анализ «${episode.file_name}» запущен. Это может занять несколько минут.`);
+    try {
+      const data = await api<{ transcript_segments: number; scenes: number }>(`/api/episodes/${episode.id}/stage2`, { method: "POST" });
+      setMessage(`Медиа-анализ готов: сегментов ${data.transcript_segments}, сцен ${data.scenes}`);
+    } catch (error) {
+      setMessage(`Ошибка медиа-анализа: ${error instanceof Error ? error.message : "неизвестная ошибка"}`);
+    } finally {
+      setMediaProgress(null);
+      await refresh().catch((error) => setMessage(`Не удалось обновить данные: ${error.message}`));
+    }
   }
 
   async function runStage3(episodeId: number) {
@@ -229,6 +243,16 @@ function App() {
     runSystemCheck().catch((error) => setMessage(error.message));
   }, []);
 
+  useEffect(() => {
+    if (!mediaProgress) return;
+    const updateElapsed = () => {
+      setMediaElapsedSeconds(Math.floor((Date.now() - mediaProgress.startedAt) / 1000));
+    };
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [mediaProgress]);
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -242,6 +266,16 @@ function App() {
       </section>
 
       {message && <p className="notice">{message}</p>}
+
+      {mediaProgress && (
+        <div className="processing-banner" role="status" aria-live="polite">
+          <LoaderCircle className="spinner" size={24} />
+          <div>
+            <strong>Медиа-анализ выполняется: {mediaProgress.fileName}</strong>
+            <span>FFmpeg создаёт рабочие файлы и ищет сцены · прошло {formatElapsed(mediaElapsedSeconds)}</span>
+          </div>
+        </div>
+      )}
 
       <section className="grid">
         <div className="panel">
@@ -291,27 +325,90 @@ function App() {
             <h2>Настройки</h2>
           </div>
           {settings && (
-            <div className="settings-grid">
-              <input value={settings.cache_dir} onChange={(event) => patchSettings({ cache_dir: event.target.value })} />
-              <input value={settings.output_dir} onChange={(event) => patchSettings({ output_dir: event.target.value })} />
-              <select value={settings.quality_profile} onChange={(event) => patchSettings({ quality_profile: event.target.value as RuntimeSettings["quality_profile"] })}>
-                <option value="fast">fast</option>
-                <option value="balanced">balanced</option>
-                <option value="quality">quality</option>
-              </select>
-              <input type="number" value={settings.min_clip_seconds} onChange={(event) => patchSettings({ min_clip_seconds: Number(event.target.value) })} />
-              <input type="number" value={settings.max_clip_seconds} onChange={(event) => patchSettings({ max_clip_seconds: Number(event.target.value) })} />
-              <input type="number" value={settings.auto_score_threshold} onChange={(event) => patchSettings({ auto_score_threshold: Number(event.target.value) })} />
-              <input type="number" value={settings.max_clips_per_episode} onChange={(event) => patchSettings({ max_clips_per_episode: Number(event.target.value) })} />
-              <select value={settings.render_preset} onChange={(event) => patchSettings({ render_preset: event.target.value as RuntimeSettings["render_preset"] })}>
-                <option value="youtube_shorts">YouTube Shorts</option>
-                <option value="instagram_reels">Instagram Reels</option>
-              </select>
-              <label><input type="checkbox" checked={settings.auto_mode_enabled} onChange={(event) => patchSettings({ auto_mode_enabled: event.target.checked })} /> auto</label>
-              <label><input type="checkbox" checked={settings.render_use_nvenc} onChange={(event) => patchSettings({ render_use_nvenc: event.target.checked })} /> NVENC</label>
-              <label><input type="checkbox" checked={settings.render_loudnorm_two_pass} onChange={(event) => patchSettings({ render_loudnorm_two_pass: event.target.checked })} /> loudnorm 2-pass</label>
-              <input value={settings.subtitle_font_name} onChange={(event) => patchSettings({ subtitle_font_name: event.target.value })} />
-              <button onClick={saveSettings}><Save size={17} /> Сохранить</button>
+            <div className="settings-sections">
+              <section className="settings-section">
+                <h3>Файлы</h3>
+                <div className="settings-grid">
+                  <label className="setting-field setting-field-wide">
+                    <span>Папка временных файлов</span>
+                    <input value={settings.cache_dir} onChange={(event) => patchSettings({ cache_dir: event.target.value })} />
+                    <small>WAV, proxy-видео и другие данные обработки.</small>
+                  </label>
+                  <label className="setting-field setting-field-wide">
+                    <span>Папка готовых роликов</span>
+                    <input value={settings.output_dir} onChange={(event) => patchSettings({ output_dir: event.target.value })} />
+                    <small>Сюда сохраняются экспортированные вертикальные MP4.</small>
+                  </label>
+                </div>
+              </section>
+
+              <section className="settings-section">
+                <h3>Анализ и Auto</h3>
+                <div className="settings-grid">
+                  <label className="setting-field">
+                    <span>Профиль качества</span>
+                    <select value={settings.quality_profile} onChange={(event) => patchSettings({ quality_profile: event.target.value as RuntimeSettings["quality_profile"] })}>
+                      <option value="fast">Быстрый</option>
+                      <option value="balanced">Сбалансированный</option>
+                      <option value="quality">Качественный</option>
+                    </select>
+                    <small>Зарезервировано для будущей настройки скорости и качества.</small>
+                  </label>
+                  <label className="setting-field">
+                    <span>Минимальная длина клипа, сек.</span>
+                    <input type="number" min="5" max="300" value={settings.min_clip_seconds} onChange={(event) => patchSettings({ min_clip_seconds: Number(event.target.value) })} />
+                    <small>Кандидаты короче этого значения будут расширены.</small>
+                  </label>
+                  <label className="setting-field">
+                    <span>Максимальная длина клипа, сек.</span>
+                    <input type="number" min="5" max="300" value={settings.max_clip_seconds} onChange={(event) => patchSettings({ max_clip_seconds: Number(event.target.value) })} />
+                    <small>Ограничивает итоговую длительность кандидата.</small>
+                  </label>
+                  <label className="setting-field">
+                    <span>Порог Auto, баллы из 100</span>
+                    <input type="number" min="0" max="100" value={settings.auto_score_threshold} onChange={(event) => patchSettings({ auto_score_threshold: Number(event.target.value) })} />
+                    <small>Auto принимает только кандидатов с такой оценкой или выше.</small>
+                  </label>
+                  <label className="setting-field">
+                    <span>Максимум клипов из серии</span>
+                    <input type="number" min="1" max="20" value={settings.max_clips_per_episode} onChange={(event) => patchSettings({ max_clips_per_episode: Number(event.target.value) })} />
+                    <small>Лимит автоматического экспорта для одной серии.</small>
+                  </label>
+                  <label className="setting-checkbox">
+                    <input type="checkbox" checked={settings.auto_mode_enabled} onChange={(event) => patchSettings({ auto_mode_enabled: event.target.checked })} />
+                    <span><strong>Auto по умолчанию</strong><small>Автоматически принимать и рендерить лучшие кандидаты в очереди.</small></span>
+                  </label>
+                </div>
+              </section>
+
+              <section className="settings-section">
+                <h3>Рендер</h3>
+                <div className="settings-grid">
+                  <label className="setting-field">
+                    <span>Платформа и пресет</span>
+                    <select value={settings.render_preset} onChange={(event) => patchSettings({ render_preset: event.target.value as RuntimeSettings["render_preset"] })}>
+                      <option value="youtube_shorts">YouTube Shorts</option>
+                      <option value="instagram_reels">Instagram Reels</option>
+                    </select>
+                    <small>Определяет параметры кодирования готового MP4.</small>
+                  </label>
+                  <label className="setting-field">
+                    <span>Шрифт субтитров</span>
+                    <input value={settings.subtitle_font_name} onChange={(event) => patchSettings({ subtitle_font_name: event.target.value })} />
+                    <small>Название установленного в Windows шрифта.</small>
+                  </label>
+                  <label className="setting-checkbox">
+                    <input type="checkbox" checked={settings.render_use_nvenc} onChange={(event) => patchSettings({ render_use_nvenc: event.target.checked })} />
+                    <span><strong>Ускорение NVIDIA NVENC</strong><small>Использовать видеокарту при финальном рендере.</small></span>
+                  </label>
+                  <label className="setting-checkbox">
+                    <input type="checkbox" checked={settings.render_loudnorm_two_pass} onChange={(event) => patchSettings({ render_loudnorm_two_pass: event.target.checked })} />
+                    <span><strong>Точная нормализация громкости</strong><small>Два прохода FFmpeg: медленнее, но ровнее звук.</small></span>
+                  </label>
+                </div>
+              </section>
+
+              <button className="settings-save" onClick={saveSettings}><Save size={17} /> Сохранить настройки</button>
             </div>
           )}
         </div>
@@ -346,9 +443,13 @@ function App() {
                 <span>{episode.stage}</span>
                 <span>{formatBytes(episode.size_bytes)}</span>
                 <span>{episode.width && episode.height ? `${episode.width}x${episode.height}` : "metadata pending"}</span>
-                <button onClick={() => runStage2(episode.id)}>Медиа</button>
-                <button onClick={() => runStage3(episode.id)}>Кандидаты</button>
-                <button onClick={() => autoExport(episode.id)}>Auto export</button>
+                <button className="media-button" disabled={mediaProgress !== null} onClick={() => runStage2(episode)}>
+                  {mediaProgress?.episodeId === episode.id ? (
+                    <><LoaderCircle className="spinner" size={17} /> {formatElapsed(mediaElapsedSeconds)}</>
+                  ) : "Медиа"}
+                </button>
+                <button disabled={mediaProgress?.episodeId === episode.id} onClick={() => runStage3(episode.id)}>Кандидаты</button>
+                <button disabled={mediaProgress?.episodeId === episode.id} onClick={() => autoExport(episode.id)}>Auto export</button>
                 <button onClick={() => loadCandidates(episode.id)}>Открыть</button>
               </article>
             ))
@@ -411,6 +512,14 @@ function formatEta(value: number | null | undefined) {
   if (value == null) return "нет данных";
   if (value < 60) return `${Math.round(value)} сек`;
   return `${Math.round(value / 60)} мин`;
+}
+
+function formatElapsed(value: number) {
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const seconds = value % 60;
+  const base = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return hours > 0 ? `${String(hours).padStart(2, "0")}:${base}` : base;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

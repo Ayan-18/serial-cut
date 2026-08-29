@@ -98,6 +98,11 @@ button {
   padding: 0 14px;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .icon-button {
   height: 40px;
   padding: 0;
@@ -106,7 +111,44 @@ button {
 
 .notice {
   color: #215f9a;
-  margin-top: 10px;
+  margin: 10px 0;
+}
+
+.processing-banner {
+  align-items: center;
+  background: #eff6ff;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 13px 16px;
+}
+
+.processing-banner div {
+  display: grid;
+  gap: 3px;
+}
+
+.processing-banner span {
+  color: #475467;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  flex: 0 0 auto;
+}
+
+.media-button {
+  gap: 7px;
+  min-width: 94px;
+  white-space: nowrap;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .season-list,
@@ -215,22 +257,78 @@ button {
   margin-bottom: 12px;
 }
 
+.settings-sections {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-section {
+  border-top: 1px solid #e7e9ee;
+  padding-top: 14px;
+}
+
+.settings-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.settings-section h3 {
+  color: #344054;
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+
 .settings-grid {
   display: grid;
-  gap: 8px;
+  gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.settings-grid label {
-  align-items: center;
+.setting-field {
   color: #475467;
-  display: flex;
-  gap: 8px;
+  display: grid;
+  gap: 5px;
 }
 
-.settings-grid label input {
+.setting-field > span,
+.setting-checkbox strong {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.setting-field small,
+.setting-checkbox small {
+  color: #667085;
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.setting-field-wide {
+  grid-column: 1 / -1;
+}
+
+.setting-checkbox {
+  align-items: flex-start;
+  background: #f8fafc;
+  border: 1px solid #e7e9ee;
+  border-radius: 6px;
+  color: #475467;
+  display: flex;
+  gap: 9px;
+  padding: 10px;
+}
+
+.setting-checkbox input {
   min-width: auto;
+  margin-top: 2px;
   width: 18px;
+}
+
+.settings-save {
+  gap: 7px;
+  justify-self: start;
 }
 
 @media (max-width: 820px) {
@@ -239,8 +337,13 @@ button {
   }
 
   .grid,
-  .path-row {
+  .path-row,
+  .settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .setting-field-wide {
+    grid-column: auto;
   }
 
   .season,
