@@ -2,6 +2,24 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-30 - Windows Environment Bootstrap
+
+Installed and verified the local development prerequisites on this computer:
+
+- Python 3.11.9 and a project-local `.venv` with dev dependencies.
+- Node.js 24.19.0 with npm 11.17.0.
+- FFmpeg/ffprobe 9.0.1.
+- Existing NVIDIA GeForce GTX 1660 SUPER was detected successfully.
+
+Fixed clean-install blockers discovered while running `scripts/setup.ps1`:
+
+- Added explicit setuptools package discovery for `app*` so editable installs work.
+- Made Alembic create the parent directory for a configured SQLite database.
+- Made `scripts/setup.ps1` stop when a native setup command fails.
+- Ignored generated `*.egg-info` directories.
+
+Verification: backend tests passed (`32 passed, 1 warning`), frontend production build passed, and every system-check item passed. No ASR/LLM models were downloaded.
+
 ## 2026-08-30 - Shared Codex Context
 
 Added shared project context files:
