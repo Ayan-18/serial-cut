@@ -1,0 +1,295 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from app.api.schemas import (
+    AutoExportRequest,
+    AutoExportResponse,
+    CandidateRead,
+    EnqueueSeasonRequest,
+    ExportRead,
+    ImportResponse,
+    JobRead,
+    QueueRunResponse,
+    QueueStateResponse,
+    RenderRequest,
+    RenderResponse,
+    ReviewRequest,
+    ReviewResponse,
+    RuntimeSettingsRead,
+    SeasonImportRequest,
+    SeasonRead,
+    Stage2RunResponse,
+    Stage3RunResponse,
+)
+from app.application.auto import auto_approve_and_export
+from app.application.importer import import_season
+from app.application.queue_control import get_queue_state, set_queue_paused
+from app.application.review import review_candidate
+from app.application.settings import RuntimeSettings, effective_settings, get_runtime_settings, save_runtime_settings
+from app.application.stage2 import run_stage2_media_analysis
+from app.application.stage3 import run_stage3_candidate_analysis
+from app.application.stage4 import render_candidate
+from app.application.system_check import report_as_dict, run_system_check
+from app.infrastructure.database import SessionLocal
+from app.media.ffprobe import apply_probe_to_episode, probe_media
+from app.models.entities import ClipCandidate, Episode, Export, Job, Season
+from app.infrastructure.config import get_settings
+from app.workers.queue import enqueue_episode_analysis, queue_snapshot, recover_interrupted_jobs
+from app.workers.queue import enqueue_season_analysis, request_cancel, retry_job
+from app.workers.runner import estimate_eta_seconds, run_next_job
+
+router = APIRouter(prefix="/api")
+
+
+def get_session():
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@router.get("/health")
+def health() -> dict:
+    return {"ok": True, "service": "SerialCuts"}
+
+
+@router.get("/system-check")
+def system_check() -> dict:
+    return report_as_dict(run_system_check())
+
+
+@router.get("/settings", response_model=RuntimeSettingsRead)
+def read_settings(session: Session = Depends(get_session)):
+    return get_runtime_settings(session, get_settings()).model_dump(mode="json")
+
+
+@router.put("/settings", response_model=RuntimeSettingsRead)
+def update_settings(payload: RuntimeSettings, session: Session = Depends(get_session)):
+    result = save_runtime_settings(session, payload)
+    session.commit()
+    return result.model_dump(mode="json")
+
+
+@router.post("/seasons/import", response_model=ImportResponse)
+def import_season_endpoint(payload: SeasonImportRequest, session: Session = Depends(get_session)):
+    try:
+        result = import_season(session, payload.root_path, payload.title)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ImportResponse(
+        season_id=result.season.id,
+        created=result.created,
+        skipped_duplicates=result.skipped_duplicates,
+        episode_ids=result.episode_ids,
+    )
+
+
+@router.get("/seasons", response_model=list[SeasonRead])
+def list_seasons(session: Session = Depends(get_session)):
+    seasons = session.scalars(select(Season).options(selectinload(Season.episodes))).all()
+    return seasons
+
+
+@router.post("/episodes/{episode_id}/probe")
+def probe_episode(episode_id: int, session: Session = Depends(get_session)):
+    episode = session.get(Episode, episode_id)
+    if episode is None:
+        raise HTTPException(status_code=404, detail="Серия не найдена")
+    try:
+        summary = probe_media(get_settings().ffprobe_path, media_path=Path(episode.file_path))
+        apply_probe_to_episode(episode, summary)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "stage": episode.stage}
+
+
+@router.post("/episodes/{episode_id}/enqueue", response_model=JobRead)
+def enqueue_episode(episode_id: int, session: Session = Depends(get_session)):
+    try:
+        job = enqueue_episode_analysis(session, episode_id)
+        session.commit()
+        session.refresh(job)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return job
+
+
+@router.post("/seasons/{season_id}/enqueue", response_model=list[JobRead])
+def enqueue_season(season_id: int, payload: EnqueueSeasonRequest, session: Session = Depends(get_session)):
+    try:
+        jobs = enqueue_season_analysis(session, season_id, auto=payload.auto)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return jobs
+
+
+@router.post("/episodes/{episode_id}/stage2", response_model=Stage2RunResponse)
+def run_stage2_episode(episode_id: int, session: Session = Depends(get_session)):
+    try:
+        result = run_stage2_media_analysis(session, episode_id, effective_settings(session, get_settings()))
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/episodes/{episode_id}/stage3", response_model=Stage3RunResponse)
+def run_stage3_episode(episode_id: int, session: Session = Depends(get_session)):
+    try:
+        result = run_stage3_candidate_analysis(session, episode_id, effective_settings(session, get_settings()))
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.get("/episodes/{episode_id}/candidates", response_model=list[CandidateRead])
+def list_episode_candidates(episode_id: int, session: Session = Depends(get_session)):
+    return session.scalars(
+        select(ClipCandidate).where(ClipCandidate.episode_id == episode_id).order_by(ClipCandidate.score.desc())
+    ).all()
+
+
+@router.get("/episodes/{episode_id}/proxy")
+def episode_proxy(episode_id: int, session: Session = Depends(get_session)):
+    episode = session.get(Episode, episode_id)
+    if episode is None or not episode.proxy_path:
+        raise HTTPException(status_code=404, detail="Proxy ещё не создан")
+    path = Path(episode.proxy_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Proxy-файл не найден")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@router.post("/candidates/{candidate_id}/review", response_model=ReviewResponse)
+def review_candidate_endpoint(candidate_id: int, payload: ReviewRequest, session: Session = Depends(get_session)):
+    try:
+        result = review_candidate(
+            session,
+            candidate_id,
+            payload.decision,
+            payload.adjusted_start_time,
+            payload.adjusted_end_time,
+            payload.crop_mode,
+            payload.reason,
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/candidates/{candidate_id}/render", response_model=RenderResponse)
+def render_candidate_endpoint(candidate_id: int, payload: RenderRequest, session: Session = Depends(get_session)):
+    try:
+        result = render_candidate(
+            session,
+            candidate_id,
+            effective_settings(session, get_settings()),
+            payload.include_subtitles,
+            payload.use_nvenc,
+            payload.preset_name,
+            payload.loudnorm_two_pass,
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.get("/exports", response_model=list[ExportRead])
+def list_exports(session: Session = Depends(get_session)):
+    return session.scalars(select(Export).order_by(Export.created_at.desc())).all()
+
+
+@router.post("/episodes/{episode_id}/auto-export", response_model=AutoExportResponse)
+def auto_export_episode(episode_id: int, payload: AutoExportRequest, session: Session = Depends(get_session)):
+    settings = effective_settings(session, get_settings())
+    try:
+        result = auto_approve_and_export(
+            session,
+            episode_id,
+            settings,
+            threshold=payload.threshold if payload.threshold is not None else settings.auto_score_threshold,
+            max_clips=payload.max_clips if payload.max_clips is not None else settings.max_clips_per_episode,
+            use_nvenc=payload.use_nvenc if payload.use_nvenc is not None else settings.render_use_nvenc,
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/jobs/recover")
+def recover_jobs(session: Session = Depends(get_session)):
+    count = recover_interrupted_jobs(session)
+    session.commit()
+    return {"recovered": count}
+
+
+@router.post("/queue/run-next", response_model=QueueRunResponse)
+def run_queue_next(session: Session = Depends(get_session)):
+    result = run_next_job(session, effective_settings(session, get_settings()))
+    session.commit()
+    return result
+
+
+@router.post("/queue/pause", response_model=QueueStateResponse)
+def pause_queue(session: Session = Depends(get_session)):
+    state = set_queue_paused(session, True)
+    session.commit()
+    return {"state": state}
+
+
+@router.post("/queue/resume", response_model=QueueStateResponse)
+def resume_queue(session: Session = Depends(get_session)):
+    state = set_queue_paused(session, False)
+    session.commit()
+    return {"state": state}
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobRead)
+def cancel_job(job_id: int, session: Session = Depends(get_session)):
+    job = request_cancel(session, job_id)
+    session.commit()
+    return job
+
+
+@router.post("/jobs/{job_id}/retry", response_model=JobRead)
+def retry_job_endpoint(job_id: int, session: Session = Depends(get_session)):
+    job = retry_job(session, job_id)
+    session.commit()
+    return job
+
+
+@router.get("/jobs")
+def jobs(session: Session = Depends(get_session)):
+    snapshot = queue_snapshot(session)
+    snapshot = snapshot.__class__(
+        queued=snapshot.queued,
+        running=snapshot.running,
+        failed=snapshot.failed,
+        paused=get_queue_state(session) == "paused",
+        eta_seconds=estimate_eta_seconds(session),
+    )
+    items = session.scalars(select(Job).order_by(Job.updated_at.desc())).all()
+    return {"snapshot": snapshot.__dict__, "items": items}

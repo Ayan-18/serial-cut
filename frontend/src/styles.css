@@ -1,0 +1,253 @@
+:root {
+  color: #1d2430;
+  background: #f7f7f4;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.topbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 32px;
+  letter-spacing: 0;
+}
+
+h2 {
+  font-size: 18px;
+}
+
+.topbar p {
+  color: #667085;
+  margin-top: 4px;
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  margin-bottom: 16px;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #dde1e7;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.panel-title {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.path-row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+input,
+select {
+  border: 1px solid #c9d0da;
+  border-radius: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+button {
+  align-items: center;
+  background: #215f9a;
+  border: 0;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.icon-button {
+  height: 40px;
+  padding: 0;
+  width: 40px;
+}
+
+.notice {
+  color: #215f9a;
+  margin-top: 10px;
+}
+
+.season-list,
+.checks,
+.episodes {
+  display: grid;
+  gap: 8px;
+}
+
+.season,
+.episode,
+.check {
+  align-items: center;
+  border: 1px solid #e7e9ee;
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px;
+}
+
+.season {
+  grid-template-columns: minmax(140px, 1fr) auto auto auto;
+}
+
+.episode {
+  grid-template-columns: minmax(180px, 1fr) 140px 110px 140px auto auto auto auto;
+}
+
+.season span,
+.episode span,
+.check span {
+  color: #667085;
+  overflow-wrap: anywhere;
+}
+
+.check {
+  grid-template-columns: 12px 110px minmax(0, 1fr);
+}
+
+.check:not(:has(.dot)) {
+  grid-template-columns: 110px minmax(0, 1fr);
+}
+
+.dot {
+  border-radius: 99px;
+  height: 10px;
+  width: 10px;
+}
+
+.dot.ok {
+  background: #138a36;
+}
+
+.dot.fail {
+  background: #c2410c;
+}
+
+.secondary {
+  background: #667085;
+}
+
+.proxy-player {
+  aspect-ratio: 16 / 9;
+  background: #111827;
+  border-radius: 6px;
+  display: block;
+  margin-bottom: 12px;
+  max-height: 360px;
+  width: 100%;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 10px;
+}
+
+.candidate {
+  border: 1px solid #e7e9ee;
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.candidate div:first-child {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.candidate p,
+.candidate span {
+  color: #667085;
+}
+
+.edit-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 100px 100px minmax(180px, 1fr) 40px 40px auto auto;
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-grid label {
+  align-items: center;
+  color: #475467;
+  display: flex;
+  gap: 8px;
+}
+
+.settings-grid label input {
+  min-width: auto;
+  width: 18px;
+}
+
+@media (max-width: 820px) {
+  .app-shell {
+    padding: 14px;
+  }
+
+  .grid,
+  .path-row {
+    grid-template-columns: 1fr;
+  }
+
+  .season,
+  .episode,
+  .check,
+  .edit-row,
+  .candidate div:first-child {
+    grid-template-columns: 1fr;
+  }
+}

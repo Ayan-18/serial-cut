@@ -1,0 +1,42 @@
+app:
+  host: 127.0.0.1
+  port: 8090
+storage:
+  database_url: sqlite:///./data/serialcuts.db
+  cache_dir: ./data/cache
+  output_dir: ./data/output
+media:
+  ffmpeg_path: ffmpeg
+  ffprobe_path: ffprobe
+  proxy_width: 640
+  proxy_crf: 28
+processing:
+  quality_profile: balanced
+  min_clip_seconds: 35
+  max_clip_seconds: 59
+  auto_score_threshold: 82
+  max_clips_per_episode: 3
+  auto_mode_enabled: false
+render:
+  preset: youtube_shorts
+  use_nvenc: false
+  loudnorm_two_pass: false
+  subtitle_font_name: Segoe UI
+models:
+  asr:
+    adapter: faster-whisper
+    model_name: large-v3-turbo
+    language: ru
+    compute_type: int8_float16
+    fallback_compute_type: int8
+  llm:
+    adapter: llama-cpp-http
+    base_url: http://127.0.0.1:8081
+    model_hint: Qwen3-8B-Instruct-GGUF-Q4
+  vlm:
+    enabled: false
+    adapter: llama-cpp-http
+    base_url: http://127.0.0.1:8082
+telegram:
+  long_polling: true
+  allowed_user_ids: []
