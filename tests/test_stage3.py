@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from sqlalchemy import select
 
@@ -99,6 +100,22 @@ def test_llama_cpp_analyzer_builds_outline_without_http():
     assert result.time_ranges[0].start_time == 0
     assert result.time_ranges[0].end_time == 40
     assert result.main_events == ["Начало. Развязка."]
+
+
+def test_llama_cpp_analyzer_reports_missing_local_server(monkeypatch):
+    request = httpx.Request("POST", "http://127.0.0.1:8081/v1/chat/completions")
+
+    def missing_server(*args, **kwargs):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setattr("app.analysis.llm.httpx.post", missing_server)
+    analyzer = LlamaCppHttpAnalyzer("http://127.0.0.1:8081", "Qwen3-4B")
+
+    with pytest.raises(RuntimeError, match="Локальная Qwen недоступна"):
+        analyzer.candidates(
+            "[0.0-40.0] Текст",
+            [Scene(episode_id=1, start_time=0, end_time=40)],
+        )
 
 
 def test_adjust_boundaries_uses_word_padding_and_scene_edges():

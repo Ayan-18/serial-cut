@@ -178,21 +178,27 @@ def render_clip(
         analysis = runner(build_loudnorm_analysis_args(ffmpeg_path, input_path, start_time, end_time), 1800)
         if analysis.returncode == 0:
             loudnorm_filter = loudnorm_second_pass_filter(parse_loudnorm_stats(analysis.stderr))
-    result = runner(
-        build_render_args(
-            ffmpeg_path,
-            input_path,
-            temp_output,
-            start_time,
-            end_time,
-            crop_mode,
-            subtitle_path,
-            use_nvenc,
-            preset=preset,
-            loudnorm_filter=loudnorm_filter,
-        ),
-        3600,
-    )
+    def run_video_render(enable_nvenc: bool) -> ProcessResult:
+        return runner(
+            build_render_args(
+                ffmpeg_path,
+                input_path,
+                temp_output,
+                start_time,
+                end_time,
+                crop_mode,
+                subtitle_path,
+                enable_nvenc,
+                preset=preset,
+                loudnorm_filter=loudnorm_filter,
+            ),
+            3600,
+        )
+
+    result = run_video_render(use_nvenc)
+    if result.returncode != 0 and use_nvenc:
+        temp_output.unlink(missing_ok=True)
+        result = run_video_render(False)
     if result.returncode != 0:
         temp_output.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or "FFmpeg не смог отрендерить клип")

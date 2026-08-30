@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models.entities import TranscriptSegment
+from app.models.entities import TranscriptSegment, WordTimestamp
 
 
 @dataclass(frozen=True)
@@ -19,9 +19,74 @@ def cues_for_range(segments: list[TranscriptSegment], start_time: float, end_tim
             continue
         relative_start = max(0.0, segment.start_time - start_time)
         relative_end = max(relative_start + 0.2, min(end_time, segment.end_time) - start_time)
-        for line in wrap_russian_subtitle(segment.text):
-            cues.append(SubtitleCue(relative_start, relative_end, line))
+        pages = wrap_russian_subtitle(segment.text)
+        weights = [max(1, len(page.replace("\\N", " ").split())) for page in pages]
+        total_weight = sum(weights)
+        elapsed_weight = 0
+        for page, weight in zip(pages, weights, strict=True):
+            cue_start = relative_start + (relative_end - relative_start) * elapsed_weight / total_weight
+            elapsed_weight += weight
+            cue_end = relative_start + (relative_end - relative_start) * elapsed_weight / total_weight
+            cues.append(SubtitleCue(cue_start, cue_end, page))
     return cues
+
+
+def cues_for_words(
+    words: list[WordTimestamp],
+    start_time: float,
+    end_time: float,
+    max_chars_per_line: int = 30,
+    max_seconds: float = 3.2,
+) -> list[SubtitleCue]:
+    selected = [
+        word
+        for word in words
+        if word.end_time > start_time and word.start_time < end_time and word.word.strip()
+    ]
+    cues: list[SubtitleCue] = []
+    current: list[WordTimestamp] = []
+
+    def flush() -> None:
+        if not current:
+            return
+        text = _join_subtitle_words([word.word.strip() for word in current])
+        pages = wrap_russian_subtitle(text, max_chars=max_chars_per_line)
+        cue_text = pages[0] if pages else text
+        cues.append(
+            SubtitleCue(
+                start_time=max(0.0, current[0].start_time - start_time),
+                end_time=max(0.2, min(end_time, current[-1].end_time) - start_time),
+                text=cue_text,
+            )
+        )
+        current.clear()
+
+    for word in selected:
+        proposed_words = [*(item.word.strip() for item in current), word.word.strip()]
+        proposed_text = _join_subtitle_words(proposed_words)
+        proposed_duration = word.end_time - (current[0].start_time if current else word.start_time)
+        gap = word.start_time - current[-1].end_time if current else 0.0
+        if current and (
+            len(wrap_russian_subtitle(proposed_text, max_chars=max_chars_per_line)) > 1
+            or proposed_duration > max_seconds
+            or gap > 0.8
+        ):
+            flush()
+        current.append(word)
+    flush()
+    return cues
+
+
+def _join_subtitle_words(words: list[str]) -> str:
+    text = ""
+    no_space_before = set(".,!?;:%)]}»")
+    no_space_after = set("([{«")
+    for word in words:
+        if not text or word[:1] in no_space_before or text[-1:] in no_space_after:
+            text += word
+        else:
+            text += " " + word
+    return text
 
 
 def wrap_russian_subtitle(text: str, max_chars: int = 34) -> list[str]:
@@ -53,15 +118,17 @@ def render_srt(cues: list[SubtitleCue]) -> str:
     return "\n".join(blocks)
 
 
-def render_ass(cues: list[SubtitleCue], font_name: str = "Segoe UI") -> str:
+def render_ass(cues: list[SubtitleCue], font_name: str = "Segoe UI", font_size: int = 48) -> str:
     header = f"""[Script Info]
 ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},64,&H00FFFFFF,&H00111111,&H99000000,0,0,0,0,100,100,0,0,1,5,1,2,72,72,180,1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H00111111,&H99000000,0,0,0,0,100,100,0,0,1,3,1,2,72,72,220,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

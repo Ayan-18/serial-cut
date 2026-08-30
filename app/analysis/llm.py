@@ -133,7 +133,7 @@ class LlamaCppHttpAnalyzer:
                 parsed = parse_candidate_json(
                     self._complete_json(prompt, CandidateListPayload.model_json_schema(), max_tokens=1600)
                 )
-            except (httpx.HTTPError, ValueError) as exc:
+            except ValueError as exc:
                 first_error = first_error or exc
                 continue
             all_candidates.extend(parsed.candidates[:2])
@@ -142,28 +142,38 @@ class LlamaCppHttpAnalyzer:
         return CandidateListPayload(candidates=all_candidates[:8])
 
     def _complete_json(self, prompt: str, schema: dict, max_tokens: int) -> str:
-        response = httpx.post(
-            f"{self.base_url}/v1/chat/completions",
-            json={
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "Отвечай только валидным JSON без markdown и пояснений.",
+        try:
+            response = httpx.post(
+                f"{self.base_url}/v1/chat/completions",
+                json={
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "Отвечай только валидным JSON без markdown и пояснений.",
+                        },
+                        {"role": "user", "content": f"/no_think\n{prompt}"},
+                    ],
+                    "temperature": 0.2,
+                    "top_p": 0.8,
+                    "max_tokens": max_tokens,
+                    "response_format": {
+                        "type": "json_object",
+                        "schema": self._grammar_schema(schema),
                     },
-                    {"role": "user", "content": f"/no_think\n{prompt}"},
-                ],
-                "temperature": 0.2,
-                "top_p": 0.8,
-                "max_tokens": max_tokens,
-                "response_format": {
-                    "type": "json_object",
-                    "schema": self._grammar_schema(schema),
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.ConnectError as exc:
+            raise RuntimeError(
+                "Локальная Qwen недоступна. Перезапустите приложение через scripts\\run.ps1 "
+                "или scripts\\run_local.ps1."
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("Локальная Qwen не ответила вовремя. Попробуйте запустить поиск ещё раз.") from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Локальная Qwen отклонила запрос: HTTP {exc.response.status_code}") from exc
         payload = response.json()
         choices = payload.get("choices") or []
         if choices:

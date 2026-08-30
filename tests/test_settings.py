@@ -9,7 +9,9 @@ from app.infrastructure.config import Settings
 def test_runtime_settings_persist_ui_overrides(session, tmp_path: Path):
     defaults = Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out")
     runtime = get_runtime_settings(session, defaults)
-    updated = runtime.model_copy(update={"auto_mode_enabled": True, "auto_score_threshold": 91})
+    updated = runtime.model_copy(
+        update={"auto_mode_enabled": True, "auto_score_threshold": 91, "subtitle_font_size": 42}
+    )
 
     save_runtime_settings(session, updated)
     session.commit()
@@ -17,6 +19,7 @@ def test_runtime_settings_persist_ui_overrides(session, tmp_path: Path):
 
     assert loaded.auto_mode_enabled is True
     assert loaded.auto_score_threshold == 91
+    assert loaded.subtitle_font_size == 42
 
 
 def test_effective_settings_keep_env_tools_and_apply_ui_overrides(session, tmp_path: Path):

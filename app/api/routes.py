@@ -207,6 +207,7 @@ def render_candidate_endpoint(candidate_id: int, payload: RenderRequest, session
             payload.use_nvenc,
             payload.preset_name,
             payload.loudnorm_two_pass,
+            payload.force_rerender,
         )
         session.commit()
     except Exception as exc:

@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
 from app.media.rendering import detect_nvenc, render_clip
-from app.media.subtitles import cues_for_range, render_ass
-from app.models.entities import ClipCandidate, Episode, Export, TranscriptSegment
+from app.media.subtitles import cues_for_range, cues_for_words, render_ass
+from app.models.entities import ClipCandidate, Episode, Export, TranscriptSegment, WordTimestamp
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ def render_candidate(
     use_nvenc: bool | None = None,
     preset_name: str | None = None,
     loudnorm_two_pass: bool | None = None,
+    force_rerender: bool = False,
 ) -> RenderResult:
     candidate = session.get(ClipCandidate, candidate_id)
     if candidate is None:
@@ -38,7 +39,7 @@ def render_candidate(
     if episode is None:
         raise ValueError(f"Episode {candidate.episode_id} not found")
     existing = session.scalar(select(Export).where(Export.candidate_id == candidate_id))
-    if existing is not None:
+    if existing is not None and not force_rerender:
         return RenderResult(candidate_id, existing.id, existing.output_path, existing.subtitle_path, existing.cover_path)
 
     segments = session.scalars(
@@ -46,8 +47,22 @@ def render_candidate(
         .where(TranscriptSegment.episode_id == episode.id)
         .order_by(TranscriptSegment.start_time)
     ).all()
-    cues = cues_for_range(segments, candidate.start_time, candidate.end_time)
-    subtitle_text = render_ass(cues, font_name=settings.subtitle_font_name) if include_subtitles else None
+    words = session.scalars(
+        select(WordTimestamp)
+        .join(TranscriptSegment, WordTimestamp.segment_id == TranscriptSegment.id)
+        .where(TranscriptSegment.episode_id == episode.id)
+        .order_by(WordTimestamp.start_time)
+    ).all()
+    cues = (
+        cues_for_words(words, candidate.start_time, candidate.end_time)
+        if words
+        else cues_for_range(segments, candidate.start_time, candidate.end_time)
+    )
+    subtitle_text = (
+        render_ass(cues, font_name=settings.subtitle_font_name, font_size=settings.subtitle_font_size)
+        if include_subtitles
+        else None
+    )
     slug = f"episode-{episode.id}-candidate-{candidate.id}"
     resolved_nvenc = detect_nvenc(settings.ffmpeg_path) if use_nvenc is None else use_nvenc
     artifacts = render_clip(
@@ -72,14 +87,13 @@ def render_candidate(
         preset_name=preset_name or settings.render_preset,
         loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,
     )
-    export = Export(
-        candidate_id=candidate.id,
-        output_path=str(artifacts.output_path),
-        metadata_path=str(artifacts.metadata_path),
-        subtitle_path=str(artifacts.subtitle_path) if artifacts.subtitle_path else None,
-        cover_path=str(artifacts.cover_path) if artifacts.cover_path else None,
-    )
-    session.add(export)
+    export = existing or Export(candidate_id=candidate.id, output_path=str(artifacts.output_path))
+    export.output_path = str(artifacts.output_path)
+    export.metadata_path = str(artifacts.metadata_path)
+    export.subtitle_path = str(artifacts.subtitle_path) if artifacts.subtitle_path else None
+    export.cover_path = str(artifacts.cover_path) if artifacts.cover_path else None
+    if existing is None:
+        session.add(export)
     candidate.status = "rendered"
     episode.stage = EpisodeStage.RENDERED.value
     session.flush()

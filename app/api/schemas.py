@@ -44,6 +44,7 @@ class RuntimeSettingsRead(BaseModel):
     render_use_nvenc: bool
     render_loudnorm_two_pass: bool
     subtitle_font_name: str
+    subtitle_font_size: int
     asr_adapter: str
     llm_adapter: str
     llm_base_url: str
@@ -121,6 +122,7 @@ class RenderRequest(BaseModel):
     use_nvenc: bool | None = None
     preset_name: str | None = Field(default=None, pattern="^(youtube_shorts|instagram_reels)$")
     loudnorm_two_pass: bool | None = None
+    force_rerender: bool = False
 
 
 class RenderResponse(BaseModel):

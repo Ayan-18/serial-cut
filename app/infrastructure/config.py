@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     render_use_nvenc: bool = False
     render_loudnorm_two_pass: bool = False
     subtitle_font_name: str = "Segoe UI"
+    subtitle_font_size: int = Field(default=48, ge=24, le=96)
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 

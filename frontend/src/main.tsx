@@ -47,6 +47,7 @@ type RuntimeSettings = {
   render_use_nvenc: boolean;
   render_loudnorm_two_pass: boolean;
   subtitle_font_name: string;
+  subtitle_font_size: number;
   asr_adapter: "stub" | "faster-whisper";
   llm_adapter: "stub" | "llama-cpp-http";
   llm_base_url: string;
@@ -67,6 +68,7 @@ type Candidate = {
   status: string;
 };
 type MediaProgress = { episodeId: number; fileName: string; startedAt: number };
+type CandidateProgress = { episodeId: number; fileName: string; startedAt: number };
 
 function App() {
   const [rootPath, setRootPath] = useState("");
@@ -80,6 +82,8 @@ function App() {
   const [message, setMessage] = useState("");
   const [mediaProgress, setMediaProgress] = useState<MediaProgress | null>(null);
   const [mediaElapsedSeconds, setMediaElapsedSeconds] = useState(0);
+  const [candidateProgress, setCandidateProgress] = useState<CandidateProgress | null>(null);
+  const [candidateElapsedSeconds, setCandidateElapsedSeconds] = useState(0);
 
   async function api<T>(url: string, init?: RequestInit): Promise<T> {
     const response = await fetch(url, init);
@@ -153,11 +157,21 @@ function App() {
     }
   }
 
-  async function runStage3(episodeId: number) {
-    const data = await api<{ candidates: number }>(`/api/episodes/${episodeId}/stage3`, { method: "POST" });
-    setMessage(`Кандидаты готовы: ${data.candidates}`);
-    await loadCandidates(episodeId);
-    await refresh();
+  async function runStage3(episode: Episode) {
+    if (mediaProgress || candidateProgress) return;
+    setCandidateProgress({ episodeId: episode.id, fileName: episode.file_name, startedAt: Date.now() });
+    setCandidateElapsedSeconds(0);
+    setMessage(`Поиск кандидатов в «${episode.file_name}» запущен. Обычно это занимает около минуты.`);
+    try {
+      const data = await api<{ candidates: number }>(`/api/episodes/${episode.id}/stage3`, { method: "POST" });
+      setMessage(`Кандидаты готовы: ${data.candidates}`);
+      await loadCandidates(episode.id);
+    } catch (error) {
+      setMessage(`Ошибка поиска кандидатов: ${error instanceof Error ? error.message : "неизвестная ошибка"}`);
+    } finally {
+      setCandidateProgress(null);
+      await refresh().catch((error) => setMessage(`Не удалось обновить данные: ${error.message}`));
+    }
   }
 
   async function autoExport(episodeId: number) {
@@ -212,7 +226,8 @@ function App() {
         include_subtitles: includeSubtitles,
         use_nvenc: settings?.render_use_nvenc ?? null,
         preset_name: settings?.render_preset,
-        loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null
+        loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null,
+        force_rerender: true
       })
     });
     setMessage(`Экспорт готов: ${data.output_path}`);
@@ -253,6 +268,16 @@ function App() {
     return () => window.clearInterval(timer);
   }, [mediaProgress]);
 
+  useEffect(() => {
+    if (!candidateProgress) return;
+    const updateElapsed = () => {
+      setCandidateElapsedSeconds(Math.floor((Date.now() - candidateProgress.startedAt) / 1000));
+    };
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [candidateProgress]);
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -273,6 +298,16 @@ function App() {
           <div>
             <strong>Медиа-анализ выполняется: {mediaProgress.fileName}</strong>
             <span>Готовим файлы, распознаём речь и ищем сцены · прошло {formatElapsed(mediaElapsedSeconds)}</span>
+          </div>
+        </div>
+      )}
+
+      {candidateProgress && (
+        <div className="processing-banner" role="status" aria-live="polite">
+          <LoaderCircle className="spinner" size={24} />
+          <div>
+            <strong>Ищем кандидатов: {candidateProgress.fileName}</strong>
+            <span>Qwen анализирует расшифровку по частям · прошло {formatElapsed(candidateElapsedSeconds)}</span>
           </div>
         </div>
       )}
@@ -397,6 +432,11 @@ function App() {
                     <input value={settings.subtitle_font_name} onChange={(event) => patchSettings({ subtitle_font_name: event.target.value })} />
                     <small>Название установленного в Windows шрифта.</small>
                   </label>
+                  <label className="setting-field">
+                    <span>Размер субтитров</span>
+                    <input type="number" min="24" max="96" value={settings.subtitle_font_size} onChange={(event) => patchSettings({ subtitle_font_size: Number(event.target.value) })} />
+                    <small>Размер шрифта для вертикального видео 1080×1920.</small>
+                  </label>
                   <label className="setting-checkbox">
                     <input type="checkbox" checked={settings.render_use_nvenc} onChange={(event) => patchSettings({ render_use_nvenc: event.target.checked })} />
                     <span><strong>Ускорение NVIDIA NVENC</strong><small>Использовать видеокарту при финальном рендере.</small></span>
@@ -443,13 +483,17 @@ function App() {
                 <span>{episode.stage}</span>
                 <span>{formatBytes(episode.size_bytes)}</span>
                 <span>{episode.width && episode.height ? `${episode.width}x${episode.height}` : "metadata pending"}</span>
-                <button className="media-button" disabled={mediaProgress !== null} onClick={() => runStage2(episode)}>
+                <button className="media-button" disabled={mediaProgress !== null || candidateProgress !== null} onClick={() => runStage2(episode)}>
                   {mediaProgress?.episodeId === episode.id ? (
                     <><LoaderCircle className="spinner" size={17} /> {formatElapsed(mediaElapsedSeconds)}</>
                   ) : "Медиа"}
                 </button>
-                <button disabled={mediaProgress?.episodeId === episode.id} onClick={() => runStage3(episode.id)}>Кандидаты</button>
-                <button disabled={mediaProgress?.episodeId === episode.id} onClick={() => autoExport(episode.id)}>Auto export</button>
+                <button disabled={mediaProgress !== null || candidateProgress !== null} onClick={() => runStage3(episode)}>
+                  {candidateProgress?.episodeId === episode.id ? (
+                    <><LoaderCircle className="spinner" size={17} /> {formatElapsed(candidateElapsedSeconds)}</>
+                  ) : "Кандидаты"}
+                </button>
+                <button disabled={mediaProgress !== null || candidateProgress !== null} onClick={() => autoExport(episode.id)}>Auto export</button>
                 <button onClick={() => loadCandidates(episode.id)}>Открыть</button>
               </article>
             ))

@@ -2,6 +2,27 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-30 - Subtitle Timing, Sizing And Render Fallback
+
+Fixed the first real exported clip after visual inspection:
+
+- Subtitle pages no longer share identical timestamps and overlap; rendering now uses saved word
+  timestamps so every recognized word appears sequentially.
+- ASS files declare `PlayResX: 1080` / `PlayResY: 1920`, use a smaller default font size of 48,
+  preserve a two-line limit, and expose font size in the UI settings.
+- UI renders now intentionally rebuild an existing derived export so subtitle/style changes apply.
+- FFmpeg automatically retries with CPU `libx264` when NVENC is present but the installed NVIDIA
+  driver is too old for the encoder API.
+- Candidate analysis now has an elapsed timer, spinner, disabled conflicting controls, and visible
+  error reporting. The familiar `scripts/run.ps1` delegates to the full local-model launcher when
+  `.env` enables llama.cpp.
+
+Verification: the existing 35-second candidate was regenerated at 1080x1920 with 13 sequential ASS
+cues; a rendered frame was visually inspected and showed two readable subtitle lines. Focused backend
+tests and the full suite passed (`41 passed, 1 upstream warning`), the frontend production build passed,
+and every system check passed. The new subtitle-size setting loaded as 48 in the running UI with no
+browser console errors.
+
 ## 2026-08-30 - Real Local Models And One-Command Launch
 
 Enabled the complete privacy-first local pipeline on this computer:

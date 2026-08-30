@@ -26,6 +26,7 @@ class RuntimeSettings(BaseModel):
     render_use_nvenc: bool
     render_loudnorm_two_pass: bool
     subtitle_font_name: str = Field(min_length=1, max_length=128)
+    subtitle_font_size: int = Field(ge=24, le=96)
     asr_adapter: Literal["stub", "faster-whisper"]
     llm_adapter: Literal["stub", "llama-cpp-http"]
     llm_base_url: str
@@ -53,6 +54,7 @@ def runtime_settings_from_env(settings: Settings) -> RuntimeSettings:
         render_use_nvenc=settings.render_use_nvenc,
         render_loudnorm_two_pass=settings.render_loudnorm_two_pass,
         subtitle_font_name=settings.subtitle_font_name,
+        subtitle_font_size=settings.subtitle_font_size,
         asr_adapter=settings.asr_adapter,
         llm_adapter=settings.llm_adapter,
         llm_base_url=settings.llm_base_url,
@@ -94,5 +96,6 @@ def effective_settings(session: Session, env_settings: Settings) -> Settings:
             "render_use_nvenc": runtime.render_use_nvenc,
             "render_loudnorm_two_pass": runtime.render_loudnorm_two_pass,
             "subtitle_font_name": runtime.subtitle_font_name,
+            "subtitle_font_size": runtime.subtitle_font_size,
         }
     )
