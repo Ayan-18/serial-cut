@@ -13,7 +13,9 @@ class Season(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     root_path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    story_context: Mapped[str] = mapped_column(Text, default="", nullable=False)
     episodes: Mapped[list["Episode"]] = relationship(back_populates="season", cascade="all, delete-orphan")
+    characters: Mapped[list["Character"]] = relationship(back_populates="season", cascade="all, delete-orphan")
 
 
 class Episode(TimestampMixin, Base):
@@ -37,6 +39,11 @@ class Episode(TimestampMixin, Base):
     audio_path: Mapped[str | None] = mapped_column(Text)
     selected_audio_stream_index: Mapped[int | None] = mapped_column(Integer)
     selected_subtitle_stream_index: Mapped[int | None] = mapped_column(Integer)
+    story_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    required_events_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    excluded_events_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    spoilers_allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    candidate_mode: Mapped[str] = mapped_column(String(32), default="highlights", nullable=False)
 
     season: Mapped[Season] = relationship(back_populates="episodes")
     tracks: Mapped[list["MediaTrack"]] = relationship(back_populates="episode", cascade="all, delete-orphan")
@@ -150,8 +157,39 @@ class ClipCandidate(TimestampMixin, Base):
     crop_mode: Mapped[str] = mapped_column(String(64), default="blurred-background", nullable=False)
     crop_offset_x: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     crop_scale: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    crop_keyframes_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     thumbnail_path: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="new", nullable=False, index=True)
+    story_order: Mapped[int | None] = mapped_column(Integer)
+    story_role: Mapped[str | None] = mapped_column(String(64))
+    continuity_note: Mapped[str | None] = mapped_column(Text)
+
+
+class Character(TimestampMixin, Base):
+    __tablename__ = "characters"
+    __table_args__ = (UniqueConstraint("season_id", "name", name="uq_character_season_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    aliases_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    photos_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    color: Mapped[str] = mapped_column(String(16), default="#b9ddff", nullable=False)
+
+    season: Mapped[Season] = relationship(back_populates="characters")
+
+
+class SpeakerIdentity(TimestampMixin, Base):
+    __tablename__ = "speaker_identities"
+    __table_args__ = (UniqueConstraint("episode_id", "source_label", name="uq_speaker_identity_episode_label"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    episode_id: Mapped[int] = mapped_column(ForeignKey("episodes.id"), nullable=False, index=True)
+    source_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    character_id: Mapped[int] = mapped_column(ForeignKey("characters.id"), nullable=False, index=True)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    method: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
 
 
 class CandidateSubtitle(TimestampMixin, Base):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -19,6 +20,16 @@ MomentType = Literal[
 ]
 
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
+
+
+@dataclass(frozen=True)
+class AnalysisContext:
+    season_summary: str = ""
+    episode_summary: str = ""
+    required_events: list[str] = field(default_factory=list)
+    excluded_events: list[str] = field(default_factory=list)
+    spoilers_allowed: bool = True
+    candidate_mode: Literal["highlights", "story"] = "highlights"
 
 
 class OutlineTimeRange(BaseModel):
@@ -64,6 +75,8 @@ class CandidatePayload(BaseModel):
     scores: CandidateScores
     standalone_reason: str = Field(min_length=1, max_length=500)
     possible_problems: list[ShortText] = Field(default_factory=list, max_length=5)
+    story_role: str | None = Field(default=None, max_length=64)
+    continuity_note: str | None = Field(default=None, max_length=500)
 
     @field_validator("end_time")
     @classmethod

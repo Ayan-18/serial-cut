@@ -46,11 +46,12 @@ def build_render_args(
     use_nvenc: bool,
     crop_offset_x: float = 0.0,
     crop_scale: float = 1.0,
+    crop_keyframes: list[dict] | None = None,
     preset: RenderPresetConfig | None = None,
     loudnorm_filter: str = "loudnorm=I=-16:TP=-1.5:LRA=11",
 ) -> list[str]:
     preset = preset or RENDER_PRESETS["youtube_shorts"]
-    filters = [_crop_filter(crop_mode, crop_offset_x, crop_scale)]
+    filters = [_crop_filter(crop_mode, crop_offset_x, crop_scale, crop_keyframes)]
     if subtitle_path is not None:
         filters.append(f"ass='{_escape_filter_path(subtitle_path)}'")
     encoder = "h264_nvenc" if use_nvenc else "libx264"
@@ -165,6 +166,7 @@ def render_clip(
     metadata: dict,
     crop_offset_x: float = 0.0,
     crop_scale: float = 1.0,
+    crop_keyframes: list[dict] | None = None,
     use_nvenc: bool = False,
     preset_name: str = "youtube_shorts",
     loudnorm_two_pass: bool = False,
@@ -195,6 +197,7 @@ def render_clip(
                 enable_nvenc,
                 crop_offset_x,
                 crop_scale,
+                crop_keyframes,
                 preset=preset,
                 loudnorm_filter=loudnorm_filter,
             ),
@@ -219,15 +222,25 @@ def render_clip(
     return RenderedArtifacts(output_path, metadata_path, subtitle_path, cover_path)
 
 
-def _crop_filter(crop_mode: CropMode, offset_x: float = 0.0, scale: float = 1.0) -> str:
+def _crop_filter(
+    crop_mode: CropMode,
+    offset_x: float = 0.0,
+    scale: float = 1.0,
+    keyframes: list[dict] | None = None,
+) -> str:
     offset_x = max(-1.0, min(1.0, offset_x))
     scale = max(1.0, min(2.0, scale))
     if crop_mode == "center-crop" or crop_mode == "auto-follow":
         target_height = round(1920 * scale)
         x_ratio = (offset_x + 1.0) / 2.0
+        ratio_expression = (
+            _tracking_ratio_expression(keyframes)
+            if crop_mode == "auto-follow" and keyframes
+            else f"{x_ratio:.4f}"
+        )
         return (
             f"scale=-2:{target_height},"
-            f"crop=1080:1920:x='max(0,min(iw-ow,(iw-ow)*{x_ratio:.4f}))':y='(ih-oh)/2'"
+            f"crop=1080:1920:x='max(0,min(iw-ow,(iw-ow)*({ratio_expression})))':y='(ih-oh)/2'"
         )
     foreground_width = round(1080 * scale)
     foreground_height = round(1920 * scale)
@@ -238,6 +251,29 @@ def _crop_filter(crop_mode: CropMode, offset_x: float = 0.0, scale: float = 1.0)
         f"[fg]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease[fit];"
         f"[bg][fit]overlay='max(0,min(W-w,(W-w)*{x_ratio:.4f}))':'(H-h)/2'"
     )
+
+
+def _tracking_ratio_expression(keyframes: list[dict]) -> str:
+    points: list[tuple[float, float]] = []
+    for item in keyframes:
+        try:
+            timestamp = max(0.0, float(item["time"]))
+            offset = max(-1.0, min(1.0, float(item["offset"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        points.append((timestamp, (offset + 1.0) / 2.0))
+    points.sort(key=lambda item: item[0])
+    if not points:
+        return "0.5000"
+    expression = f"{points[-1][1]:.5f}"
+    for (left_time, left_ratio), (right_time, right_ratio) in reversed(list(zip(points, points[1:]))):
+        duration = max(0.001, right_time - left_time)
+        interpolation = (
+            f"{left_ratio:.5f}+({right_ratio - left_ratio:.5f})*"
+            f"(t-{left_time:.3f})/{duration:.3f}"
+        )
+        expression = f"if(lt(t,{right_time:.3f}),{interpolation},{expression})"
+    return expression
 
 
 def _escape_filter_path(path: Path) -> str:

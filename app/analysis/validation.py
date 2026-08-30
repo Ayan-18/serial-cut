@@ -36,11 +36,53 @@ def adjust_candidate_boundaries(
         if end - start < min_seconds:
             start = max(0.0, end - min_seconds)
         start, end = _snap_to_scene_edges(start, end, scenes)
-    if end - start > max_seconds:
+    if segments:
+        start, end = _fit_complete_speech(start, end, segments, min_seconds, max_seconds)
+    elif end - start > max_seconds:
         end = start + max_seconds
     if end <= start or end - start < min_seconds:
         return None
     return candidate.model_copy(update={"start_time": round(start, 3), "end_time": round(end, 3)})
+
+
+def _fit_complete_speech(
+    start: float,
+    end: float,
+    segments: list[TranscriptSegment],
+    min_seconds: int,
+    max_seconds: int,
+) -> tuple[float, float]:
+    ordered = sorted(segments, key=lambda item: item.start_time)
+    crossing_start = next(
+        (item for item in ordered if item.start_time + 0.05 < start < item.end_time - 0.05),
+        None,
+    )
+    if crossing_start is not None:
+        if start - crossing_start.start_time <= 1.5 and end - crossing_start.start_time <= max_seconds:
+            start = crossing_start.start_time
+        else:
+            start = crossing_start.end_time
+
+    crossing_end = next(
+        (item for item in ordered if item.start_time + 0.05 < end < item.end_time - 0.05),
+        None,
+    )
+    if crossing_end is not None:
+        if crossing_end.end_time - start <= max_seconds:
+            end = crossing_end.end_time
+        else:
+            end = crossing_end.start_time
+
+    if end - start > max_seconds:
+        hard_end = start + max_seconds
+        safe_ends = [
+            item.end_time
+            for item in ordered
+            if start < item.end_time <= hard_end and item.end_time - start >= min_seconds
+        ]
+        end = max(safe_ends) if safe_ends else hard_end
+
+    return start, end
 
 
 def dedupe_candidates(candidates: list[CandidatePayload], overlap_threshold: float = 0.65) -> list[CandidatePayload]:

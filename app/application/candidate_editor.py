@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.application.characters import speaker_name_map
 from app.media.subtitles import SubtitleCue, cues_for_range, cues_for_words
 from app.models.entities import (
     CandidateSubtitle,
@@ -25,6 +26,7 @@ class EditableSubtitle:
 
 def subtitles_for_candidate(session: Session, candidate_id: int) -> list[EditableSubtitle]:
     candidate = _candidate(session, candidate_id)
+    identities = speaker_name_map(session, candidate.episode_id)
     saved = session.scalars(
         select(CandidateSubtitle)
         .where(CandidateSubtitle.candidate_id == candidate_id)
@@ -32,13 +34,20 @@ def subtitles_for_candidate(session: Session, candidate_id: int) -> list[Editabl
     ).all()
     if saved:
         return [
-            EditableSubtitle(row.id, row.start_time, row.end_time, row.text, row.speaker_label)
+            EditableSubtitle(
+                row.id,
+                row.start_time,
+                row.end_time,
+                row.text,
+                identities.get(row.speaker_label, row.speaker_label),
+            )
             for row in saved
         ]
     return generated_subtitles(session, candidate)
 
 
 def generated_subtitles(session: Session, candidate: ClipCandidate) -> list[EditableSubtitle]:
+    identities = speaker_name_map(session, candidate.episode_id)
     segments = session.scalars(
         select(TranscriptSegment)
         .where(TranscriptSegment.episode_id == candidate.episode_id)
@@ -61,7 +70,7 @@ def generated_subtitles(session: Session, candidate: ClipCandidate) -> list[Edit
             cue.start_time,
             cue.end_time,
             cue.text.replace("\\N", "\n"),
-            _speaker_for_cue(segments, candidate.start_time + cue.start_time),
+            _resolved_speaker_for_cue(segments, candidate.start_time + cue.start_time, identities),
         )
         for cue in cues
     ]
@@ -107,9 +116,17 @@ def reset_candidate_subtitles(session: Session, candidate_id: int) -> list[Edita
     return generated_subtitles(session, candidate)
 
 
-def subtitle_cues_for_render(session: Session, candidate: ClipCandidate) -> list[SubtitleCue]:
+def subtitle_cues_for_render(
+    session: Session,
+    candidate: ClipCandidate,
+    show_speaker_names: bool = False,
+) -> list[SubtitleCue]:
     return [
-        SubtitleCue(item.start_time, item.end_time, item.text.replace("\n", "\\N"))
+        SubtitleCue(
+            item.start_time,
+            item.end_time,
+            _subtitle_render_text(item, show_speaker_names),
+        )
         for item in subtitles_for_candidate(session, candidate.id)
     ]
 
@@ -126,3 +143,20 @@ def _speaker_for_cue(segments: list[TranscriptSegment], absolute_start: float) -
         if segment.start_time - 0.1 <= absolute_start <= segment.end_time + 0.1:
             return segment.speaker_label
     return None
+
+
+def _resolved_speaker_for_cue(
+    segments: list[TranscriptSegment],
+    absolute_start: float,
+    identities: dict[str, str],
+) -> str | None:
+    label = _speaker_for_cue(segments, absolute_start)
+    return identities.get(label, label)
+
+
+def _subtitle_render_text(item: EditableSubtitle, show_speaker_names: bool) -> str:
+    text = item.text.replace("\n", "\\N")
+    if not show_speaker_names or not item.speaker_label:
+        return text
+    safe_label = item.speaker_label.replace("{", "").replace("}", "").replace("\\", "").strip()
+    return f"{{\\b1}}{safe_label}:{{\\b0}}\\N{text}" if safe_label else text

@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from app.application.cache import cache_summary, clear_cache
-from app.application.candidate_editor import EditableSubtitle, save_candidate_subtitles, subtitles_for_candidate
+from app.application.candidate_editor import (
+    EditableSubtitle,
+    save_candidate_subtitles,
+    subtitle_cues_for_render,
+    subtitles_for_candidate,
+)
+from app.application.characters import add_character_photo, assign_speaker_identity
 from app.application.importer import import_season
 from app.application.processing_guard import ProcessingBusyError, processing_guard
 from app.infrastructure.config import Settings
 from app.infrastructure.database import make_engine
 from app.media.rendering import build_render_args
-from app.models.entities import ClipCandidate, TranscriptSegment, WordTimestamp
+from app.media.character_recognition import face_signature
+from app.models.entities import Character, ClipCandidate, Episode, TranscriptSegment, WordTimestamp
 from app.workers.queue import enqueue_candidate_render
 from app.workers.runner import run_next_job
 
@@ -72,6 +81,62 @@ def test_candidate_subtitles_can_be_generated_edited_and_validated(session, tmp_
         save_candidate_subtitles(session, candidate.id, [EditableSubtitle(None, 9, 11, "Поздно")])
 
 
+def test_character_identity_resolves_speaker_and_can_render_name(session, tmp_path: Path):
+    candidate = _candidate(session, tmp_path)
+    segment = TranscriptSegment(
+        episode_id=candidate.episode_id,
+        start_time=10,
+        end_time=14,
+        text="Реплика персонажа.",
+        speaker_label="Говорящий 1",
+    )
+    session.add(segment)
+    session.flush()
+    session.add(WordTimestamp(segment_id=segment.id, start_time=10.1, end_time=11, word="Реплика."))
+    episode = session.get(Episode, candidate.episode_id)
+    assert episode is not None
+    character = Character(season_id=episode.season_id, name="Мария")
+    session.add(character)
+    session.flush()
+
+    assign_speaker_identity(session, candidate.episode_id, "Говорящий 1", character.id)
+
+    generated = subtitles_for_candidate(session, candidate.id)
+    rendered = subtitle_cues_for_render(session, candidate, show_speaker_names=True)
+    assert generated[0].speaker_label == "Мария"
+    assert "Мария:" in rendered[0].text
+
+
+def test_character_photo_is_validated_and_stored_in_local_character_directory(session, tmp_path: Path):
+    import cv2
+
+    candidate = _candidate(session, tmp_path)
+    episode = session.get(Episode, candidate.episode_id)
+    assert episode is not None
+    character = Character(season_id=episode.season_id, name="Антон")
+    session.add(character)
+    session.flush()
+    image = np.full((100, 100, 3), 127, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    data_url = "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
+
+    path = Path(add_character_photo(character, data_url, tmp_path / "characters"))
+
+    assert path.exists()
+    assert (tmp_path / "characters").resolve() in path.parents
+    assert len(character.photos_json) == 1
+
+
+def test_face_signature_is_deterministic_for_the_same_crop():
+    image = np.arange(96 * 96, dtype=np.uint8).reshape(96, 96)
+
+    first = face_signature(image)
+    second = face_signature(image.copy())
+
+    assert np.allclose(first, second)
+
+
 def test_cache_cleanup_only_removes_files_inside_cache(tmp_path: Path):
     cache_dir = tmp_path / "cache"
     cache_file = cache_dir / "episode" / "proxy.mp4"
@@ -126,6 +191,24 @@ def test_crop_offset_and_scale_are_in_ffmpeg_filter(tmp_path: Path):
 
     assert "scale=-2:2400" in video_filter
     assert "1.0000" in video_filter
+
+
+def test_face_tracking_keyframes_create_a_time_based_crop_expression(tmp_path: Path):
+    args = build_render_args(
+        "ffmpeg",
+        tmp_path / "input.mp4",
+        tmp_path / "output.mp4",
+        0,
+        10,
+        "auto-follow",
+        None,
+        False,
+        crop_keyframes=[{"time": 0, "offset": -0.5}, {"time": 5, "offset": 0.5}],
+    )
+
+    video_filter = args[args.index("-vf") + 1]
+    assert "if(lt(t,5.000)" in video_filter
+    assert "(t-0.000)/5.000" in video_filter
 
 
 def test_processing_guard_rejects_a_second_heavy_operation():

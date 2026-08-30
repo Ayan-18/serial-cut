@@ -20,7 +20,13 @@ def calibrate_candidate(
     range_scenes = [scene for scene in scenes if scene.end_time >= candidate.start_time and scene.start_time <= candidate.end_time]
     duration = max(0.1, candidate.end_time - candidate.start_time)
 
-    boundary = 92 if text.rstrip().endswith((".", "!", "?", "…")) else 66
+    cuts_start = any(
+        item.start_time + 0.05 < candidate.start_time < item.end_time - 0.05 for item in segments
+    )
+    cuts_end = any(
+        item.start_time + 0.05 < candidate.end_time < item.end_time - 0.05 for item in segments
+    )
+    boundary = 38 if cuts_start or cuts_end else (92 if text.rstrip().endswith((".", "!", "?", "…")) else 66)
     opening = text[:180]
     hook = min(100, 68 + (10 if "?" in opening else 0) + (8 if "!" in opening else 0))
     word_density = len(range_words) / duration
@@ -46,6 +52,10 @@ def calibrate_candidate(
         + scores.audio_quality * 0.08
     )
     problems = list(candidate.possible_problems)
+    if cuts_start and len(problems) < 5:
+        problems.append("Начало попадает в середину реплики")
+    if cuts_end and len(problems) < 5:
+        problems.append("Конец попадает в середину реплики")
     if boundary < 80 and len(problems) < 5:
         problems.append("Конец реплики может быть незавершённым")
     if audio < 80 and len(problems) < 5:
@@ -87,7 +97,11 @@ def remove_cross_episode_duplicates(
 
 
 def _range_text(segments: list[TranscriptSegment], start: float, end: float) -> str:
-    return " ".join(item.text for item in segments if item.end_time >= start and item.start_time <= end).strip()
+    return " ".join(
+        item.text
+        for item in segments
+        if item.start_time >= start - 0.05 and item.end_time <= end + 0.05
+    ).strip()
 
 
 def _tokens(text: str) -> set[str]:

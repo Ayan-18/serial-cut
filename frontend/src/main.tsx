@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Check, Clapperboard, FolderOpen, FolderPlus, ListFilter, ListVideo, LoaderCircle, Pause, Play, RefreshCcw, RotateCcw, Save, Server, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
+import { BookOpen, Check, Clapperboard, FolderOpen, FolderPlus, ListFilter, ListVideo, LoaderCircle, Pause, Play, RefreshCcw, RotateCcw, Save, Server, Sparkles, Trash2, UserRound, WandSparkles, X } from "lucide-react";
 import "./styles.css";
 
 type Episode = { id: number; file_name: string; file_path: string; stage: string; size_bytes: number; duration_seconds: number | null; width: number | null; height: number | null; fps: number | null };
@@ -13,13 +13,15 @@ type RuntimeSettings = {
   min_clip_seconds: number; max_clip_seconds: number; auto_mode_enabled: boolean; background_queue_enabled: boolean;
   auto_score_threshold: number; max_clips_per_episode: number; render_preset: "youtube_shorts" | "instagram_reels";
   render_use_nvenc: boolean; render_loudnorm_two_pass: boolean; subtitle_font_name: string; subtitle_font_size: number;
+  subtitle_show_speaker_names: boolean;
   asr_adapter: "stub" | "faster-whisper"; llm_adapter: "stub" | "llama-cpp-http"; llm_base_url: string;
 };
 type Candidate = {
   id: number; episode_id: number; start_time: number; end_time: number; title: string; description: string;
   moment_type: string; score: number; scores_json: Record<string, number>; rationale: string; problems_json: string[];
   crop_mode: "auto-follow" | "center-crop" | "blurred-background"; crop_offset_x: number; crop_scale: number;
-  thumbnail_path: string | null; status: string;
+  thumbnail_path: string | null; status: string; story_order: number | null; story_role: string | null; continuity_note: string | null;
+  crop_keyframes_json: { time: number; offset: number }[];
 };
 type CandidateEdit = { start: string; end: string; crop: Candidate["crop_mode"]; offset: number; scale: number };
 type Subtitle = { id?: number | null; start_time: number; end_time: number; text: string; speaker_label?: string | null };
@@ -27,6 +29,13 @@ type ExportItem = { id: number; candidate_id: number; output_path: string; cover
 type ModelDiagnostics = { asr_adapter: string; asr_ready: boolean; llm_adapter: string; llm_ready: boolean; llm_url: string; details: string[] };
 type CacheInfo = { cache_dir: string; files: number; bytes: number };
 type BlockingProgress = { kind: "media" | "candidates"; episodeId: number; fileName: string; startedAt: number };
+type StoryContext = {
+  season_id: number; episode_id: number; season_context: string; episode_summary: string;
+  required_events: string[]; excluded_events: string[]; spoilers_allowed: boolean; candidate_mode: "highlights" | "story";
+};
+type Character = { id: number; season_id: number; name: string; description: string; aliases: string[]; color: string; photo_count: number; photo_urls: string[] };
+type SpeakerIdentity = { source_label: string; character_id: number; character_name: string; confidence: number | null; method: string };
+type EpisodeOutline = { summary: string; main_events: string[]; conflicts: string[]; time_ranges: { start_time: number; end_time: number; summary: string }[] };
 
 function App() {
   const [rootPath, setRootPath] = useState("");
@@ -49,6 +58,14 @@ function App() {
   const [blockingProgress, setBlockingProgress] = useState<BlockingProgress | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [videoTime, setVideoTime] = useState(0);
+  const [storyContext, setStoryContext] = useState<StoryContext | null>(null);
+  const [characters, setCharacters] = useState<Character[]>([]);
+  const [speakerLabels, setSpeakerLabels] = useState<string[]>([]);
+  const [speakerIdentities, setSpeakerIdentities] = useState<SpeakerIdentity[]>([]);
+  const [episodeOutline, setEpisodeOutline] = useState<EpisodeOutline | null>(null);
+  const [characterName, setCharacterName] = useState("");
+  const [characterDescription, setCharacterDescription] = useState("");
+  const [characterPhoto, setCharacterPhoto] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const backgroundVideoRef = useRef<HTMLVideoElement>(null);
 
@@ -131,9 +148,83 @@ function App() {
   async function loadCandidates(episodeId: number, selectEpisode = true) {
     const data = await api<Candidate[]>(`/api/episodes/${episodeId}/candidates`);
     setCandidates((current) => ({ ...current, [episodeId]: data }));
-    if (selectEpisode) setSelectedEpisodeId(episodeId);
+    if (selectEpisode) { setSelectedEpisodeId(episodeId); await loadEpisodeDetails(episodeId); }
     setEdits((current) => { const next = { ...current }; for (const candidate of data) next[candidate.id] ??= editFromCandidate(candidate); return next; });
     if (selectedCandidate?.episode_id === episodeId) { const updated = data.find((item) => item.id === selectedCandidate.id); if (updated) setSelectedCandidate(updated); }
+  }
+
+  async function loadEpisodeDetails(episodeId: number) {
+    const context = await api<StoryContext>(`/api/episodes/${episodeId}/story-context`);
+    const [characterData, labelData, identityData] = await Promise.all([
+      api<Character[]>(`/api/seasons/${context.season_id}/characters`),
+      api<{ labels: string[] }>(`/api/episodes/${episodeId}/speaker-labels`),
+      api<SpeakerIdentity[]>(`/api/episodes/${episodeId}/speaker-identities`),
+    ]);
+    setStoryContext(context); setCharacters(characterData); setSpeakerLabels(labelData.labels); setSpeakerIdentities(identityData);
+    const outline = await api<{ summary_json: EpisodeOutline }>(`/api/episodes/${episodeId}/outline`).catch(() => null);
+    setEpisodeOutline(outline?.summary_json ?? null);
+    if (context.candidate_mode === "story") setCandidateSort("time");
+  }
+
+  async function saveStoryContext() {
+    if (!storyContext) return;
+    const saved = await api<StoryContext>(`/api/episodes/${storyContext.episode_id}/story-context`, {
+      method: "PUT", headers: jsonHeaders, body: JSON.stringify(storyContext),
+    });
+    setStoryContext(saved); setMessage("Контекст и режим кандидатов сохранены");
+  }
+
+  async function regenerateStoryCandidates() {
+    if (!storyContext) return;
+    await saveStoryContext();
+    const episode = seasons.flatMap((item) => item.episodes).find((item) => item.id === storyContext.episode_id);
+    if (episode) await runDirectStage(episode, "candidates");
+  }
+
+  async function createCharacter() {
+    if (!storyContext || !characterName.trim()) return;
+    await api<Character>(`/api/seasons/${storyContext.season_id}/characters`, {
+      method: "POST", headers: jsonHeaders, body: JSON.stringify({
+        name: characterName, description: characterDescription, photo_data_url: characterPhoto,
+      }),
+    });
+    setCharacterName(""); setCharacterDescription(""); setCharacterPhoto(null);
+    await loadEpisodeDetails(storyContext.episode_id); setMessage("Персонаж добавлен локально");
+  }
+
+  async function deleteCharacter(characterId: number) {
+    if (!storyContext || !window.confirm("Удалить карточку персонажа и локальные копии его фотографий?")) return;
+    await api(`/api/characters/${characterId}`, { method: "DELETE" });
+    await loadEpisodeDetails(storyContext.episode_id); setMessage("Персонаж удалён; исходная фотография не изменена");
+  }
+
+  function readCharacterPhoto(file: File | undefined) {
+    if (!file) { setCharacterPhoto(null); return; }
+    const reader = new FileReader();
+    reader.onload = () => setCharacterPhoto(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => setMessage("Не удалось прочитать фотографию");
+    reader.readAsDataURL(file);
+  }
+
+  async function assignSpeaker(sourceLabel: string, characterId: number) {
+    if (!selectedEpisodeId || !characterId) return;
+    await api<SpeakerIdentity>(`/api/episodes/${selectedEpisodeId}/speaker-identities`, {
+      method: "PUT", headers: jsonHeaders, body: JSON.stringify({ source_label: sourceLabel, character_id: characterId }),
+    });
+    await loadEpisodeDetails(selectedEpisodeId);
+    if (selectedCandidate) setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`));
+    setMessage(`Голос «${sourceLabel}» привязан к персонажу`);
+  }
+
+  async function identifyCharacters() {
+    if (!selectedEpisodeId) return;
+    setMessage("Сравниваем лица с фотографиями персонажей…");
+    try {
+      const result = await api<{ assigned_labels: number }>(`/api/episodes/${selectedEpisodeId}/identify-characters`, { method: "POST" });
+      await loadEpisodeDetails(selectedEpisodeId);
+      if (selectedCandidate) setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`));
+      setMessage(result.assigned_labels ? `Автоматически определено голосов: ${result.assigned_labels}` : "Надёжных совпадений не найдено — имена не назначены");
+    } catch (error) { setMessage(`Распознавание персонажей: ${errorMessage(error)}`); }
   }
 
   async function openCandidate(candidate: Candidate, play = false) {
@@ -155,9 +246,10 @@ function App() {
 
   async function autoCrop(candidate: Candidate) {
     setMessage("Ищем лица в выбранном отрывке…");
-    const data = await api<{ crop_offset_x: number; faces_detected: number }>(`/api/candidates/${candidate.id}/auto-crop`, { method: "POST" });
+    const data = await api<{ crop_offset_x: number; faces_detected: number; keyframes: { time: number; offset: number }[] }>(`/api/candidates/${candidate.id}/auto-crop`, { method: "POST" });
     setCandidateEdit(candidate.id, { crop: "auto-follow", offset: data.crop_offset_x });
-    setMessage(data.faces_detected ? `Автокадрирование: найдено лиц ${data.faces_detected}` : "Лица не найдены, оставлен центр кадра");
+    await loadCandidates(candidate.episode_id, false);
+    setMessage(data.faces_detected ? `Плавное слежение построено по ${data.keyframes.length} кадрам с лицами` : "Лица не найдены, оставлен центр кадра");
   }
 
   async function saveSubtitles() {
@@ -238,16 +330,34 @@ function App() {
 
     <section className="panel section-gap"><div className="panel-title"><ListVideo size={19} /><h2>Серии</h2></div><div className="episodes">{seasons.flatMap((season) => season.episodes).map((episode) => { const busy = isEpisodeBusy(episode.id); return <article className="episode" key={episode.id}><div><strong>{episode.file_name}</strong><small>{busy ? "Обрабатывается в очереди" : stageLabel(episode.stage)}</small></div><span>{formatBytes(episode.size_bytes)}</span><span>{episode.width && episode.height ? `${episode.width}×${episode.height}` : "без метаданных"}</span><button disabled={busy} onClick={() => enqueueEpisode(episode)}>В очередь</button><button className="secondary" disabled={blockingProgress !== null || busy} onClick={() => runDirectStage(episode, "media")}>Только медиа</button><button className="secondary" disabled={blockingProgress !== null || busy} onClick={() => runDirectStage(episode, "candidates")}>Только кандидаты</button><button onClick={() => loadCandidates(episode.id)}>Открыть</button><button className="secondary" disabled={busy} onClick={() => autoExport(episode.id)}>Auto export</button></article>; })}</div></section>
 
+    {selectedEpisodeId && storyContext && <section className="story-dashboard section-gap">
+      <div className="panel story-panel"><div className="panel-title"><BookOpen size={19} /><h2>Сюжетный контекст</h2><span className="badge">{storyContext.candidate_mode === "story" ? "Связный пересказ" : "Лучшие моменты"}</span></div>
+        <div className="story-mode"><button className={storyContext.candidate_mode === "highlights" ? "" : "secondary"} onClick={() => setStoryContext({ ...storyContext, candidate_mode: "highlights" })}>Лучшие моменты</button><button className={storyContext.candidate_mode === "story" ? "" : "secondary"} onClick={() => setStoryContext({ ...storyContext, candidate_mode: "story" })}>Сюжет серии</button></div>
+        <label className="story-field"><span>Общая суть сезона</span><textarea rows={4} value={storyContext.season_context} onChange={(event) => setStoryContext({ ...storyContext, season_context: event.target.value })} placeholder="Главные персонажи, отношения, общая история и тон сезона…" /></label>
+        <label className="story-field"><span>Суть этой серии</span><textarea rows={4} value={storyContext.episode_summary} onChange={(event) => setStoryContext({ ...storyContext, episode_summary: event.target.value })} placeholder="Завязка, конфликт, важный поворот и итог серии…" /></label>
+        <div className="story-columns"><label className="story-field"><span>Обязательно показать</span><textarea rows={3} value={storyContext.required_events.join("\n")} onChange={(event) => setStoryContext({ ...storyContext, required_events: splitLines(event.target.value) })} placeholder="По одному событию на строку" /></label><label className="story-field"><span>Не включать</span><textarea rows={3} value={storyContext.excluded_events.join("\n")} onChange={(event) => setStoryContext({ ...storyContext, excluded_events: splitLines(event.target.value) })} placeholder="Второстепенные линии или нежелательные сцены" /></label></div>
+        <label className="inline-check"><input type="checkbox" checked={storyContext.spoilers_allowed} onChange={(event) => setStoryContext({ ...storyContext, spoilers_allowed: event.target.checked })} /> Можно показывать концовку серии</label>
+        <div className="story-actions"><button onClick={saveStoryContext}><Save size={16} /> Сохранить контекст</button><button className="secondary" disabled={isEpisodeBusy(selectedEpisodeId) || blockingProgress !== null} onClick={regenerateStoryCandidates}><Sparkles size={16} /> Пересоздать кандидатов</button></div>
+        {episodeOutline && <details className="outline-card"><summary>Построенная карта серии</summary><p>{episodeOutline.summary}</p><ol>{episodeOutline.time_ranges.map((item, index) => <li key={`${item.start_time}-${index}`}><strong>{formatClock(item.start_time)}–{formatClock(item.end_time)}</strong> {item.summary}</li>)}</ol></details>}
+      </div>
+      <div className="panel character-panel"><div className="panel-title"><UserRound size={19} /><h2>Персонажи и голоса</h2><span className="badge">{characters.length}</span></div>
+        <div className="character-create"><input value={characterName} onChange={(event) => setCharacterName(event.target.value)} placeholder="Имя персонажа" /><input value={characterDescription} onChange={(event) => setCharacterDescription(event.target.value)} placeholder="Краткое описание" /><label className="file-picker">{characterPhoto ? "Фото выбрано" : "Выбрать фото"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => readCharacterPhoto(event.target.files?.[0])} /></label><button disabled={!characterName.trim()} onClick={createCharacter}>Добавить</button></div>
+        <div className="character-list">{characters.map((character) => <article className="character-card" key={character.id}>{character.photo_urls[0] ? <img src={character.photo_urls[0]} alt={character.name} /> : <span className="character-placeholder"><UserRound /></span>}<div><strong>{character.name}</strong><small>{character.description || "Без описания"}</small><small>{character.photo_count} фото</small></div><button className="icon-button danger" title="Удалить персонажа" onClick={() => deleteCharacter(character.id)}><Trash2 size={15} /></button></article>)}{!characters.length && <p className="empty">Добавьте имя и чёткое фронтальное фото. Несовпадения останутся «Неизвестными».</p>}</div>
+        {!!speakerLabels.length && <div className="speaker-map"><h3>Кто скрывается за голосами</h3>{speakerLabels.map((label) => { const current = speakerIdentities.find((item) => item.source_label === label); return <label key={label}><span>{label}</span><select value={current?.character_id ?? ""} onChange={(event) => assignSpeaker(label, Number(event.target.value))}><option value="">Не определён</option>{characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select>{current?.confidence != null && <small>{Math.round(current.confidence * 100)}% · по лицу</small>}</label>; })}</div>}
+        <button className="secondary identify-button" disabled={!characters.some((item) => item.photo_count > 0) || isEpisodeBusy(selectedEpisodeId)} onClick={identifyCharacters}><WandSparkles size={16} /> Распознать по фотографиям</button>
+      </div>
+    </section>}
+
     {selectedEpisodeId && <section className="workspace section-gap">
       <div className="panel candidate-panel"><div className="panel-title"><Clapperboard size={19} /><h2>Кандидаты</h2></div><div className="candidate-toolbar"><label><ListFilter size={16} /><select value={candidateFilter} onChange={(event) => setCandidateFilter(event.target.value)}><option value="all">Все статусы</option><option value="new">Новые</option><option value="approved">Принятые</option><option value="rejected">Отклонённые</option><option value="rendered">Готовые</option></select></label><select value={candidateSort} onChange={(event) => setCandidateSort(event.target.value)}><option value="score">Сначала лучшие</option><option value="time">По времени</option></select></div>
-        <div className="candidate-list">{visibleCandidates.map((candidate) => { const edit = edits[candidate.id] ?? editFromCandidate(candidate); const busy = isEpisodeBusy(candidate.episode_id); return <article className={`candidate ${selectedCandidate?.id === candidate.id ? "selected" : ""}`} key={candidate.id}><button className="candidate-main" onClick={() => openCandidate(candidate, true)}><span className="score">{candidate.score}</span><span><strong>{candidate.title}</strong><small>{candidate.moment_type} · {statusLabel(candidate.status)} · {formatRange(candidate.start_time, candidate.end_time)}</small></span><Play size={18} /></button><p>{candidate.description}</p>{!!candidate.problems_json.length && <small className="error-text">{candidate.problems_json.join(" · ")}</small>}<div className="compact-edit"><label>Начало<input value={edit.start} onChange={(event) => setCandidateEdit(candidate.id, { start: event.target.value })} /></label><label>Конец<input value={edit.end} onChange={(event) => setCandidateEdit(candidate.id, { end: event.target.value })} /></label><select value={edit.crop} onChange={(event) => setCandidateEdit(candidate.id, { crop: event.target.value as Candidate["crop_mode"] })}><option value="blurred-background">Фон с размытием</option><option value="center-crop">Центр</option><option value="auto-follow">По лицам</option></select></div><div className="candidate-actions"><button disabled={busy} onClick={() => reviewCandidate(candidate, "approve")}><Check size={16} /> Принять</button><button className="secondary" disabled={busy} onClick={() => reviewCandidate(candidate, "reject")}><X size={16} /> Отклонить</button><button disabled={busy} onClick={() => renderCandidate(candidate, true)}>Рендер с субтитрами</button><button className="secondary" disabled={busy} onClick={() => renderCandidate(candidate, false)}>Без субтитров</button></div></article>; })}{!visibleCandidates.length && <p className="empty">Кандидатов с выбранным фильтром нет.</p>}</div>
+        <div className="candidate-list">{visibleCandidates.map((candidate) => { const edit = edits[candidate.id] ?? editFromCandidate(candidate); const busy = isEpisodeBusy(candidate.episode_id); return <article className={`candidate ${selectedCandidate?.id === candidate.id ? "selected" : ""}`} key={candidate.id}><button className="candidate-main" onClick={() => openCandidate(candidate, true)}><span className="score">{candidate.score}</span><span><strong>{candidate.story_order ? `Часть ${candidate.story_order} · ` : ""}{candidate.title}</strong><small>{candidate.story_role ? `${candidate.story_role} · ` : ""}{candidate.moment_type} · {statusLabel(candidate.status)} · {formatRange(candidate.start_time, candidate.end_time)}</small></span><Play size={18} /></button><p>{candidate.description}</p>{candidate.continuity_note && <small className="continuity-note">Связность: {candidate.continuity_note}</small>}{!!candidate.problems_json.length && <small className="error-text">{candidate.problems_json.join(" · ")}</small>}<div className="compact-edit"><label>Начало<input value={edit.start} onChange={(event) => setCandidateEdit(candidate.id, { start: event.target.value })} /></label><label>Конец<input value={edit.end} onChange={(event) => setCandidateEdit(candidate.id, { end: event.target.value })} /></label><select value={edit.crop} onChange={(event) => setCandidateEdit(candidate.id, { crop: event.target.value as Candidate["crop_mode"] })}><option value="blurred-background">Фон с размытием</option><option value="center-crop">Центр</option><option value="auto-follow">По лицам</option></select></div><div className="candidate-actions"><button disabled={busy} onClick={() => reviewCandidate(candidate, "approve")}><Check size={16} /> Принять</button><button className="secondary" disabled={busy} onClick={() => reviewCandidate(candidate, "reject")}><X size={16} /> Отклонить</button><button disabled={busy} onClick={() => renderCandidate(candidate, true)}>Рендер с субтитрами</button><button className="secondary" disabled={busy} onClick={() => renderCandidate(candidate, false)}>Без субтитров</button></div></article>; })}{!visibleCandidates.length && <p className="empty">Кандидатов с выбранным фильтром нет.</p>}</div>
       </div>
       <div className="panel editor-panel"><div className="panel-title"><WandSparkles size={19} /><h2>Предпросмотр и редактор</h2></div>{selectedCandidate && selectedEdit ? <>
-        <div className={`preview-frame ${selectedEdit.crop}`}><video className="preview-background" ref={backgroundVideoRef} muted src={`/api/episodes/${selectedEpisodeId}/proxy`} /><video className="preview-foreground" ref={videoRef} controls src={`/api/episodes/${selectedEpisodeId}/proxy`} onTimeUpdate={onVideoTimeUpdate} onPlay={() => backgroundVideoRef.current?.play().catch(() => undefined)} onPause={() => backgroundVideoRef.current?.pause()} style={{ objectPosition: `${50 + selectedEdit.offset * 35}% 50%`, transform: `scale(${selectedEdit.scale})` }} />{activeSubtitle && <div className="subtitle-preview"><small>{activeSubtitle.speaker_label}</small>{activeSubtitle.text}</div>}</div>
+        <div className={`preview-frame ${selectedEdit.crop}`}><video className="preview-background" ref={backgroundVideoRef} muted src={`/api/episodes/${selectedEpisodeId}/proxy`} /><video className="preview-foreground" ref={videoRef} controls src={`/api/episodes/${selectedEpisodeId}/proxy`} onTimeUpdate={onVideoTimeUpdate} onPlay={() => backgroundVideoRef.current?.play().catch(() => undefined)} onPause={() => backgroundVideoRef.current?.pause()} style={{ objectPosition: `${50 + previewCropOffset(selectedCandidate, selectedEdit, videoTime) * 35}% 50%`, transform: `scale(${selectedEdit.scale})` }} />{activeSubtitle && <div className="subtitle-preview"><small>{activeSubtitle.speaker_label}</small>{activeSubtitle.text}</div>}</div>
         <div className="preview-summary"><strong>{selectedCandidate.title}</strong><span>{formatRange(Number(selectedEdit.start), Number(selectedEdit.end))}</span></div>
         <div className="crop-controls"><label>Смещение по горизонтали <span>{selectedEdit.offset.toFixed(2)}</span><input type="range" min="-1" max="1" step="0.02" value={selectedEdit.offset} onChange={(event) => setCandidateEdit(selectedCandidate.id, { offset: Number(event.target.value) })} /></label><label>Масштаб <span>{selectedEdit.scale.toFixed(2)}×</span><input type="range" min="1" max="2" step="0.02" value={selectedEdit.scale} onChange={(event) => setCandidateEdit(selectedCandidate.id, { scale: Number(event.target.value) })} /></label><button disabled={isEpisodeBusy(selectedCandidate.episode_id)} onClick={() => autoCrop(selectedCandidate)}><WandSparkles size={16} /> Найти лица</button></div>
         <div className="subtitle-header"><div><h3>Субтитры</h3><small>Время указано относительно начала клипа.</small></div><div><button className="icon-button secondary" title="Пересобрать" disabled={subtitleBusy || isEpisodeBusy(selectedCandidate.episode_id)} onClick={resetSubtitles}><RotateCcw size={17} /></button><button onClick={saveSubtitles} disabled={subtitleBusy || isEpisodeBusy(selectedCandidate.episode_id)}><Save size={16} /> Сохранить</button></div></div>
-        <div className="subtitle-list">{subtitles.map((subtitle, index) => <article className="subtitle-row" key={`${subtitle.id ?? "new"}-${index}`}><input type="number" step="0.05" value={subtitle.start_time} onChange={(event) => updateSubtitle(index, { start_time: Number(event.target.value) })} /><input type="number" step="0.05" value={subtitle.end_time} onChange={(event) => updateSubtitle(index, { end_time: Number(event.target.value) })} /><textarea rows={2} value={subtitle.text} onChange={(event) => updateSubtitle(index, { text: event.target.value })} /><input placeholder="Говорящий" value={subtitle.speaker_label ?? ""} onChange={(event) => updateSubtitle(index, { speaker_label: event.target.value || null })} /><button className="icon-button danger" title="Удалить строку" onClick={() => setSubtitles((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={16} /></button></article>)}</div>
+        <div className="subtitle-list">{subtitles.map((subtitle, index) => <article className="subtitle-row" key={`${subtitle.id ?? "new"}-${index}`}><input type="number" step="0.05" value={subtitle.start_time} onChange={(event) => updateSubtitle(index, { start_time: Number(event.target.value) })} /><input type="number" step="0.05" value={subtitle.end_time} onChange={(event) => updateSubtitle(index, { end_time: Number(event.target.value) })} /><textarea rows={2} value={subtitle.text} onChange={(event) => updateSubtitle(index, { text: event.target.value })} /><select title="Говорящий" value={subtitle.speaker_label ?? ""} onChange={(event) => updateSubtitle(index, { speaker_label: event.target.value || null })}><option value="">Неизвестный</option>{subtitle.speaker_label && !characters.some((item) => item.name === subtitle.speaker_label) && <option value={subtitle.speaker_label}>{subtitle.speaker_label}</option>}{characters.map((character) => <option key={character.id} value={character.name}>{character.name}</option>)}</select><button className="icon-button danger" title="Удалить строку" onClick={() => setSubtitles((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={16} /></button></article>)}</div>
         <button className="secondary add-subtitle" onClick={() => setSubtitles((current) => [...current, { start_time: 0, end_time: 1, text: "Новая строка", speaker_label: null }])}>Добавить строку</button>
       </> : <p className="empty">Нажмите на кандидата, чтобы посмотреть только его отрывок и отредактировать кадр и субтитры.</p>}</div>
     </section>}
@@ -259,7 +369,7 @@ function App() {
       <div className="panel"><div className="panel-title"><Server size={19} /><h2>Настройки</h2></div>{settings && <div className="settings-sections">
         <section className="settings-section"><h3>Файлы</h3><div className="settings-grid"><SettingText title="Папка временных файлов" hint="Proxy, WAV и промежуточные данные; их можно безопасно удалить." value={settings.cache_dir} onChange={(value) => patchSettings({ cache_dir: value })} wide /><SettingText title="Папка готовых роликов" hint="Готовые MP4, обложки, субтитры и метаданные." value={settings.output_dir} onChange={(value) => patchSettings({ output_dir: value })} wide /></div></section>
         <section className="settings-section"><h3>Анализ и Auto</h3><div className="settings-grid"><label className="setting-field"><span>Профиль качества</span><select value={settings.quality_profile} onChange={(event) => patchSettings({ quality_profile: event.target.value as RuntimeSettings["quality_profile"] })}><option value="fast">Быстрый</option><option value="balanced">Сбалансированный</option><option value="quality">Качественный</option></select><small>Баланс скорости и тщательности локального анализа.</small></label><SettingNumber title="Минимальная длина, сек." hint="Короткий кандидат будет расширен." value={settings.min_clip_seconds} min={5} max={300} onChange={(value) => patchSettings({ min_clip_seconds: value })} /><SettingNumber title="Максимальная длина, сек." hint="Клип не выйдет за этот предел." value={settings.max_clip_seconds} min={5} max={300} onChange={(value) => patchSettings({ max_clip_seconds: value })} /><SettingNumber title="Порог Auto, баллы" hint="Auto принимает кандидатов с этой оценкой и выше." value={settings.auto_score_threshold} min={0} max={100} onChange={(value) => patchSettings({ auto_score_threshold: value })} /><SettingNumber title="Максимум клипов" hint="Лимит автоматического экспорта из серии." value={settings.max_clips_per_episode} min={1} max={20} onChange={(value) => patchSettings({ max_clips_per_episode: value })} /><SettingCheck title="Фоновая очередь" hint="Новые задачи запускаются сами." checked={settings.background_queue_enabled} onChange={(value) => patchSettings({ background_queue_enabled: value })} /><SettingCheck title="Auto по умолчанию" hint="Лучшие кандидаты принимаются и экспортируются." checked={settings.auto_mode_enabled} onChange={(value) => patchSettings({ auto_mode_enabled: value })} /></div></section>
-        <section className="settings-section"><h3>Рендер и субтитры</h3><div className="settings-grid"><label className="setting-field"><span>Платформа</span><select value={settings.render_preset} onChange={(event) => patchSettings({ render_preset: event.target.value as RuntimeSettings["render_preset"] })}><option value="youtube_shorts">YouTube Shorts</option><option value="instagram_reels">Instagram Reels</option></select><small>Битрейт и параметры MP4.</small></label><SettingText title="Шрифт субтитров" hint="Шрифт, установленный в Windows." value={settings.subtitle_font_name} onChange={(value) => patchSettings({ subtitle_font_name: value })} /><SettingNumber title="Размер субтитров" hint="Обычно 36–52 для вертикального кадра." value={settings.subtitle_font_size} min={24} max={96} onChange={(value) => patchSettings({ subtitle_font_size: value })} /><SettingCheck title="NVIDIA NVENC" hint="Ускоряет рендер; при ошибке включится CPU." checked={settings.render_use_nvenc} onChange={(value) => patchSettings({ render_use_nvenc: value })} /><SettingCheck title="Точная громкость" hint="Два прохода: медленнее, но ровнее звук." checked={settings.render_loudnorm_two_pass} onChange={(value) => patchSettings({ render_loudnorm_two_pass: value })} /></div></section>
+        <section className="settings-section"><h3>Рендер и субтитры</h3><div className="settings-grid"><label className="setting-field"><span>Платформа</span><select value={settings.render_preset} onChange={(event) => patchSettings({ render_preset: event.target.value as RuntimeSettings["render_preset"] })}><option value="youtube_shorts">YouTube Shorts</option><option value="instagram_reels">Instagram Reels</option></select><small>Битрейт и параметры MP4.</small></label><SettingText title="Шрифт субтитров" hint="Шрифт, установленный в Windows." value={settings.subtitle_font_name} onChange={(value) => patchSettings({ subtitle_font_name: value })} /><SettingNumber title="Размер субтитров" hint="Обычно 36–52 для вертикального кадра." value={settings.subtitle_font_size} min={24} max={96} onChange={(value) => patchSettings({ subtitle_font_size: value })} /><SettingCheck title="Показывать имя персонажа" hint="Добавляет имя говорящего над текстом в готовом видео." checked={settings.subtitle_show_speaker_names} onChange={(value) => patchSettings({ subtitle_show_speaker_names: value })} /><SettingCheck title="NVIDIA NVENC" hint="Ускоряет рендер; при ошибке включится CPU." checked={settings.render_use_nvenc} onChange={(value) => patchSettings({ render_use_nvenc: value })} /><SettingCheck title="Точная громкость" hint="Два прохода: медленнее, но ровнее звук." checked={settings.render_loudnorm_two_pass} onChange={(value) => patchSettings({ render_loudnorm_two_pass: value })} /></div></section>
         <button className="settings-save" onClick={saveSettings}><Save size={17} /> Сохранить настройки</button>
       </div>}</div>
     </section>
@@ -267,10 +377,22 @@ function App() {
 }
 
 const jsonHeaders = { "Content-Type": "application/json" };
+function splitLines(value: string) { return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); }
 function SettingText({ title, hint, value, onChange, wide = false }: { title: string; hint: string; value: string; onChange: (value: string) => void; wide?: boolean }) { return <label className={`setting-field ${wide ? "setting-field-wide" : ""}`}><span>{title}</span><input value={value} onChange={(event) => onChange(event.target.value)} /><small>{hint}</small></label>; }
 function SettingNumber({ title, hint, value, min, max, onChange }: { title: string; hint: string; value: number; min: number; max: number; onChange: (value: number) => void }) { return <label className="setting-field"><span>{title}</span><input type="number" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} /><small>{hint}</small></label>; }
 function SettingCheck({ title, hint, checked, onChange }: { title: string; hint: string; checked: boolean; onChange: (value: boolean) => void }) { return <label className="setting-checkbox"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span><strong>{title}</strong><small>{hint}</small></span></label>; }
 function editFromCandidate(candidate: Candidate): CandidateEdit { return { start: candidate.start_time.toFixed(3), end: candidate.end_time.toFixed(3), crop: candidate.crop_mode, offset: candidate.crop_offset_x, scale: candidate.crop_scale }; }
+function previewCropOffset(candidate: Candidate, edit: CandidateEdit, absoluteTime: number) {
+  const points = candidate.crop_keyframes_json ?? [];
+  if (edit.crop !== "auto-follow" || !points.length) return edit.offset;
+  const time = Math.max(0, absoluteTime - candidate.start_time);
+  const rightIndex = points.findIndex((item) => item.time >= time);
+  if (rightIndex <= 0) return points[0].offset;
+  if (rightIndex < 0) return points.at(-1)?.offset ?? edit.offset;
+  const left = points[rightIndex - 1]; const right = points[rightIndex];
+  const ratio = (time - left.time) / Math.max(0.001, right.time - left.time);
+  return left.offset + (right.offset - left.offset) * ratio;
+}
 function formatBytes(value: number) { if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`; if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value} B`; }
 function formatEta(value: number | null | undefined) { if (value == null) return "—"; if (value < 60) return `${Math.round(value)} сек`; return `${Math.round(value / 60)} мин`; }
 function formatElapsed(value: number) { const hours = Math.floor(value / 3600); const minutes = Math.floor((value % 3600) / 60); const seconds = value % 60; const base = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`; return hours > 0 ? `${String(hours).padStart(2, "0")}:${base}` : base; }

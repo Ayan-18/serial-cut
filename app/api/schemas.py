@@ -48,6 +48,7 @@ class RuntimeSettingsRead(BaseModel):
     render_loudnorm_two_pass: bool
     subtitle_font_name: str
     subtitle_font_size: int
+    subtitle_show_speaker_names: bool
     asr_adapter: str
     llm_adapter: str
     llm_base_url: str
@@ -107,8 +108,83 @@ class CandidateRead(BaseModel):
     crop_mode: str
     crop_offset_x: float
     crop_scale: float
+    crop_keyframes_json: list
     thumbnail_path: str | None
     status: str
+    story_order: int | None = None
+    story_role: str | None = None
+    continuity_note: str | None = None
+
+
+class StoryContextRead(BaseModel):
+    season_id: int
+    episode_id: int
+    season_context: str
+    episode_summary: str
+    required_events: list[str]
+    excluded_events: list[str]
+    spoilers_allowed: bool
+    candidate_mode: str
+
+
+class StoryContextUpdate(BaseModel):
+    season_context: str = Field(default="", max_length=8000)
+    episode_summary: str = Field(default="", max_length=8000)
+    required_events: list[str] = Field(default_factory=list, max_length=30)
+    excluded_events: list[str] = Field(default_factory=list, max_length=30)
+    spoilers_allowed: bool = True
+    candidate_mode: str = Field(default="highlights", pattern="^(highlights|story)$")
+
+
+class EpisodeOutlineRead(BaseModel):
+    episode_id: int
+    summary_json: dict
+
+
+class CharacterCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=2000)
+    aliases: list[str] = Field(default_factory=list, max_length=30)
+    color: str = Field(default="#b9ddff", pattern="^#[0-9a-fA-F]{6}$")
+    photo_data_url: str | None = Field(default=None, max_length=12_000_000)
+
+
+class CharacterPhotoAdd(BaseModel):
+    photo_data_url: str = Field(min_length=1, max_length=12_000_000)
+
+
+class CharacterRead(BaseModel):
+    id: int
+    season_id: int
+    name: str
+    description: str
+    aliases: list[str]
+    color: str
+    photo_count: int
+    photo_urls: list[str]
+
+
+class SpeakerIdentityUpdate(BaseModel):
+    source_label: str = Field(min_length=1, max_length=64)
+    character_id: int
+
+
+class SpeakerIdentityRead(BaseModel):
+    source_label: str
+    character_id: int
+    character_name: str
+    confidence: float | None = None
+    method: str
+
+
+class SpeakerLabelsRead(BaseModel):
+    labels: list[str]
+
+
+class CharacterRecognitionResponse(BaseModel):
+    analyzed_labels: int
+    assigned_labels: int
+    assignments: list[SpeakerIdentityRead]
 
 
 class ReviewRequest(BaseModel):
@@ -154,6 +230,7 @@ class AutoCropResponse(BaseModel):
     crop_offset_x: float
     faces_detected: int
     frames_sampled: int
+    keyframes: list[dict]
 
 
 class RenderResponse(BaseModel):

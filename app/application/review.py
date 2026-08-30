@@ -56,8 +56,12 @@ def review_candidate(
         existing.crop_mode = crop_mode
         existing.reason = reason
     if adjusted_start_time is not None:
+        if abs(candidate.start_time - adjusted_start_time) > 0.01:
+            candidate.crop_keyframes_json = []
         candidate.start_time = adjusted_start_time
     if adjusted_end_time is not None:
+        if abs(candidate.end_time - adjusted_end_time) > 0.01:
+            candidate.crop_keyframes_json = []
         candidate.end_time = adjusted_end_time
     if crop_mode is not None:
         candidate.crop_mode = crop_mode

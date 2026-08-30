@@ -7,12 +7,13 @@ import pytest
 from sqlalchemy import select
 
 from app.analysis.llm import LlamaCppHttpAnalyzer
+from app.analysis.quality import calibrate_candidate
 from app.analysis.schemas import CandidatePayload, CandidateScores, EpisodeOutlinePayload, parse_candidate_json
 from app.analysis.validation import adjust_candidate_boundaries, dedupe_candidates
 from app.application.importer import import_season
 from app.application.stage3 import run_stage3_candidate_analysis
 from app.infrastructure.config import Settings
-from app.models.entities import ClipCandidate, Scene, TranscriptSegment, WordTimestamp
+from app.models.entities import ClipCandidate, Episode, EpisodeOutline, Scene, TranscriptSegment, WordTimestamp
 
 
 def _candidate(start: float, end: float, score: int = 80) -> CandidatePayload:
@@ -141,6 +142,41 @@ def test_adjust_boundaries_expands_short_candidate_to_minimum():
     assert adjusted.end_time == 45
 
 
+def test_adjust_boundaries_never_caps_in_the_middle_of_a_spoken_segment():
+    candidate = _candidate(657.28, 717.39)
+    segments = [
+        TranscriptSegment(episode_id=1, start_time=653.89, end_time=657.63, text="Начало до кандидата"),
+        TranscriptSegment(episode_id=1, start_time=714.31, end_time=715.63, text="Законченная реплика?"),
+        TranscriptSegment(episode_id=1, start_time=715.89, end_time=717.39, text="Следующая реплика?"),
+    ]
+
+    adjusted = adjust_candidate_boundaries(
+        candidate,
+        [],
+        [],
+        min_seconds=35,
+        max_seconds=59,
+        segments=segments,
+    )
+
+    assert adjusted is not None
+    assert adjusted.start_time == 657.63
+    assert adjusted.end_time == 715.63
+    assert adjusted.end_time - adjusted.start_time <= 59
+
+
+def test_quality_flags_a_boundary_inside_a_replica():
+    candidate = _candidate(657.63, 716.28)
+    segments = [
+        TranscriptSegment(episode_id=1, start_time=657.63, end_time=715.63, text="Завершённая часть."),
+        TranscriptSegment(episode_id=1, start_time=715.89, end_time=717.39, text="Обрезанная реплика?"),
+    ]
+
+    calibrated = calibrate_candidate(candidate, segments, [], [])
+
+    assert "Конец попадает в середину реплики" in calibrated.possible_problems
+
+
 def test_dedupe_candidates_keeps_highest_scored_overlap():
     selected = dedupe_candidates([_candidate(0, 40, 70), _candidate(5, 42, 95), _candidate(80, 120, 60)])
 
@@ -168,4 +204,28 @@ def test_stage3_smoke_generates_outline_and_candidates(session, tmp_path):
 
     assert result.candidates == 1
     assert session.scalar(select(ClipCandidate).where(ClipCandidate.episode_id == episode_id)) is not None
+
+
+def test_story_mode_uses_context_and_numbers_candidates(session, tmp_path):
+    season_dir = tmp_path / "story-season"
+    season_dir.mkdir()
+    (season_dir / "episode.mkv").write_bytes(b"video")
+    episode_id = import_season(session, season_dir).episode_ids[0]
+    episode = session.get(Episode, episode_id)
+    assert episode is not None
+    episode.season.story_context = "Команда пытается сохранить клуб."
+    episode.story_summary = "Герои находят финансирование."
+    episode.required_events_json = ["Разговор о финансировании"]
+    episode.candidate_mode = "story"
+    segment = TranscriptSegment(episode_id=episode_id, start_time=0, end_time=40, text="Цельная сцена.")
+    session.add_all([segment, Scene(episode_id=episode_id, start_time=0, end_time=40)])
+    session.commit()
+
+    result = run_stage3_candidate_analysis(session, episode_id, Settings(llm_adapter="stub"))
+
+    candidate = session.scalar(select(ClipCandidate).where(ClipCandidate.episode_id == episode_id))
+    outline = session.scalar(select(EpisodeOutline).where(EpisodeOutline.episode_id == episode_id))
+    assert result.candidates == 1
+    assert candidate is not None and candidate.story_order == 1 and candidate.story_role == "завязка"
+    assert outline is not None and outline.summary_json["summary"] == "Герои находят финансирование."
 

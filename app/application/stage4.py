@@ -43,7 +43,11 @@ def render_candidate(
     if existing is not None and not force_rerender:
         return RenderResult(candidate_id, existing.id, existing.output_path, existing.subtitle_path, existing.cover_path)
 
-    cues = subtitle_cues_for_render(session, candidate)
+    cues = subtitle_cues_for_render(
+        session,
+        candidate,
+        show_speaker_names=settings.subtitle_show_speaker_names,
+    )
     subtitle_text = (
         render_ass(cues, font_name=settings.subtitle_font_name, font_size=settings.subtitle_font_size)
         if include_subtitles
@@ -67,11 +71,13 @@ def render_candidate(
             "title": candidate.title,
             "score": candidate.score,
             "crop_mode": candidate.crop_mode,
+            "crop_keyframes": candidate.crop_keyframes_json,
             "start_time": candidate.start_time,
             "end_time": candidate.end_time,
         },
         crop_offset_x=candidate.crop_offset_x,
         crop_scale=candidate.crop_scale,
+        crop_keyframes=candidate.crop_keyframes_json,
         use_nvenc=resolved_nvenc,
         preset_name=preset_name or settings.render_preset,
         loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,

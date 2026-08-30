@@ -6,6 +6,7 @@ from typing import Protocol
 import httpx
 
 from app.analysis.schemas import (
+    AnalysisContext,
     CandidateListPayload,
     CandidatePayload,
     CandidateScores,
@@ -17,24 +18,36 @@ from app.models.entities import Scene
 
 
 class EpisodeAnalyzer(Protocol):
-    def outline(self, transcript: str) -> EpisodeOutlinePayload:
+    def outline(self, transcript: str, context: AnalysisContext | None = None) -> EpisodeOutlinePayload:
         ...
 
-    def candidates(self, transcript: str, scenes: list[Scene]) -> CandidateListPayload:
+    def candidates(
+        self,
+        transcript: str,
+        scenes: list[Scene],
+        context: AnalysisContext | None = None,
+        outline: EpisodeOutlinePayload | None = None,
+    ) -> CandidateListPayload:
         ...
 
 
 class StubEpisodeAnalyzer:
-    def outline(self, transcript: str) -> EpisodeOutlinePayload:
+    def outline(self, transcript: str, context: AnalysisContext | None = None) -> EpisodeOutlinePayload:
         return EpisodeOutlinePayload(
             characters=[],
             main_events=["Проверочный фрагмент распознан локальным stub-анализатором"],
             conflicts=[],
             time_ranges=[{"start_time": 0.0, "end_time": 59.0, "summary": "Короткий тестовый блок"}],
-            summary="Локальная тестовая карта эпизода для проверки конвейера.",
+            summary=(context.episode_summary if context and context.episode_summary else "Локальная тестовая карта эпизода для проверки конвейера."),
         )
 
-    def candidates(self, transcript: str, scenes: list[Scene]) -> CandidateListPayload:
+    def candidates(
+        self,
+        transcript: str,
+        scenes: list[Scene],
+        context: AnalysisContext | None = None,
+        outline: EpisodeOutlinePayload | None = None,
+    ) -> CandidateListPayload:
         start = scenes[0].start_time if scenes else 0.0
         end = scenes[0].end_time if scenes else 45.0
         if end - start < 35:
@@ -60,6 +73,12 @@ class StubEpisodeAnalyzer:
                     ),
                     standalone_reason="Фрагмент содержит цельную реплику и не требует предыдущей сцены.",
                     possible_problems=[],
+                    story_role="завязка" if context and context.candidate_mode == "story" else None,
+                    continuity_note=(
+                        "Первая часть последовательного пересказа"
+                        if context and context.candidate_mode == "story"
+                        else None
+                    ),
                 )
             ]
         )
@@ -71,7 +90,7 @@ class LlamaCppHttpAnalyzer:
         self.model_hint = model_hint
         self.timeout_seconds = timeout_seconds
 
-    def outline(self, transcript: str) -> EpisodeOutlinePayload:
+    def outline(self, transcript: str, context: AnalysisContext | None = None) -> EpisodeOutlinePayload:
         entries = self._transcript_entries(transcript)
         if not entries:
             return EpisodeOutlinePayload(
@@ -94,19 +113,27 @@ class LlamaCppHttpAnalyzer:
                     "summary": summary or f"Часть эпизода {len(ranges) + 1}",
                 }
             )
+        provided_summary = context.episode_summary.strip() if context else ""
         return EpisodeOutlinePayload(
             characters=[],
             main_events=[item["summary"] for item in ranges],
             conflicts=[],
             time_ranges=ranges[:12],
-            summary=(
+            summary=provided_summary or (
                 f"Локальная карта эпизода: {entries[0][0]:.1f}-{entries[-1][1]:.1f} сек., "
                 f"{len(entries)} распознанных реплик."
             ),
         )
 
-    def candidates(self, transcript: str, scenes: list[Scene]) -> CandidateListPayload:
-        chunks = self._candidate_chunks(transcript, count=3)
+    def candidates(
+        self,
+        transcript: str,
+        scenes: list[Scene],
+        context: AnalysisContext | None = None,
+        outline: EpisodeOutlinePayload | None = None,
+    ) -> CandidateListPayload:
+        context = context or AnalysisContext()
+        chunks = self._candidate_chunks(transcript, count=5 if context.candidate_mode == "story" else 3)
         all_candidates = []
         first_error: Exception | None = None
         for chunk in chunks:
@@ -119,15 +146,25 @@ class LlamaCppHttpAnalyzer:
                 for scene in scenes
                 if scene.end_time >= chunk_start and scene.start_time <= chunk_end
             )
+            selection_instruction = (
+                "Выбери не более одного сюжетно необходимого фрагмента для последовательного пересказа. "
+                "Он должен продолжать общую историю, не повторять соседние части и иметь роль: завязка, "
+                "развитие, конфликт, поворот, кульминация или итог. Заполни story_role и continuity_note. "
+                if context.candidate_mode == "story"
+                else "Найди 1-2 сильных самостоятельных момента. "
+            )
             prompt = (
-                f"Найди 1-2 законченных фрагмента для Shorts/Reels только в части серии "
+                f"{selection_instruction}Работай только с частью серии "
                 f"{chunk_start:.1f}-{chunk_end:.1f} сек. Используй числовые таймкоды расшифровки. "
-                "Выбирай смысловой момент с понятным началом и развязкой; итоговые границы приложение "
+                "Выбирай смысловой момент с понятной причиной и развязкой. Не начинай и не заканчивай "
+                "посередине реплики; итоговые границы приложение "
                 "сможет расширить до 35-59 секунд. Оцени каждый критерий и общий score честно по шкале "
                 "0-100; пригодные моменты обычно получают 60-95. moment_type выбери из: юмор, конфликт, "
                 "откровение, эмоциональный момент, напряжение, действие, запоминающаяся реплика, другое. "
                 "Без markdown.\n\n"
-                f"Расшифровка:\n{chunk}\n\nГраницы сцен:\n{scene_lines}"
+                f"Контекст и требования:\n{self._context_prompt(context)}\n\n"
+                f"Карта серии:\n{(outline.model_dump_json() if outline else 'не построена')}\n\n"
+                f"Расшифровка выбранной части:\n{chunk}\n\nГраницы сцен:\n{scene_lines}"
             )
             try:
                 parsed = parse_candidate_json(
@@ -136,10 +173,23 @@ class LlamaCppHttpAnalyzer:
             except ValueError as exc:
                 first_error = first_error or exc
                 continue
-            all_candidates.extend(parsed.candidates[:2])
+            all_candidates.extend(parsed.candidates[:1] if context.candidate_mode == "story" else parsed.candidates[:2])
         if not all_candidates and first_error is not None:
             raise first_error
-        return CandidateListPayload(candidates=all_candidates[:8])
+        return CandidateListPayload(candidates=sorted(all_candidates, key=lambda item: item.start_time)[:8])
+
+    @staticmethod
+    def _context_prompt(context: AnalysisContext) -> str:
+        required = "; ".join(context.required_events) or "нет обязательных событий"
+        excluded = "; ".join(context.excluded_events) or "нет исключений"
+        return (
+            f"Режим: {'связный пересказ серии' if context.candidate_mode == 'story' else 'лучшие самостоятельные моменты'}.\n"
+            f"Контекст сезона: {context.season_summary or 'не задан'}.\n"
+            f"Суть серии: {context.episode_summary or 'определи по расшифровке'}.\n"
+            f"Обязательно показать: {required}.\n"
+            f"Не включать: {excluded}.\n"
+            f"Спойлеры: {'разрешены' if context.spoilers_allowed else 'не раскрывай концовку'}"
+        )
 
     def _complete_json(self, prompt: str, schema: dict, max_tokens: int) -> str:
         try:

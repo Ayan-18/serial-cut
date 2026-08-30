@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/serialcuts.db"
     cache_dir: Path = Path("./data/cache")
     output_dir: Path = Path("./data/output")
+    characters_dir: Path = Path("./data/characters")
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     proxy_width: int = 640
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     render_loudnorm_two_pass: bool = False
     subtitle_font_name: str = "Segoe UI"
     subtitle_font_size: int = Field(default=48, ge=24, le=96)
+    subtitle_show_speaker_names: bool = False
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 

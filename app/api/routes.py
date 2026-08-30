@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.schemas import (
@@ -17,11 +17,16 @@ from app.api.schemas import (
     CandidateRead,
     CandidateSubtitlePayload,
     CandidateSubtitlesUpdate,
+    CharacterCreate,
+    CharacterPhotoAdd,
+    CharacterRead,
+    CharacterRecognitionResponse,
     EnqueueSeasonRequest,
     ExportRead,
     ImportResponse,
     JobRead,
     ModelDiagnosticsRead,
+    EpisodeOutlineRead,
     QueueRunResponse,
     QueueStateResponse,
     RenderRequest,
@@ -33,6 +38,11 @@ from app.api.schemas import (
     SeasonRead,
     Stage2RunResponse,
     Stage3RunResponse,
+    SpeakerIdentityRead,
+    SpeakerIdentityUpdate,
+    SpeakerLabelsRead,
+    StoryContextRead,
+    StoryContextUpdate,
 )
 from app.application.candidate_editor import (
     EditableSubtitle,
@@ -42,6 +52,7 @@ from app.application.candidate_editor import (
 )
 from app.application.auto import auto_approve_and_export
 from app.application.cache import cache_summary, clear_cache
+from app.application.characters import add_character_photo, assign_speaker_identity, recognize_episode_characters
 from app.application.importer import import_season
 from app.application.model_diagnostics import check_models
 from app.application.processing_guard import ProcessingBusyError, processing_guard
@@ -56,7 +67,17 @@ from app.domain.enums import JobStatus
 from app.infrastructure.database import SessionLocal
 from app.media.ffprobe import apply_probe_to_episode, probe_media
 from app.media.face_tracking import estimate_face_offset
-from app.models.entities import ClipCandidate, Episode, Export, Job, Season
+from app.models.entities import (
+    Character,
+    ClipCandidate,
+    Episode,
+    EpisodeOutline,
+    Export,
+    Job,
+    Season,
+    SpeakerIdentity,
+    TranscriptSegment,
+)
 from app.infrastructure.config import get_settings
 from app.workers.queue import enqueue_candidate_render, enqueue_episode_analysis, queue_snapshot, recover_interrupted_jobs
 from app.workers.queue import enqueue_season_analysis, request_cancel, retry_job
@@ -135,6 +156,194 @@ def list_seasons(session: Session = Depends(get_session)):
     return seasons
 
 
+@router.get("/episodes/{episode_id}/story-context", response_model=StoryContextRead)
+def read_story_context(episode_id: int, session: Session = Depends(get_session)):
+    episode = _get_episode(session, episode_id)
+    return _story_context_read(episode)
+
+
+@router.put("/episodes/{episode_id}/story-context", response_model=StoryContextRead)
+def update_story_context(
+    episode_id: int,
+    payload: StoryContextUpdate,
+    session: Session = Depends(get_session),
+):
+    episode = _get_episode(session, episode_id)
+    episode.season.story_context = payload.season_context.strip()
+    episode.story_summary = payload.episode_summary.strip()
+    episode.required_events_json = [item.strip() for item in payload.required_events if item.strip()]
+    episode.excluded_events_json = [item.strip() for item in payload.excluded_events if item.strip()]
+    episode.spoilers_allowed = payload.spoilers_allowed
+    episode.candidate_mode = payload.candidate_mode
+    session.commit()
+    return _story_context_read(episode)
+
+
+@router.get("/episodes/{episode_id}/outline", response_model=EpisodeOutlineRead)
+def read_episode_outline(episode_id: int, session: Session = Depends(get_session)):
+    _get_episode(session, episode_id)
+    outline = session.scalar(select(EpisodeOutline).where(EpisodeOutline.episode_id == episode_id))
+    if outline is None:
+        raise HTTPException(status_code=404, detail="Сюжетная карта ещё не построена")
+    return EpisodeOutlineRead(episode_id=episode_id, summary_json=outline.summary_json)
+
+
+@router.get("/seasons/{season_id}/characters", response_model=list[CharacterRead])
+def list_characters(season_id: int, session: Session = Depends(get_session)):
+    if session.get(Season, season_id) is None:
+        raise HTTPException(status_code=404, detail="Сезон не найден")
+    rows = session.scalars(select(Character).where(Character.season_id == season_id).order_by(Character.name)).all()
+    return [_character_read(item) for item in rows]
+
+
+@router.post("/seasons/{season_id}/characters", response_model=CharacterRead)
+def create_character(
+    season_id: int,
+    payload: CharacterCreate,
+    session: Session = Depends(get_session),
+):
+    if session.get(Season, season_id) is None:
+        raise HTTPException(status_code=404, detail="Сезон не найден")
+    try:
+        character = Character(
+            season_id=season_id,
+            name=payload.name.strip(),
+            description=payload.description.strip(),
+            aliases_json=[item.strip() for item in payload.aliases if item.strip()],
+            color=payload.color,
+        )
+        session.add(character)
+        session.flush()
+        if payload.photo_data_url:
+            add_character_photo(character, payload.photo_data_url, get_settings().characters_dir)
+        session.commit()
+        session.refresh(character)
+        return _character_read(character)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/characters/{character_id}/photos", response_model=CharacterRead)
+def add_character_reference_photo(
+    character_id: int,
+    payload: CharacterPhotoAdd,
+    session: Session = Depends(get_session),
+):
+    character = session.get(Character, character_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    try:
+        add_character_photo(character, payload.photo_data_url, get_settings().characters_dir)
+        session.commit()
+        return _character_read(character)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/characters/{character_id}/photos/{photo_index}")
+def character_photo(character_id: int, photo_index: int, session: Session = Depends(get_session)):
+    character = session.get(Character, character_id)
+    if character is None or photo_index < 0 or photo_index >= len(character.photos_json or []):
+        raise HTTPException(status_code=404, detail="Фотография не найдена")
+    path = Path(character.photos_json[photo_index]).resolve()
+    root = get_settings().characters_dir.resolve()
+    if root not in path.parents or not path.exists():
+        raise HTTPException(status_code=404, detail="Фотография не найдена")
+    return FileResponse(path)
+
+
+@router.delete("/characters/{character_id}")
+def delete_character(character_id: int, session: Session = Depends(get_session)):
+    character = session.get(Character, character_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    photo_paths = list(character.photos_json or [])
+    session.execute(delete(SpeakerIdentity).where(SpeakerIdentity.character_id == character_id))
+    session.delete(character)
+    session.commit()
+    root = get_settings().characters_dir.resolve()
+    for raw_path in photo_paths:
+        path = Path(raw_path).resolve()
+        if root in path.parents:
+            path.unlink(missing_ok=True)
+    return {"deleted": True}
+
+
+@router.get("/episodes/{episode_id}/speaker-identities", response_model=list[SpeakerIdentityRead])
+def list_speaker_identities(episode_id: int, session: Session = Depends(get_session)):
+    _get_episode(session, episode_id)
+    rows = session.scalars(
+        select(SpeakerIdentity)
+        .where(SpeakerIdentity.episode_id == episode_id)
+        .order_by(SpeakerIdentity.source_label)
+    ).all()
+    return [_speaker_identity_read(session, item) for item in rows]
+
+
+@router.get("/episodes/{episode_id}/speaker-labels", response_model=SpeakerLabelsRead)
+def list_speaker_labels(episode_id: int, session: Session = Depends(get_session)):
+    _get_episode(session, episode_id)
+    labels = {
+        item
+        for item in session.scalars(
+            select(TranscriptSegment.speaker_label).where(TranscriptSegment.episode_id == episode_id)
+        ).all()
+        if item
+    }
+    return SpeakerLabelsRead(labels=sorted(labels))
+
+
+@router.put("/episodes/{episode_id}/speaker-identities", response_model=SpeakerIdentityRead)
+def update_speaker_identity(
+    episode_id: int,
+    payload: SpeakerIdentityUpdate,
+    session: Session = Depends(get_session),
+):
+    try:
+        identity = assign_speaker_identity(
+            session,
+            episode_id,
+            payload.source_label,
+            payload.character_id,
+        )
+        session.commit()
+        return _speaker_identity_read(session, identity)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/episodes/{episode_id}/identify-characters", response_model=CharacterRecognitionResponse)
+def identify_episode_characters(episode_id: int, session: Session = Depends(get_session)):
+    try:
+        _ensure_episode_not_enqueued(session, episode_id)
+        episode = _get_episode(session, episode_id)
+        labels = {
+            item
+            for item in session.scalars(
+                select(TranscriptSegment.speaker_label).where(TranscriptSegment.episode_id == episode_id)
+            ).all()
+            if item and item.startswith("Говорящий ")
+        }
+        session.commit()
+        with processing_guard():
+            identities = recognize_episode_characters(session, episode.id)
+        session.commit()
+        return CharacterRecognitionResponse(
+            analyzed_labels=len(labels),
+            assigned_labels=len(identities),
+            assignments=[_speaker_identity_read(session, item) for item in identities],
+        )
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/episodes/{episode_id}/probe")
 def probe_episode(episode_id: int, session: Session = Depends(get_session)):
     episode = session.get(Episode, episode_id)
@@ -211,8 +420,14 @@ def run_stage3_episode(episode_id: int, session: Session = Depends(get_session))
 
 @router.get("/episodes/{episode_id}/candidates", response_model=list[CandidateRead])
 def list_episode_candidates(episode_id: int, session: Session = Depends(get_session)):
+    episode = _get_episode(session, episode_id)
+    order = (
+        (ClipCandidate.story_order.asc(), ClipCandidate.start_time.asc())
+        if episode.candidate_mode == "story"
+        else (ClipCandidate.score.desc(),)
+    )
     return session.scalars(
-        select(ClipCandidate).where(ClipCandidate.episode_id == episode_id).order_by(ClipCandidate.score.desc())
+        select(ClipCandidate).where(ClipCandidate.episode_id == episode_id).order_by(*order)
     ).all()
 
 
@@ -301,12 +516,14 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
             result = estimate_face_offset(Path(episode.file_path), candidate.start_time, candidate.end_time)
         candidate.crop_mode = "auto-follow"
         candidate.crop_offset_x = result.offset_x
+        candidate.crop_keyframes_json = result.keyframes
         session.commit()
         return AutoCropResponse(
             candidate_id=candidate.id,
             crop_offset_x=candidate.crop_offset_x,
             faces_detected=result.faces_detected,
             frames_sampled=result.frames_sampled,
+            keyframes=result.keyframes,
         )
     except ProcessingBusyError as exc:
         session.rollback()
@@ -486,6 +703,53 @@ def _get_export(session: Session, export_id: int) -> Export:
     if export is None:
         raise HTTPException(status_code=404, detail="Экспорт не найден")
     return export
+
+
+def _get_episode(session: Session, episode_id: int) -> Episode:
+    episode = session.get(Episode, episode_id)
+    if episode is None:
+        raise HTTPException(status_code=404, detail="Серия не найдена")
+    return episode
+
+
+def _story_context_read(episode: Episode) -> StoryContextRead:
+    return StoryContextRead(
+        season_id=episode.season_id,
+        episode_id=episode.id,
+        season_context=episode.season.story_context,
+        episode_summary=episode.story_summary,
+        required_events=list(episode.required_events_json or []),
+        excluded_events=list(episode.excluded_events_json or []),
+        spoilers_allowed=episode.spoilers_allowed,
+        candidate_mode=episode.candidate_mode,
+    )
+
+
+def _character_read(character: Character) -> CharacterRead:
+    photos = list(character.photos_json or [])
+    return CharacterRead(
+        id=character.id,
+        season_id=character.season_id,
+        name=character.name,
+        description=character.description,
+        aliases=list(character.aliases_json or []),
+        color=character.color,
+        photo_count=len(photos),
+        photo_urls=[f"/api/characters/{character.id}/photos/{index}" for index in range(len(photos))],
+    )
+
+
+def _speaker_identity_read(session: Session, identity: SpeakerIdentity) -> SpeakerIdentityRead:
+    character = session.get(Character, identity.character_id)
+    if character is None:
+        raise HTTPException(status_code=409, detail="Привязанный персонаж не найден")
+    return SpeakerIdentityRead(
+        source_label=identity.source_label,
+        character_id=character.id,
+        character_name=character.name,
+        confidence=identity.confidence,
+        method=identity.method,
+    )
 
 
 def _ensure_episode_not_enqueued(session: Session, episode_id: int) -> None:

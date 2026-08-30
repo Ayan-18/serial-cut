@@ -2,6 +2,34 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-30 - Story Packs, Characters And Complete Boundaries
+
+Implemented the first complete narrative-quality pass requested after reviewing a real clip that
+ended halfway through a spoken sentence:
+
+- Candidate duration caps now choose a completed transcript segment instead of blindly truncating at
+  the configured second limit; the quality pass explicitly detects start/end cuts inside speech.
+- Added editable season/episode context, required/excluded events, spoiler preference, the existing
+  highlight mode and a new chronological `story` mode. Stage 3 gives this context plus the outline to
+  local Qwen and stores part order, narrative role and continuity notes.
+- Added an outline viewer and a workflow to save context and regenerate candidates from the episode
+  workspace.
+- Added a local character library with name, description and copied reference photos under the
+  ignored `data/characters` directory. Voice clusters can be mapped manually or conservatively
+  suggested from reference faces; ambiguous matches remain unassigned.
+- Speaker fields are character dropdowns. An optional render setting burns the confirmed character
+  name above the subtitle without changing the original transcript.
+- `Найти лица` now samples a trajectory, median-filters and rate-limits horizontal movement, and
+  stores keyframes used by a time-based FFmpeg crop expression and the UI preview.
+- Added Alembic revision `0005_story_context_and_characters` and focused tests for complete speech
+  boundaries, story mode, local character photos, speaker-name rendering and dynamic crop filters.
+
+Verification: backend suite passed (`54 passed, 1 upstream warning`), the frontend production build
+passed, and a clean database migrated from revision 0001 through 0005. The live database recovered
+from a partially pre-created-table state, reached 0005 and the restarted app served health, context,
+character and existing-candidate data. Browser inspection confirmed the new panels and story-mode
+switch with no console errors. A generated dynamic crop expression also passed a real FFmpeg parse.
+
 ## 2026-08-30 - SQLite Concurrency Guard
 
 Fixed `sqlite3.OperationalError: database is locked` reproduced when a manual Stage 2 request was
