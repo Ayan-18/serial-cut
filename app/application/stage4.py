@@ -49,6 +49,7 @@ def render_candidate(
         if include_subtitles
         else None
     )
+    session.commit()
     slug = f"episode-{episode.id}-candidate-{candidate.id}"
     resolved_nvenc = detect_nvenc(settings.ffmpeg_path) if use_nvenc is None else use_nvenc
     artifacts = render_clip(
@@ -88,5 +89,5 @@ def render_candidate(
         session.add(export)
     candidate.status = "rendered"
     episode.stage = EpisodeStage.RENDERED.value
-    session.flush()
+    session.commit()
     return RenderResult(candidate.id, export.id, export.output_path, export.subtitle_path, export.cover_path)

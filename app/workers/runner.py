@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.application.auto import auto_approve_and_export
 from app.application.queue_control import get_queue_state
+from app.application.processing_guard import ProcessingBusyError, processing_guard
 from app.application.stage2 import run_stage2_media_analysis
 from app.application.stage3 import run_stage3_candidate_analysis
 from app.application.stage4 import render_candidate
@@ -44,7 +45,11 @@ def run_next_job(
     if not _RUNNER_LOCK.acquire(blocking=False):
         return WorkerRunResult(False, None, "busy", "Обработчик уже выполняет другую задачу")
     try:
-        return _run_next_job_unlocked(session, settings, stage2_func, stage3_func)
+        try:
+            with processing_guard():
+                return _run_next_job_unlocked(session, settings, stage2_func, stage3_func)
+        except ProcessingBusyError as exc:
+            return WorkerRunResult(False, None, "busy", str(exc))
     finally:
         _RUNNER_LOCK.release()
 

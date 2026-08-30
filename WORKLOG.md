@@ -2,6 +2,27 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-30 - SQLite Concurrency Guard
+
+Fixed `sqlite3.OperationalError: database is locked` reproduced when a manual Stage 2 request was
+started while the background queue was already analyzing the same episode:
+
+- Added one process-wide guard for heavy Stage 2, Stage 3, face analysis, synchronous render and
+  auto-export operations; a conflicting API request now returns HTTP 409 with a clear explanation.
+- Manual analysis/export controls are disabled for episodes with queued/running/paused jobs, and
+  candidate write/render controls are disabled while their episode is active.
+- Released database transactions before running Whisper, Qwen, scene detection and FFmpeg, then
+  committed each restartable stage in a short transaction.
+- Configured SQLite connections with a 30-second busy timeout and WAL journal mode. If an older
+  running process temporarily prevents the WAL switch, startup continues and the next idle
+  connection enables it.
+- Added focused tests for the heavy-operation guard, WAL/busy timeout and the absence of an open
+  transaction while ASR runs.
+
+Verification: backend suite passed (`47 passed, 1 upstream warning`), the frontend production
+build passed, and the system check found Python 3.11, FFmpeg/ffprobe, NVIDIA and sufficient free
+space. The original media files were not modified.
+
 ## 2026-08-30 - Full Review, Background Queue And Export Workspace
 
 Implemented the complete requested product feature pass:

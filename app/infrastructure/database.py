@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -23,8 +24,27 @@ def _ensure_sqlite_parent(database_url: str) -> None:
 def make_engine(settings: Settings | None = None) -> Engine:
     settings = settings or get_settings()
     _ensure_sqlite_parent(settings.database_url)
-    connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-    return create_engine(settings.database_url, connect_args=connect_args, future=True)
+    is_sqlite = settings.database_url.startswith("sqlite")
+    connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite else {}
+    engine = create_engine(settings.database_url, connect_args=connect_args, future=True)
+    if is_sqlite:
+        event.listen(engine, "connect", _configure_sqlite_connection)
+    return engine
+
+
+def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA busy_timeout=30000")
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            # Another already-running process can temporarily prevent switching
+            # the journal mode. The connection remains usable and retries writes
+            # through busy_timeout; the next idle connection enables WAL.
+            pass
+    finally:
+        cursor.close()
 
 
 def init_db(engine: Engine) -> None:

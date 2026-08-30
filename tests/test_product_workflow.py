@@ -7,7 +7,9 @@ import pytest
 from app.application.cache import cache_summary, clear_cache
 from app.application.candidate_editor import EditableSubtitle, save_candidate_subtitles, subtitles_for_candidate
 from app.application.importer import import_season
+from app.application.processing_guard import ProcessingBusyError, processing_guard
 from app.infrastructure.config import Settings
+from app.infrastructure.database import make_engine
 from app.media.rendering import build_render_args
 from app.models.entities import ClipCandidate, TranscriptSegment, WordTimestamp
 from app.workers.queue import enqueue_candidate_render
@@ -124,3 +126,24 @@ def test_crop_offset_and_scale_are_in_ffmpeg_filter(tmp_path: Path):
 
     assert "scale=-2:2400" in video_filter
     assert "1.0000" in video_filter
+
+
+def test_processing_guard_rejects_a_second_heavy_operation():
+    with processing_guard():
+        with pytest.raises(ProcessingBusyError, match="тяжёлая задача"):
+            with processing_guard():
+                pass
+
+
+def test_file_sqlite_uses_wal_and_busy_timeout(tmp_path: Path):
+    database_path = tmp_path / "serialcuts.db"
+    engine = make_engine(Settings(database_url=f"sqlite:///{database_path.as_posix()}"))
+    try:
+        with engine.connect() as connection:
+            journal_mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar_one()
+            busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
+    finally:
+        engine.dispose()
+
+    assert journal_mode == "wal"
+    assert busy_timeout == 30000

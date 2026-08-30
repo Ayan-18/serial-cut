@@ -44,6 +44,7 @@ def run_stage3_candidate_analysis(
     ).all()
     analyzer = analyzer or _build_analyzer(settings)
     text = transcript_text(segments)
+    session.commit()
 
     outline = analyzer.outline(text)
     existing_outline = session.scalar(select(EpisodeOutline).where(EpisodeOutline.episode_id == episode_id))
@@ -52,7 +53,7 @@ def run_stage3_candidate_analysis(
     else:
         existing_outline.summary_json = outline.model_dump()
     episode.stage = EpisodeStage.OUTLINED.value
-    session.flush()
+    session.commit()
 
     adjusted = []
     for candidate in analyzer.candidates(text, scenes).candidates:
@@ -81,7 +82,7 @@ def run_stage3_candidate_analysis(
             )
         )
     episode.stage = EpisodeStage.CANDIDATES_GENERATED.value
-    session.flush()
+    session.commit()
     return Stage3Result(
         episode_id=episode_id,
         stage=episode.stage,

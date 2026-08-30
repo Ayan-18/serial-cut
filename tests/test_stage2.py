@@ -69,12 +69,20 @@ def test_stage2_smoke_with_stub_models(session, tmp_path: Path):
     imported = import_season(session, season)
     session.commit()
 
+    class TransactionCheckingTranscriber:
+        transaction_was_open = True
+
+        def transcribe(self, audio_path: Path):
+            self.transaction_was_open = session.in_transaction()
+            return StubTranscriber().transcribe(audio_path)
+
+    transcriber = TransactionCheckingTranscriber()
     result = run_stage2_media_analysis(
         session,
         imported.episode_ids[0],
         Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
         media_preparer=StubMediaPreparer(tmp_path / "cache" / "audio.wav", tmp_path / "cache" / "proxy.mp4"),
-        transcriber=StubTranscriber(),
+        transcriber=transcriber,
         scene_detector=StubSceneDetector(),
     )
     session.commit()
@@ -84,6 +92,7 @@ def test_stage2_smoke_with_stub_models(session, tmp_path: Path):
     assert episode.stage == EpisodeStage.SCENES_DETECTED.value
     assert Path(episode.audio_path).exists()
     assert Path(episode.proxy_path).exists()
+    assert transcriber.transaction_was_open is False
     assert session.scalar(select(TranscriptSegment).where(TranscriptSegment.episode_id == episode.id)) is not None
     assert session.scalar(select(Scene).where(Scene.episode_id == episode.id)) is not None
 

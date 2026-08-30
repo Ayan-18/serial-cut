@@ -40,7 +40,7 @@ class FFmpegMediaPreparer:
         if episode.probe_json is None:
             summary = probe_media(settings.ffprobe_path, Path(episode.file_path))
             apply_probe_to_episode(episode, summary)
-            session.flush()
+            session.commit()
 
         audio_track = select_russian_audio_track(episode.tracks)
         subtitle_track = select_russian_subtitle_track(episode.tracks)
@@ -97,23 +97,24 @@ def run_stage2_media_analysis(
     media_preparer = media_preparer or FFmpegMediaPreparer()
     prep = media_preparer.prepare(session, episode, settings)
     episode.stage = EpisodeStage.PROXIED.value
-    session.flush()
+    session.commit()
 
     transcriber = transcriber or _build_transcriber(settings)
     transcript = transcriber.transcribe(prep.audio_path)
     transcript_count = save_transcript(session, episode.id, transcript)
+    episode.stage = EpisodeStage.TRANSCRIBED.value
+    session.commit()
     try:
         assign_speaker_labels(session, episode.id, prep.audio_path)
+        session.commit()
     except RuntimeError:
-        pass
-    episode.stage = EpisodeStage.TRANSCRIBED.value
-    session.flush()
+        session.rollback()
 
     scene_detector = scene_detector or PySceneDetectAdapter()
     intervals = scene_detector.detect(prep.proxy_path)
     scene_count = save_scenes(session, episode.id, intervals)
     episode.stage = EpisodeStage.SCENES_DETECTED.value
-    session.flush()
+    session.commit()
 
     return Stage2Result(
         episode_id=episode.id,

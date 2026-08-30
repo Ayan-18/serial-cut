@@ -44,6 +44,7 @@ from app.application.auto import auto_approve_and_export
 from app.application.cache import cache_summary, clear_cache
 from app.application.importer import import_season
 from app.application.model_diagnostics import check_models
+from app.application.processing_guard import ProcessingBusyError, processing_guard
 from app.application.queue_control import get_queue_state, set_queue_paused
 from app.application.review import review_candidate
 from app.application.settings import RuntimeSettings, effective_settings, get_runtime_settings, save_runtime_settings
@@ -51,6 +52,7 @@ from app.application.stage2 import run_stage2_media_analysis
 from app.application.stage3 import run_stage3_candidate_analysis
 from app.application.stage4 import render_candidate
 from app.application.system_check import report_as_dict, run_system_check
+from app.domain.enums import JobStatus
 from app.infrastructure.database import SessionLocal
 from app.media.ffprobe import apply_probe_to_episode, probe_media
 from app.media.face_tracking import estimate_face_offset
@@ -174,8 +176,15 @@ def enqueue_season(season_id: int, payload: EnqueueSeasonRequest, session: Sessi
 @router.post("/episodes/{episode_id}/stage2", response_model=Stage2RunResponse)
 def run_stage2_episode(episode_id: int, session: Session = Depends(get_session)):
     try:
-        result = run_stage2_media_analysis(session, episode_id, effective_settings(session, get_settings()))
+        settings = effective_settings(session, get_settings())
+        _ensure_episode_not_enqueued(session, episode_id)
         session.commit()
+        with processing_guard():
+            result = run_stage2_media_analysis(session, episode_id, settings)
+        session.commit()
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -185,8 +194,15 @@ def run_stage2_episode(episode_id: int, session: Session = Depends(get_session))
 @router.post("/episodes/{episode_id}/stage3", response_model=Stage3RunResponse)
 def run_stage3_episode(episode_id: int, session: Session = Depends(get_session)):
     try:
-        result = run_stage3_candidate_analysis(session, episode_id, effective_settings(session, get_settings()))
+        settings = effective_settings(session, get_settings())
+        _ensure_episode_not_enqueued(session, episode_id)
         session.commit()
+        with processing_guard():
+            result = run_stage3_candidate_analysis(session, episode_id, settings)
+        session.commit()
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -279,7 +295,10 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
     if episode is None:
         raise HTTPException(status_code=404, detail="Серия не найдена")
     try:
-        result = estimate_face_offset(Path(episode.file_path), candidate.start_time, candidate.end_time)
+        _ensure_episode_not_enqueued(session, episode.id)
+        session.commit()
+        with processing_guard():
+            result = estimate_face_offset(Path(episode.file_path), candidate.start_time, candidate.end_time)
         candidate.crop_mode = "auto-follow"
         candidate.crop_offset_x = result.offset_x
         session.commit()
@@ -289,6 +308,9 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
             faces_detected=result.faces_detected,
             frames_sampled=result.frames_sampled,
         )
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -297,17 +319,27 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
 @router.post("/candidates/{candidate_id}/render", response_model=RenderResponse)
 def render_candidate_endpoint(candidate_id: int, payload: RenderRequest, session: Session = Depends(get_session)):
     try:
-        result = render_candidate(
-            session,
-            candidate_id,
-            effective_settings(session, get_settings()),
-            payload.include_subtitles,
-            payload.use_nvenc,
-            payload.preset_name,
-            payload.loudnorm_two_pass,
-            payload.force_rerender,
-        )
+        candidate = session.get(ClipCandidate, candidate_id)
+        if candidate is None:
+            raise ValueError(f"Candidate {candidate_id} not found")
+        _ensure_episode_not_enqueued(session, candidate.episode_id)
+        settings = effective_settings(session, get_settings())
         session.commit()
+        with processing_guard():
+            result = render_candidate(
+                session,
+                candidate_id,
+                settings,
+                payload.include_subtitles,
+                payload.use_nvenc,
+                payload.preset_name,
+                payload.loudnorm_two_pass,
+                payload.force_rerender,
+            )
+        session.commit()
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -372,15 +404,21 @@ def open_export_folder(export_id: int, session: Session = Depends(get_session)):
 def auto_export_episode(episode_id: int, payload: AutoExportRequest, session: Session = Depends(get_session)):
     settings = effective_settings(session, get_settings())
     try:
-        result = auto_approve_and_export(
-            session,
-            episode_id,
-            settings,
-            threshold=payload.threshold if payload.threshold is not None else settings.auto_score_threshold,
-            max_clips=payload.max_clips if payload.max_clips is not None else settings.max_clips_per_episode,
-            use_nvenc=payload.use_nvenc if payload.use_nvenc is not None else settings.render_use_nvenc,
-        )
+        _ensure_episode_not_enqueued(session, episode_id)
         session.commit()
+        with processing_guard():
+            result = auto_approve_and_export(
+                session,
+                episode_id,
+                settings,
+                threshold=payload.threshold if payload.threshold is not None else settings.auto_score_threshold,
+                max_clips=payload.max_clips if payload.max_clips is not None else settings.max_clips_per_episode,
+                use_nvenc=payload.use_nvenc if payload.use_nvenc is not None else settings.render_use_nvenc,
+            )
+        session.commit()
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -448,3 +486,23 @@ def _get_export(session: Session, export_id: int) -> Export:
     if export is None:
         raise HTTPException(status_code=404, detail="Экспорт не найден")
     return export
+
+
+def _ensure_episode_not_enqueued(session: Session, episode_id: int) -> None:
+    active_job_id = session.scalar(
+        select(Job.id).where(
+            Job.episode_id == episode_id,
+            Job.status.in_(
+                [
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PAUSED.value,
+                    JobStatus.CANCEL_REQUESTED.value,
+                ]
+            ),
+        ).limit(1)
+    )
+    if active_job_id is not None:
+        raise ProcessingBusyError(
+            f"Серия уже обрабатывается задачей №{active_job_id}. Используйте управление очередью."
+        )
