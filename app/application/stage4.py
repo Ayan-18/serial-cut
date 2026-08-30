@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
 from app.media.rendering import detect_nvenc, render_clip
-from app.media.subtitles import cues_for_range, cues_for_words, render_ass
-from app.models.entities import ClipCandidate, Episode, Export, TranscriptSegment, WordTimestamp
+from app.application.candidate_editor import subtitle_cues_for_render
+from app.media.subtitles import render_ass
+from app.models.entities import ClipCandidate, Episode, Export
 
 
 @dataclass(frozen=True)
@@ -42,22 +43,7 @@ def render_candidate(
     if existing is not None and not force_rerender:
         return RenderResult(candidate_id, existing.id, existing.output_path, existing.subtitle_path, existing.cover_path)
 
-    segments = session.scalars(
-        select(TranscriptSegment)
-        .where(TranscriptSegment.episode_id == episode.id)
-        .order_by(TranscriptSegment.start_time)
-    ).all()
-    words = session.scalars(
-        select(WordTimestamp)
-        .join(TranscriptSegment, WordTimestamp.segment_id == TranscriptSegment.id)
-        .where(TranscriptSegment.episode_id == episode.id)
-        .order_by(WordTimestamp.start_time)
-    ).all()
-    cues = (
-        cues_for_words(words, candidate.start_time, candidate.end_time)
-        if words
-        else cues_for_range(segments, candidate.start_time, candidate.end_time)
-    )
+    cues = subtitle_cues_for_render(session, candidate)
     subtitle_text = (
         render_ass(cues, font_name=settings.subtitle_font_name, font_size=settings.subtitle_font_size)
         if include_subtitles
@@ -83,6 +69,8 @@ def render_candidate(
             "start_time": candidate.start_time,
             "end_time": candidate.end_time,
         },
+        crop_offset_x=candidate.crop_offset_x,
+        crop_scale=candidate.crop_scale,
         use_nvenc=resolved_nvenc,
         preset_name=preset_name or settings.render_preset,
         loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,
@@ -92,6 +80,10 @@ def render_candidate(
     export.metadata_path = str(artifacts.metadata_path)
     export.subtitle_path = str(artifacts.subtitle_path) if artifacts.subtitle_path else None
     export.cover_path = str(artifacts.cover_path) if artifacts.cover_path else None
+    export.include_subtitles = include_subtitles
+    export.preset_name = preset_name or settings.render_preset
+    export.status = "completed"
+    candidate.thumbnail_path = export.cover_path
     if existing is None:
         session.add(export)
     candidate.status = "rendered"

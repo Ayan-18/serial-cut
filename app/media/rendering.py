@@ -44,11 +44,13 @@ def build_render_args(
     crop_mode: CropMode,
     subtitle_path: Path | None,
     use_nvenc: bool,
+    crop_offset_x: float = 0.0,
+    crop_scale: float = 1.0,
     preset: RenderPresetConfig | None = None,
     loudnorm_filter: str = "loudnorm=I=-16:TP=-1.5:LRA=11",
 ) -> list[str]:
     preset = preset or RENDER_PRESETS["youtube_shorts"]
-    filters = [_crop_filter(crop_mode)]
+    filters = [_crop_filter(crop_mode, crop_offset_x, crop_scale)]
     if subtitle_path is not None:
         filters.append(f"ass='{_escape_filter_path(subtitle_path)}'")
     encoder = "h264_nvenc" if use_nvenc else "libx264"
@@ -161,6 +163,8 @@ def render_clip(
     crop_mode: CropMode,
     subtitle_text: str | None,
     metadata: dict,
+    crop_offset_x: float = 0.0,
+    crop_scale: float = 1.0,
     use_nvenc: bool = False,
     preset_name: str = "youtube_shorts",
     loudnorm_two_pass: bool = False,
@@ -189,6 +193,8 @@ def render_clip(
                 crop_mode,
                 subtitle_path,
                 enable_nvenc,
+                crop_offset_x,
+                crop_scale,
                 preset=preset,
                 loudnorm_filter=loudnorm_filter,
             ),
@@ -213,14 +219,24 @@ def render_clip(
     return RenderedArtifacts(output_path, metadata_path, subtitle_path, cover_path)
 
 
-def _crop_filter(crop_mode: CropMode) -> str:
+def _crop_filter(crop_mode: CropMode, offset_x: float = 0.0, scale: float = 1.0) -> str:
+    offset_x = max(-1.0, min(1.0, offset_x))
+    scale = max(1.0, min(2.0, scale))
     if crop_mode == "center-crop" or crop_mode == "auto-follow":
-        return "scale=-2:1920,crop=1080:1920"
+        target_height = round(1920 * scale)
+        x_ratio = (offset_x + 1.0) / 2.0
+        return (
+            f"scale=-2:{target_height},"
+            f"crop=1080:1920:x='max(0,min(iw-ow,(iw-ow)*{x_ratio:.4f}))':y='(ih-oh)/2'"
+        )
+    foreground_width = round(1080 * scale)
+    foreground_height = round(1920 * scale)
+    x_ratio = (offset_x + 1.0) / 2.0
     return (
         "split=2[base][fg];"
         "[base]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=28[bg];"
-        "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fit];"
-        "[bg][fit]overlay=(W-w)/2:(H-h)/2"
+        f"[fg]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease[fit];"
+        f"[bg][fit]overlay='max(0,min(W-w,(W-w)*{x_ratio:.4f}))':'(H-h)/2'"
     )
 
 

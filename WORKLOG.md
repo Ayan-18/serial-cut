@@ -2,6 +2,31 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-30 - Full Review, Background Queue And Export Workspace
+
+Implemented the complete requested product feature pass:
+
+- Added a persistent automatic background worker for episode analysis and clip rendering, with
+  startup recovery, visible stage/progress, pause/resume, cancel and retry.
+- Added a vertical range preview, candidate status filters/sorting, editable boundaries, visual crop
+  offset/zoom, and local OpenCV face-centering.
+- Added a per-candidate subtitle editor for text/timing/speaker labels. Original transcript rows stay
+  unchanged; manual subtitle rows are stored separately and used for rendering.
+- Added local heuristic speaker clustering, deterministic audio/visual/boundary score calibration,
+  sentence-aware boundary adjustment and cross-episode transcript dedupe.
+- Added an export gallery with video/cover endpoints and Windows folder opening, local model
+  diagnostics, and confirmed cache-only cleanup with path containment checks.
+- Added `Start SerialCuts.cmd`, a shortcut creation script, and created `SerialCuts.lnk` on this
+  computer's desktop.
+- Added migration `0004_product_workflow`, including recovery from partially pre-created SQLAlchemy
+  tables, and documented the updated architecture and API.
+
+Verification: Alembic reached `0004_product_workflow (head)` after exercising the partial-upgrade
+recovery path; backend suite passed (`45 passed, 1 upstream warning`); frontend production build
+passed. The UI was opened against the current database: 5 candidates, editable word-timed subtitle
+rows, model readiness, cache size and 2 existing exports rendered correctly. Original media and
+existing exports were not modified during these checks.
+
 ## 2026-08-30 - Subtitle Timing, Sizing And Render Fallback
 
 Fixed the first real exported clip after visual inspection:

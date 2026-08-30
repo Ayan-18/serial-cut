@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.analysis.llm import EpisodeAnalyzer, LlamaCppHttpAnalyzer, StubEpisodeAnalyzer
+from app.analysis.quality import calibrate_candidate, remove_cross_episode_duplicates
 from app.analysis.validation import adjust_candidate_boundaries, dedupe_candidates, transcript_text
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
@@ -56,11 +57,11 @@ def run_stage3_candidate_analysis(
     adjusted = []
     for candidate in analyzer.candidates(text, scenes).candidates:
         candidate = adjust_candidate_boundaries(
-            candidate, words, scenes, settings.min_clip_seconds, settings.max_clip_seconds
+            candidate, words, scenes, settings.min_clip_seconds, settings.max_clip_seconds, segments
         )
         if candidate is not None:
-            adjusted.append(candidate)
-    candidates = dedupe_candidates(adjusted)
+            adjusted.append(calibrate_candidate(candidate, segments, scenes, words))
+    candidates = remove_cross_episode_duplicates(session, episode_id, dedupe_candidates(adjusted), segments)
     session.execute(delete(ClipCandidate).where(ClipCandidate.episode_id == episode_id))
     for candidate in candidates:
         session.add(

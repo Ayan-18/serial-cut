@@ -12,6 +12,7 @@ from app.media.ffmpeg import create_proxy, extract_audio
 from app.media.ffprobe import apply_probe_to_episode, probe_media
 from app.media.scenes import PySceneDetectAdapter, SceneDetector, save_scenes
 from app.media.tracks import select_russian_audio_track, select_russian_subtitle_track
+from app.media.speakers import assign_speaker_labels
 from app.media.transcription import (
     FasterWhisperTranscriber,
     StubTranscriber,
@@ -101,6 +102,10 @@ def run_stage2_media_analysis(
     transcriber = transcriber or _build_transcriber(settings)
     transcript = transcriber.transcribe(prep.audio_path)
     transcript_count = save_transcript(session, episode.id, transcript)
+    try:
+        assign_speaker_labels(session, episode.id, prep.audio_path)
+    except RuntimeError:
+        pass
     episode.stage = EpisodeStage.TRANSCRIBED.value
     session.flush()
 

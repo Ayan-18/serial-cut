@@ -10,6 +10,7 @@ def adjust_candidate_boundaries(
     scenes: list[Scene],
     min_seconds: int,
     max_seconds: int,
+    segments: list[TranscriptSegment] | None = None,
 ) -> CandidatePayload | None:
     start = max(0.0, candidate.start_time)
     end = candidate.end_time
@@ -18,6 +19,14 @@ def adjust_candidate_boundaries(
     if spoken_words:
         start = max(0.0, min(start, spoken_words[0].start_time - 0.35))
         end = max(end, spoken_words[-1].end_time + 0.55)
+
+    if segments:
+        overlapping = [segment for segment in segments if segment.end_time >= start and segment.start_time <= end]
+        if overlapping:
+            if abs(overlapping[0].start_time - start) <= 1.5:
+                start = max(0.0, overlapping[0].start_time)
+            if abs(overlapping[-1].end_time - end) <= 2.0:
+                end = overlapping[-1].end_time
 
     start, end = _snap_to_scene_edges(start, end, scenes)
     duration = end - start

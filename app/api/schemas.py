@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -38,6 +40,7 @@ class RuntimeSettingsRead(BaseModel):
     min_clip_seconds: int
     max_clip_seconds: int
     auto_mode_enabled: bool
+    background_queue_enabled: bool
     auto_score_threshold: int
     max_clips_per_episode: int
     render_preset: str
@@ -67,6 +70,8 @@ class JobRead(BaseModel):
     current_stage: str | None
     progress: float
     error_message: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class Stage2RunResponse(BaseModel):
@@ -100,6 +105,9 @@ class CandidateRead(BaseModel):
     rationale: str
     problems_json: list
     crop_mode: str
+    crop_offset_x: float
+    crop_scale: float
+    thumbnail_path: str | None
     status: str
 
 
@@ -108,6 +116,8 @@ class ReviewRequest(BaseModel):
     adjusted_start_time: float | None = None
     adjusted_end_time: float | None = None
     crop_mode: str | None = Field(default=None, pattern="^(auto-follow|center-crop|blurred-background)$")
+    crop_offset_x: float | None = Field(default=None, ge=-1, le=1)
+    crop_scale: float | None = Field(default=None, ge=1, le=2)
     reason: str | None = None
 
 
@@ -125,12 +135,56 @@ class RenderRequest(BaseModel):
     force_rerender: bool = False
 
 
+class CandidateSubtitlePayload(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int | None = None
+    start_time: float = Field(ge=0)
+    end_time: float = Field(gt=0)
+    text: str = Field(min_length=1, max_length=500)
+    speaker_label: str | None = Field(default=None, max_length=64)
+
+
+class CandidateSubtitlesUpdate(BaseModel):
+    subtitles: list[CandidateSubtitlePayload] = Field(max_length=200)
+
+
+class AutoCropResponse(BaseModel):
+    candidate_id: int
+    crop_offset_x: float
+    faces_detected: int
+    frames_sampled: int
+
+
 class RenderResponse(BaseModel):
     candidate_id: int
     export_id: int
     output_path: str
     subtitle_path: str | None
     cover_path: str | None
+
+
+class RenderJobResponse(BaseModel):
+    job: JobRead
+
+
+class CacheRead(BaseModel):
+    cache_dir: str
+    files: int
+    bytes: int
+
+
+class CacheClearRequest(BaseModel):
+    confirm: bool = False
+
+
+class ModelDiagnosticsRead(BaseModel):
+    asr_adapter: str
+    asr_ready: bool
+    llm_adapter: str
+    llm_ready: bool
+    llm_url: str
+    details: list[str]
 
 
 class ExportRead(BaseModel):
@@ -144,6 +198,9 @@ class ExportRead(BaseModel):
     cover_path: str | None
     width: int
     height: int
+    include_subtitles: bool
+    preset_name: str
+    status: str
 
 
 class AutoExportRequest(BaseModel):

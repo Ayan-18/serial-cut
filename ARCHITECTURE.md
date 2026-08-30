@@ -68,10 +68,13 @@ Audio/proxy не пересоздаются, если уже существую�
 - `bot/callbacks.py` хранит idempotency key в `AppSetting`.
 - `bot/telegram.py` запускает long polling без webhook/VPS.
 
-## Product Features 1-4
+## Product Workflow
 
 - `application/settings.py` хранит UI-настройки в `AppSetting`, а `effective_settings` накладывает их поверх `.env`, не трогая секреты и системные пути FFmpeg.
-- `workers/runner.py` выполняет один queued job за вызов: Stage 2, Stage 3 и optional auto-export. Такой runner легко тестировать и можно позже завернуть в постоянный background loop.
+- `workers/runner.py` выполняет analyze/render job, а `workers/background.py` постоянно и последовательно забирает queued-задачи, восстанавливая работу после перезапуска.
 - `application/auto.py` выбирает кандидаты по порогу и лимиту, сохраняет approve и запускает render.
-- `media/rendering.py` поддерживает render presets, NVENC detect, export без субтитров и двухпроходный loudnorm helper.
-- UI показывает настройки, очередь, сезонный enqueue, ручные стадии, auto-export и render с/без субтитров.
+- `application/candidate_editor.py` хранит ручные субтитры отдельно от распознавания, поэтому исходный transcript остаётся неизменным.
+- `media/face_tracking.py` оценивает горизонтальное положение лиц локально; `media/speakers.py` эвристически группирует голоса без внешних сервисов.
+- `analysis/quality.py` калибрует оценки по речи/сценам, проверяет границы фраз и удаляет почти одинаковые моменты из разных серий.
+- `media/rendering.py` поддерживает crop offset/scale, render presets, NVENC detect, export без субтитров и двухпроходный loudnorm helper.
+- UI показывает вертикальный preview, subtitle/crop editor, фильтры, живую очередь, историю экспортов, диагностику моделей и подтверждённую очистку только cache.

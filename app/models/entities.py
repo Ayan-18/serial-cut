@@ -101,6 +101,7 @@ class TranscriptSegment(TimestampMixin, Base):
     start_time: Mapped[float] = mapped_column(Float, nullable=False)
     end_time: Mapped[float] = mapped_column(Float, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    speaker_label: Mapped[str | None] = mapped_column(String(64))
 
 
 class WordTimestamp(TimestampMixin, Base):
@@ -147,7 +148,22 @@ class ClipCandidate(TimestampMixin, Base):
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     problems_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     crop_mode: Mapped[str] = mapped_column(String(64), default="blurred-background", nullable=False)
+    crop_offset_x: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    crop_scale: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    thumbnail_path: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="new", nullable=False, index=True)
+
+
+class CandidateSubtitle(TimestampMixin, Base):
+    __tablename__ = "candidate_subtitles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("clip_candidates.id"), nullable=False, index=True)
+    start_time: Mapped[float] = mapped_column(Float, nullable=False)
+    end_time: Mapped[float] = mapped_column(Float, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    speaker_label: Mapped[str | None] = mapped_column(String(64))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class ReviewDecision(TimestampMixin, Base):
@@ -181,6 +197,9 @@ class Export(TimestampMixin, Base):
     cover_path: Mapped[str | None] = mapped_column(Text)
     width: Mapped[int] = mapped_column(Integer, default=1080, nullable=False)
     height: Mapped[int] = mapped_column(Integer, default=1920, nullable=False)
+    include_subtitles: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    preset_name: Mapped[str] = mapped_column(String(64), default="youtube_shorts", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="completed", nullable=False, index=True)
 
 
 class AppSetting(TimestampMixin, Base):

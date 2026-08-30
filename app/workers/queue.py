@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.enums import EpisodeStage, JobKind, JobStatus
-from app.models.entities import Episode, Job, Season
+from app.models.entities import ClipCandidate, Episode, Job, Season
 
 
 PIPELINE_STAGES = [
@@ -70,6 +70,31 @@ def enqueue_season_analysis(session: Session, season_id: int, auto: bool = False
         job.payload = payload
         jobs.append(job)
     return jobs
+
+
+def enqueue_candidate_render(session: Session, candidate_id: int, payload: dict) -> Job:
+    candidate = session.get(ClipCandidate, candidate_id)
+    if candidate is None:
+        raise ValueError(f"Candidate {candidate_id} not found")
+    existing_jobs = session.scalars(
+        select(Job).where(
+            Job.kind == JobKind.RENDER_CLIP.value,
+            Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
+        )
+    ).all()
+    for existing in existing_jobs:
+        if (existing.payload or {}).get("candidate_id") == candidate_id:
+            return existing
+    job = Job(
+        episode_id=candidate.episode_id,
+        kind=JobKind.RENDER_CLIP.value,
+        status=JobStatus.QUEUED.value,
+        current_stage="render_clip",
+        payload={"candidate_id": candidate_id, **payload},
+    )
+    session.add(job)
+    session.flush()
+    return job
 
 
 def recover_interrupted_jobs(session: Session) -> int:

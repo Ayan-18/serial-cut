@@ -20,6 +20,7 @@ class RuntimeSettings(BaseModel):
     min_clip_seconds: int = Field(ge=5, le=300)
     max_clip_seconds: int = Field(ge=5, le=300)
     auto_mode_enabled: bool
+    background_queue_enabled: bool
     auto_score_threshold: int = Field(ge=0, le=100)
     max_clips_per_episode: int = Field(ge=1, le=20)
     render_preset: Literal["youtube_shorts", "instagram_reels"]
@@ -48,6 +49,7 @@ def runtime_settings_from_env(settings: Settings) -> RuntimeSettings:
         min_clip_seconds=settings.min_clip_seconds,
         max_clip_seconds=settings.max_clip_seconds,
         auto_mode_enabled=settings.auto_mode_enabled,
+        background_queue_enabled=settings.background_queue_enabled,
         auto_score_threshold=settings.auto_score_threshold,
         max_clips_per_episode=settings.max_clips_per_episode,
         render_preset=settings.render_preset,
@@ -90,6 +92,7 @@ def effective_settings(session: Session, env_settings: Settings) -> Settings:
             "min_clip_seconds": runtime.min_clip_seconds,
             "max_clip_seconds": runtime.max_clip_seconds,
             "auto_mode_enabled": runtime.auto_mode_enabled,
+            "background_queue_enabled": runtime.background_queue_enabled,
             "auto_score_threshold": runtime.auto_score_threshold,
             "max_clips_per_episode": runtime.max_clips_per_episode,
             "render_preset": runtime.render_preset,

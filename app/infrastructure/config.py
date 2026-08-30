@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     auto_score_threshold: int = 82
     max_clips_per_episode: int = 3
     auto_mode_enabled: bool = False
+    background_queue_enabled: bool = False
     render_preset: Literal["youtube_shorts", "instagram_reels"] = "youtube_shorts"
     render_use_nvenc: bool = False
     render_loudnorm_two_pass: bool = False
