@@ -25,8 +25,12 @@ Shorts, серию Shorts, видео 2–10 минут или будущий д
 Сохранённый `StoryArc` можно отрендерить в один MP4: SerialCuts рендерит каждый фрагмент из своего
 исходного файла в единый вертикальный формат, нормализует звук через существующий render pipeline и
 склеивает сегменты через FFmpeg concat. Для арок по персонажу также сохраняется черновик текста
-озвучки от первого лица в `plan_json.narration`; это сценарная дорожка, а не синтезированный голос.
-Полноценный локальный TTS/voiceover остаётся отдельным будущим этапом.
+озвучки от первого лица в `plan_json.narration`; кнопку `WAV` можно использовать для черновой
+локальной озвучки через системный Windows TTS. Это не voice cloning и не имитация голоса актёра.
+
+Новый блок **Workflow сезона** добавляет сезонный поиск по кандидатам и транскриптам, ручной
+редактор StoryArc-сегментов, StoryArc-render через очередь, fade-переходы между кусками, генератор
+сценария будущего видео, черновой пакет публикации и диагностику состояния проекта.
 
 Сюжетный режим позволяет сохранить общий контекст сезона и серии, обязательные/исключённые события
 и собрать кандидаты как хронологические части одного пересказа. Библиотека персонажей принимает
@@ -168,9 +172,19 @@ Pop-Location
 - `POST /api/story-arcs` - собрать новый план из кандидатов сезона.
 - `GET /api/story-arcs/{id}` - открыть сохранённый план.
 - `POST /api/story-arcs/{id}/rebuild` - пересобрать план с прежними параметрами.
+- `PATCH /api/story-arcs/{id}` - изменить название, формат, статус и сценарную озвучку StoryArc.
+- `PATCH`, `DELETE /api/story-arcs/{id}/segments/{segment_id}` - править или удалить кусок плана.
+- `POST /api/story-arcs/{id}/segments` - добавить найденного кандидата в StoryArc вручную.
 - `POST /api/story-arcs/{id}/render` - склеить сохранённую арку в один MP4.
+- `POST /api/story-arcs/{id}/render-job` - поставить StoryArc-render в фоновую очередь.
+- `GET /api/story-arcs/{id}/narration` - получить текст озвучки от лица героя или narrator fallback.
+- `POST /api/story-arcs/{id}/narration-audio` - создать локальный WAV через Windows TTS.
 - `GET /api/story-arc-exports/{id}/file`, `GET /api/story-arc-exports/{id}/cover` - просмотр результата StoryArc.
 - `DELETE /api/story-arcs/{id}` - удалить только план, не трогая кандидаты и видео.
+- `GET /api/seasons/{id}/search` - глобальный поиск по сезону в кандидатах и транскриптах.
+- `GET`, `POST`, `PATCH /api/video-scripts` - черновики сценариев для StoryArc/сезона.
+- `GET`, `POST`, `PATCH /api/publishing-plans` - пакет публикации: title, description, hashtags, schedule.
+- `GET /api/project-diagnostics` - диагностика состояния проекта, путей, очереди и StoryArc.
 - `GET`, `POST /api/seasons/{id}/characters` - библиотека персонажей сезона.
 - `POST /api/characters/{id}/photos` - добавить локальную фотографию персонажа.
 - `DELETE /api/characters/{id}/photos/{index}` - удалить выбранную локальную копию фотографии.

@@ -50,6 +50,7 @@ def build_render_args(
     crop_keyframes: list[dict] | None = None,
     preset: RenderPresetConfig | None = None,
     loudnorm_filter: str = "loudnorm=I=-16:TP=-1.5:LRA=11",
+    extra_video_filters: list[str] | None = None,
 ) -> list[str]:
     preset = preset or RENDER_PRESETS["youtube_shorts"]
     filters = [
@@ -64,6 +65,7 @@ def build_render_args(
     ]
     if subtitle_path is not None:
         filters.append(f"ass='{_escape_filter_path(subtitle_path)}'")
+    filters.extend(extra_video_filters or [])
     encoder = "h264_nvenc" if use_nvenc else "libx264"
     duration = max(0.1, end_time - start_time)
     return [
@@ -180,6 +182,7 @@ def render_clip(
     use_nvenc: bool = False,
     preset_name: str = "youtube_shorts",
     loudnorm_two_pass: bool = False,
+    extra_video_filters: list[str] | None = None,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> RenderedArtifacts:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +213,7 @@ def render_clip(
                 crop_keyframes,
                 preset=preset,
                 loudnorm_filter=loudnorm_filter,
+                extra_video_filters=extra_video_filters,
             ),
             3600,
         )

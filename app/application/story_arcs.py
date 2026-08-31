@@ -28,6 +28,25 @@ class StoryArcBuildItem:
     reason: str
 
 
+@dataclass(frozen=True)
+class StoryArcUpdate:
+    title: str | None = None
+    prompt: str | None = None
+    output_format: str | None = None
+    status: str | None = None
+    narration: list[dict] | None = None
+
+
+@dataclass(frozen=True)
+class StoryArcSegmentUpdate:
+    sort_order: int | None = None
+    start_time: float | None = None
+    end_time: float | None = None
+    title: str | None = None
+    note: str | None = None
+    role: str | None = None
+
+
 def create_story_arc_plan(session: Session, request: StoryArcPlanRequest) -> StoryArc:
     season = session.get(Season, request.season_id)
     if season is None:
@@ -81,6 +100,99 @@ def delete_story_arc(session: Session, story_arc_id: int) -> None:
         raise ValueError("Арка не найдена")
     session.delete(arc)
     session.flush()
+
+
+def update_story_arc(session: Session, story_arc_id: int, patch: StoryArcUpdate) -> StoryArc:
+    arc = _load_arc(session, story_arc_id)
+    if patch.title is not None and patch.title.strip():
+        arc.title = patch.title.strip()
+    if patch.prompt is not None:
+        arc.prompt = patch.prompt.strip()
+    if patch.output_format is not None:
+        arc.output_format = patch.output_format
+    if patch.status is not None:
+        arc.status = patch.status
+    if patch.narration is not None:
+        plan = dict(arc.plan_json or {})
+        plan["narration"] = patch.narration
+        arc.plan_json = plan
+    _refresh_arc_plan_from_segments(session, arc)
+    session.flush()
+    return _load_arc(session, arc.id)
+
+
+def update_story_arc_segment(
+    session: Session,
+    story_arc_id: int,
+    segment_id: int,
+    patch: StoryArcSegmentUpdate,
+) -> StoryArc:
+    arc = _load_arc(session, story_arc_id)
+    segment = next((item for item in arc.segments if item.id == segment_id), None)
+    if segment is None:
+        raise ValueError("Сегмент не найден в этой арке")
+    target_order = max(1, patch.sort_order) if patch.sort_order is not None else None
+    if patch.start_time is not None:
+        segment.start_time = max(0.0, patch.start_time)
+    if patch.end_time is not None:
+        segment.end_time = patch.end_time
+    if segment.end_time <= segment.start_time:
+        raise ValueError("Конец сегмента должен быть позже начала")
+    if patch.title is not None and patch.title.strip():
+        segment.title = patch.title.strip()
+    if patch.note is not None:
+        segment.note = patch.note.strip()
+    if patch.role is not None:
+        segment.role = patch.role.strip() or None
+    if target_order is not None:
+        _move_segment(arc, segment, target_order)
+    else:
+        _normalize_segment_order(arc)
+    _refresh_arc_plan_from_segments(session, arc)
+    session.flush()
+    return _load_arc(session, arc.id)
+
+
+def remove_story_arc_segment(session: Session, story_arc_id: int, segment_id: int) -> StoryArc:
+    arc = _load_arc(session, story_arc_id)
+    segment = next((item for item in arc.segments if item.id == segment_id), None)
+    if segment is None:
+        raise ValueError("Сегмент не найден в этой арке")
+    session.delete(segment)
+    session.flush()
+    arc = _load_arc(session, story_arc_id)
+    _normalize_segment_order(arc)
+    _refresh_arc_plan_from_segments(session, arc)
+    session.flush()
+    return _load_arc(session, arc.id)
+
+
+def add_candidate_to_story_arc(session: Session, story_arc_id: int, candidate_id: int) -> StoryArc:
+    arc = _load_arc(session, story_arc_id)
+    candidate = session.get(ClipCandidate, candidate_id)
+    if candidate is None:
+        raise ValueError("Кандидат не найден")
+    episode = session.get(Episode, candidate.episode_id)
+    if episode is None or episode.season_id != arc.season_id:
+        raise ValueError("Кандидат должен быть из того же сезона")
+    next_order = max((segment.sort_order for segment in arc.segments), default=0) + 1
+    segment = StoryArcSegment(
+        story_arc_id=arc.id,
+        episode_id=episode.id,
+        candidate_id=candidate.id,
+        sort_order=next_order,
+        start_time=candidate.start_time,
+        end_time=candidate.end_time,
+        title=candidate.title,
+        note="Добавлено вручную из поиска",
+        role=candidate.story_role or _default_arc_role(next_order, next_order),
+    )
+    session.add(segment)
+    session.flush()
+    arc = _load_arc(session, arc.id)
+    _refresh_arc_plan_from_segments(session, arc)
+    session.flush()
+    return _load_arc(session, arc.id)
 
 
 def rebuild_story_arc_plan(session: Session, story_arc_id: int) -> StoryArc:
@@ -228,8 +340,55 @@ def _plan_json(
         "total_duration_seconds": round(sum(item["duration"] for item in chapters), 3),
         "chapters": chapters,
         "narration": _narration_plan(character, chapters),
-        "next_step": "Проверьте порядок и границы, затем можно добавлять multi-source render.",
+        "next_step": "Проверьте порядок и границы, затем можно рендерить multi-source StoryArc.",
     }
+
+
+def _refresh_arc_plan_from_segments(session: Session, arc: StoryArc) -> None:
+    season = session.get(Season, arc.season_id)
+    character = _target_character(session, arc.target_character_id, arc.season_id) if arc.target_character_id else None
+    chapters: list[dict] = []
+    for index, segment in enumerate(sorted(arc.segments, key=lambda item: item.sort_order), start=1):
+        episode = session.get(Episode, segment.episode_id)
+        duration = max(0.0, segment.end_time - segment.start_time)
+        chapters.append(
+            {
+                "order": index,
+                "episode_id": segment.episode_id,
+                "episode": episode.file_name if episode else "",
+                "candidate_id": segment.candidate_id,
+                "title": segment.title,
+                "range": [segment.start_time, segment.end_time],
+                "duration": round(duration, 3),
+                "role": segment.role,
+                "reason": segment.note,
+            }
+        )
+    existing_plan = dict(arc.plan_json or {})
+    narration = existing_plan.get("narration")
+    arc.total_duration_seconds = round(sum(item["duration"] for item in chapters), 3)
+    arc.plan_json = {
+        **existing_plan,
+        "season": season.title if season else "",
+        "arc": arc.title,
+        "target_character": character.name if character else None,
+        "format": arc.output_format,
+        "total_duration_seconds": arc.total_duration_seconds,
+        "chapters": chapters,
+        "narration": narration if narration is not None else _narration_plan(character, chapters),
+    }
+
+
+def _normalize_segment_order(arc: StoryArc) -> None:
+    for index, segment in enumerate(sorted(arc.segments, key=lambda item: (item.sort_order, item.id)), start=1):
+        segment.sort_order = index
+
+
+def _move_segment(arc: StoryArc, segment: StoryArcSegment, target_order: int) -> None:
+    ordered = [item for item in sorted(arc.segments, key=lambda item: (item.sort_order, item.id)) if item.id != segment.id]
+    ordered.insert(min(max(target_order - 1, 0), len(ordered)), segment)
+    for index, item in enumerate(ordered, start=1):
+        item.sort_order = index
 
 
 def _target_character(session: Session, character_id: int | None, season_id: int) -> Character | None:

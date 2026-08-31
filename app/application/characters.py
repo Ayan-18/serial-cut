@@ -12,14 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.atomic import replace_atomically, temp_sibling
 from app.infrastructure.config import Settings
-from app.media.character_recognition import CharacterProfile, recognize_speaker_clusters
-from app.media.voice_identity import (
-    VoiceEmbedding,
-    merge_voice_profile,
-    recognize_voice_clusters,
-    voice_profile_from_json,
-    extract_voice_embedding,
-)
 from app.models.entities import Character, Episode, SpeakerIdentity, TranscriptSegment
 
 
@@ -94,6 +86,9 @@ def recognize_episode_characters(
     episode_id: int,
     settings: Settings,
 ) -> CharacterRecognitionResult:
+    from app.media.character_recognition import CharacterProfile, recognize_speaker_clusters
+    from app.media.voice_identity import merge_voice_profile, recognize_voice_clusters, voice_profile_from_json
+
     episode = session.get(Episode, episode_id)
     if episode is None:
         raise ValueError("Серия не найдена")
@@ -182,6 +177,8 @@ def train_character_voice(
     source_label: str,
     character_id: int,
 ) -> int:
+    from app.media.voice_identity import extract_voice_embedding, merge_voice_profile
+
     episode = session.get(Episode, episode_id)
     character = session.get(Character, character_id)
     if episode is None or character is None or not episode.audio_path:

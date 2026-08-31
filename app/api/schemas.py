@@ -201,6 +201,7 @@ class StoryArcRenderRequest(BaseModel):
     preset_name: str | None = Field(default=None, pattern="^(youtube_shorts|instagram_reels)$")
     loudnorm_two_pass: bool | None = None
     force_rerender: bool = False
+    transition_style: str = Field(default="cut", pattern="^(cut|fade)$")
 
 
 class StoryArcRenderResponse(BaseModel):
@@ -211,6 +212,127 @@ class StoryArcRenderResponse(BaseModel):
     cover_path: str | None
     segment_count: int
     duration_seconds: float
+
+
+class StoryArcRenderJobResponse(BaseModel):
+    job: JobRead
+
+
+class StoryArcUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=255)
+    prompt: str | None = Field(default=None, max_length=2000)
+    output_format: str | None = Field(default=None, pattern="^(single_short|shorts_series|story_video|long_video)$")
+    status: str | None = Field(default=None, pattern="^(draft|ready|rendered|archived)$")
+    narration: list[dict] | None = None
+
+
+class StoryArcSegmentUpdateRequest(BaseModel):
+    sort_order: int | None = Field(default=None, ge=1, le=200)
+    start_time: float | None = Field(default=None, ge=0)
+    end_time: float | None = Field(default=None, gt=0)
+    title: str | None = Field(default=None, max_length=255)
+    note: str | None = Field(default=None, max_length=2000)
+    role: str | None = Field(default=None, max_length=64)
+
+
+class StoryArcCandidateAddRequest(BaseModel):
+    candidate_id: int
+
+
+class NarrationRead(BaseModel):
+    story_arc_id: int
+    text: str
+    lines: list[dict]
+
+
+class NarrationAudioRead(BaseModel):
+    story_arc_id: int
+    audio_path: str
+    script_path: str
+
+
+class VideoScriptCreateRequest(BaseModel):
+    season_id: int
+    story_arc_id: int | None = None
+    title: str | None = Field(default=None, max_length=255)
+    prompt: str = Field(default="", max_length=2000)
+    style: str = Field(default="chronological", pattern="^(chronological|documentary|dynamic|key_moments)$")
+
+
+class VideoScriptUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=255)
+    script_text: str | None = Field(default=None, max_length=20000)
+    status: str | None = Field(default=None, pattern="^(draft|ready|archived)$")
+
+
+class VideoScriptRead(BaseModel):
+    id: int
+    season_id: int
+    story_arc_id: int | None
+    title: str
+    prompt: str
+    style: str
+    script_text: str
+    structure_json: dict
+    status: str
+
+
+class SearchResultRead(BaseModel):
+    kind: str
+    episode_id: int
+    episode_file_name: str
+    candidate_id: int | None
+    start_time: float
+    end_time: float
+    title: str
+    snippet: str
+    score: int
+
+
+class SearchResponse(BaseModel):
+    query: str
+    results: list[SearchResultRead]
+
+
+class PublishingPlanCreateRequest(BaseModel):
+    season_id: int
+    story_arc_id: int | None = None
+    story_arc_export_id: int | None = None
+    platform: str = Field(default="youtube_shorts", pattern="^(youtube_shorts|instagram_reels|tiktok|vk_clips)$")
+    scheduled_for: datetime | None = None
+
+
+class PublishingPlanUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=4000)
+    hashtags: list[str] | None = Field(default=None, max_length=40)
+    scheduled_for: datetime | None = None
+    status: str | None = Field(default=None, pattern="^(draft|ready|scheduled|published|archived)$")
+
+
+class PublishingPlanRead(BaseModel):
+    id: int
+    season_id: int
+    story_arc_id: int | None
+    story_arc_export_id: int | None
+    platform: str
+    title: str
+    description: str
+    hashtags: list[str]
+    scheduled_for: datetime | None
+    status: str
+
+
+class ProjectDiagnosticCheckRead(BaseModel):
+    name: str
+    ok: bool
+    message: str
+
+
+class ProjectDiagnosticsRead(BaseModel):
+    checks: list[ProjectDiagnosticCheckRead]
+    recommendations: list[str]
+    counts: dict[str, int]
 
 
 class EpisodeOutlineRead(BaseModel):
@@ -399,7 +521,7 @@ class ModelDiagnosticsRead(BaseModel):
 
 
 class JobStageRetryRequest(BaseModel):
-    stage_name: str = Field(pattern="^(stage2_media|stage3_candidates|auto_export|render_clip)$")
+    stage_name: str = Field(pattern="^(stage2_media|stage3_candidates|auto_export|render_clip|render_story_arc)$")
 
 
 class CandidateQualityRead(BaseModel):

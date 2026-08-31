@@ -39,6 +39,7 @@ def render_story_arc(
     preset_name: str | None = None,
     loudnorm_two_pass: bool | None = None,
     force_rerender: bool = False,
+    transition_style: str = "cut",
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> StoryArcRenderResult:
     arc = _load_arc(session, story_arc_id)
@@ -122,6 +123,7 @@ def render_story_arc(
             use_nvenc=resolved_nvenc,
             preset_name=preset.name,
             loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,
+            extra_video_filters=_transition_filters(transition_style, segment.end_time - segment.start_time),
             runner=runner,
         )
         segment_paths.append(artifacts.output_path)
@@ -154,6 +156,7 @@ def render_story_arc(
         "include_subtitles": include_subtitles,
         "segment_count": len(segment_paths),
         "duration_seconds": arc.total_duration_seconds,
+        "transition_style": transition_style,
         "segments": segment_metadata,
         "narration": (arc.plan_json or {}).get("narration", []),
     }
@@ -244,6 +247,14 @@ def _load_arc(session: Session, story_arc_id: int) -> StoryArc:
 
 def _story_arc_slug(arc: StoryArc) -> str:
     return _safe_slug(f"story-arc-{arc.id}-{arc.title}")[:120].rstrip("-")
+
+
+def _transition_filters(style: str, duration: float) -> list[str]:
+    if style != "fade":
+        return []
+    fade = min(0.25, max(0.08, duration / 12))
+    out_start = max(0.0, duration - fade)
+    return [f"fade=t=in:st=0:d={fade:.3f}", f"fade=t=out:st={out_start:.3f}:d={fade:.3f}"]
 
 
 def _safe_slug(value: str) -> str:

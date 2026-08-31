@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BookOpen, Check, Clapperboard, FolderOpen, FolderPlus, ListFilter, ListVideo, LoaderCircle, Pause, Play, RefreshCcw, RotateCcw, Save, Server, Sparkles, Trash2, UserRound, WandSparkles, X } from "lucide-react";
+import { Activity, BookOpen, CalendarDays, Check, Clapperboard, FileText, FolderOpen, FolderPlus, ListFilter, ListVideo, LoaderCircle, Pause, Play, RefreshCcw, RotateCcw, Save, Search, Server, Sparkles, Trash2, UserRound, Volume2, WandSparkles, X } from "lucide-react";
 import "./styles.css";
 
 type Episode = { id: number; file_name: string; file_path: string; stage: string; size_bytes: number; duration_seconds: number | null; width: number | null; height: number | null; fps: number | null };
@@ -58,6 +58,10 @@ type StoryArc = {
   target_character_name: string | null; status: string; total_duration_seconds: number; plan_json: Record<string, unknown>;
   segments: StoryArcSegment[]; exports: StoryArcExport[];
 };
+type SearchResult = { kind: string; episode_id: number; episode_file_name: string; candidate_id: number | null; start_time: number; end_time: number; title: string; snippet: string; score: number };
+type VideoScript = { id: number; season_id: number; story_arc_id: number | null; title: string; prompt: string; style: string; script_text: string; structure_json: Record<string, unknown>; status: string };
+type PublishingPlan = { id: number; season_id: number; story_arc_id: number | null; story_arc_export_id: number | null; platform: string; title: string; description: string; hashtags: string[]; scheduled_for: string | null; status: string };
+type ProjectDiagnostics = { checks: CheckItem[]; recommendations: string[]; counts: Record<string, number> };
 type Character = { id: number; season_id: number; name: string; description: string; aliases: string[]; color: string; photo_count: number; photo_urls: string[]; voice_sample_count: number };
 type SpeakerIdentity = { source_label: string; character_id: number; character_name: string; confidence: number | null; method: string };
 type EpisodeOutline = { summary: string; main_events: string[]; conflicts: string[]; time_ranges: { start_time: number; end_time: number; summary: string }[] };
@@ -94,6 +98,9 @@ function App() {
   const [videoTime, setVideoTime] = useState(0);
   const [storyContext, setStoryContext] = useState<StoryContext | null>(null);
   const [storyArcs, setStoryArcs] = useState<StoryArc[]>([]);
+  const [videoScripts, setVideoScripts] = useState<VideoScript[]>([]);
+  const [publishingPlans, setPublishingPlans] = useState<PublishingPlan[]>([]);
+  const [projectDiagnostics, setProjectDiagnostics] = useState<ProjectDiagnostics | null>(null);
   const [arcSeasonId, setArcSeasonId] = useState<number | null>(null);
   const [arcTitle, setArcTitle] = useState("");
   const [arcPrompt, setArcPrompt] = useState("");
@@ -103,6 +110,11 @@ function App() {
   const [arcMaxSegments, setArcMaxSegments] = useState(8);
   const [arcMaxDuration, setArcMaxDuration] = useState(420);
   const [arcRenderBusy, setArcRenderBusy] = useState<number | null>(null);
+  const [workflowArcId, setWorkflowArcId] = useState<number | null>(null);
+  const [arcTransition, setArcTransition] = useState<"cut" | "fade">("fade");
+  const [seasonSearch, setSeasonSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [scriptPrompt, setScriptPrompt] = useState("");
   const [availableArcCharacters, setAvailableArcCharacters] = useState<Character[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [speakerLabels, setSpeakerLabels] = useState<string[]>([]);
@@ -122,11 +134,13 @@ function App() {
   }
 
   async function refresh() {
-    const [seasonData, queueData, settingsData, exportData, cacheData, arcData] = await Promise.all([
+    const [seasonData, queueData, settingsData, exportData, cacheData, arcData, scriptData, publishingData, projectData] = await Promise.all([
       api<Season[]>("/api/seasons"), api<QueueData>("/api/jobs"), api<RuntimeSettings>("/api/settings"),
-      api<ExportItem[]>("/api/exports"), api<CacheInfo>("/api/cache"), api<StoryArc[]>("/api/story-arcs")
+      api<ExportItem[]>("/api/exports"), api<CacheInfo>("/api/cache"), api<StoryArc[]>("/api/story-arcs"),
+      api<VideoScript[]>("/api/video-scripts"), api<PublishingPlan[]>("/api/publishing-plans"), api<ProjectDiagnostics>("/api/project-diagnostics")
     ]);
     setSeasons(seasonData); setQueue(queueData); setSettings(settingsData); setExports(exportData); setCacheInfo(cacheData); setStoryArcs(arcData);
+    setVideoScripts(scriptData); setPublishingPlans(publishingData); setProjectDiagnostics(projectData);
   }
 
   async function refreshActivity() {
@@ -426,12 +440,126 @@ function App() {
           preset_name: settings?.render_preset ?? null,
           loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null,
           force_rerender: true,
+          transition_style: arcTransition,
         }),
       });
       setMessage(`StoryArc MP4 готов: ${result.segment_count} частей, ${formatElapsed(Math.round(result.duration_seconds))}`);
       setStoryArcs(await api<StoryArc[]>("/api/story-arcs"));
     } catch (error) { setMessage(`StoryArc не отрендерен: ${errorMessage(error)}`); }
     finally { setArcRenderBusy(null); }
+  }
+
+  async function enqueueStoryArcRender(arc: StoryArc, includeSubtitles: boolean) {
+    const result = await api<{ job: Job }>(`/api/story-arcs/${arc.id}/render-job`, {
+      method: "POST", headers: jsonHeaders, body: JSON.stringify({
+        include_subtitles: includeSubtitles,
+        use_nvenc: settings?.render_use_nvenc ?? null,
+        preset_name: settings?.render_preset ?? null,
+        loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null,
+        force_rerender: true,
+        transition_style: arcTransition,
+      }),
+    });
+    setMessage(`StoryArc поставлен в очередь, задача №${result.job.id}`);
+    await refreshActivity();
+  }
+
+  async function saveArcMeta(arc: StoryArc) {
+    const updated = await api<StoryArc>(`/api/story-arcs/${arc.id}`, {
+      method: "PATCH", headers: jsonHeaders, body: JSON.stringify({
+        title: arc.title,
+        prompt: arc.prompt,
+        output_format: arc.output_format,
+        status: arc.status,
+      }),
+    });
+    setStoryArcs((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setMessage("StoryArc сохранён");
+  }
+
+  async function saveArcSegment(arcId: number, segment: StoryArcSegment) {
+    const updated = await api<StoryArc>(`/api/story-arcs/${arcId}/segments/${segment.id}`, {
+      method: "PATCH", headers: jsonHeaders, body: JSON.stringify({
+        sort_order: segment.sort_order,
+        start_time: segment.start_time,
+        end_time: segment.end_time,
+        title: segment.title,
+        note: segment.note,
+        role: segment.role,
+      }),
+    });
+    setStoryArcs((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setMessage("Сегмент сохранён");
+  }
+
+  async function moveArcSegment(arcId: number, segment: StoryArcSegment, delta: number) {
+    const updated = await api<StoryArc>(`/api/story-arcs/${arcId}/segments/${segment.id}`, {
+      method: "PATCH", headers: jsonHeaders, body: JSON.stringify({ sort_order: Math.max(1, segment.sort_order + delta) }),
+    });
+    setStoryArcs((current) => current.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  async function removeArcSegment(arcId: number, segmentId: number) {
+    const updated = await api<StoryArc>(`/api/story-arcs/${arcId}/segments/${segmentId}`, { method: "DELETE" });
+    setStoryArcs((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setMessage("Сегмент удалён из плана");
+  }
+
+  async function runSeasonSearch() {
+    const seasonId = selectedArcSeasonId();
+    if (!seasonId || !seasonSearch.trim()) return;
+    const data = await api<{ results: SearchResult[] }>(`/api/seasons/${seasonId}/search?q=${encodeURIComponent(seasonSearch)}&limit=30`);
+    setSearchResults(data.results);
+    setMessage(`Найдено по сезону: ${data.results.length}`);
+  }
+
+  async function addSearchResultToArc(arc: StoryArc, result: SearchResult) {
+    if (!result.candidate_id) { setMessage("В StoryArc можно добавить только готовый кандидат"); return; }
+    const updated = await api<StoryArc>(`/api/story-arcs/${arc.id}/segments`, {
+      method: "POST", headers: jsonHeaders, body: JSON.stringify({ candidate_id: result.candidate_id }),
+    });
+    setStoryArcs((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setMessage("Кандидат добавлен в StoryArc");
+  }
+
+  async function createVideoScriptForArc(arc: StoryArc) {
+    const script = await api<VideoScript>("/api/video-scripts", {
+      method: "POST", headers: jsonHeaders, body: JSON.stringify({
+        season_id: arc.season_id,
+        story_arc_id: arc.id,
+        title: `Сценарий: ${arc.title}`,
+        prompt: scriptPrompt,
+        style: "chronological",
+      }),
+    });
+    setVideoScripts((current) => [script, ...current]);
+    setMessage("Сценарий создан");
+  }
+
+  async function synthesizeNarration(arc: StoryArc) {
+    const audio = await api<{ audio_path: string }>(`/api/story-arcs/${arc.id}/narration-audio`, { method: "POST" });
+    setMessage(`WAV озвучки создан: ${audio.audio_path}`);
+    setStoryArcs(await api<StoryArc[]>("/api/story-arcs"));
+  }
+
+  async function createPublishingPlanForArc(arc: StoryArc) {
+    const latestExport = arc.exports[0];
+    const plan = await api<PublishingPlan>("/api/publishing-plans", {
+      method: "POST", headers: jsonHeaders, body: JSON.stringify({
+        season_id: arc.season_id,
+        story_arc_id: arc.id,
+        story_arc_export_id: latestExport?.id ?? null,
+        platform: settings?.render_preset ?? "youtube_shorts",
+      }),
+    });
+    setPublishingPlans((current) => [plan, ...current]);
+    setMessage("Пакет публикации создан");
+  }
+
+  async function refreshProjectDiagnostics() {
+    const data = await api<ProjectDiagnostics>("/api/project-diagnostics");
+    setProjectDiagnostics(data);
+    setMessage("Диагностика проекта обновлена");
   }
 
   async function openArcSegment(segment: StoryArcSegment) {
@@ -471,6 +599,12 @@ function App() {
   function setCandidateEdit(candidateId: number, patch: Partial<CandidateEdit>) {
     setEdits((current) => ({ ...current, [candidateId]: { ...current[candidateId], ...patch } }));
   }
+  function patchArcLocal(arcId: number, patch: Partial<StoryArc>) {
+    setStoryArcs((current) => current.map((arc) => arc.id === arcId ? { ...arc, ...patch } : arc));
+  }
+  function patchArcSegmentLocal(arcId: number, segmentId: number, patch: Partial<StoryArcSegment>) {
+    setStoryArcs((current) => current.map((arc) => arc.id === arcId ? { ...arc, segments: arc.segments.map((segment) => segment.id === segmentId ? { ...segment, ...patch } : segment) } : arc));
+  }
   function selectedArcSeasonId() {
     return arcSeasonId ?? storyContext?.season_id ?? seasons[0]?.id ?? null;
   }
@@ -509,6 +643,9 @@ function App() {
   const arcSeason = seasons.find((season) => season.id === selectedArcSeasonId());
   const arcCharacters = availableArcCharacters.length ? availableArcCharacters : characters.filter((character) => character.season_id === arcSeason?.id);
   const visibleStoryArcs = storyArcs.filter((arc) => !arcSeason || arc.season_id === arcSeason.id);
+  const workflowArc = visibleStoryArcs.find((arc) => arc.id === workflowArcId) ?? visibleStoryArcs[0] ?? null;
+  const workflowScripts = videoScripts.filter((script) => !workflowArc || script.story_arc_id === workflowArc.id || script.season_id === workflowArc.season_id).slice(0, 3);
+  const workflowPublishing = publishingPlans.filter((plan) => !workflowArc || plan.story_arc_id === workflowArc.id || plan.season_id === workflowArc.season_id).slice(0, 3);
 
   return <main className="app-shell">
     <section className="topbar"><div><h1>SerialCuts</h1><p>Локальная подготовка вертикальных клипов из серий</p></div><button className="icon-button" title="Обновить всё" onClick={() => refresh()}><RefreshCcw size={20} /></button></section>
@@ -567,6 +704,17 @@ function App() {
         <button className="secondary add-subtitle" onClick={() => setSubtitles((current) => [...current, { start_time: 0, end_time: 1, text: "Новая строка", speaker_label: null }])}>Добавить строку</button>
       </> : <p className="empty">Нажмите на кандидата, чтобы посмотреть только его отрывок и отредактировать кадр и субтитры.</p>}</div>
     </section>}
+
+    <section className="panel section-gap workflow-panel"><div className="panel-title"><Activity size={19} /><h2>Workflow сезона</h2><button className="icon-button secondary" title="Диагностика проекта" onClick={refreshProjectDiagnostics}><RefreshCcw size={17} /></button></div>
+      <div className="workflow-grid">
+        <div className="workflow-block"><h3>Поиск</h3><div className="search-row"><input value={seasonSearch} onChange={(event) => setSeasonSearch(event.target.value)} placeholder="Найти сцену, реплику или событие по сезону" /><button disabled={!arcSeason || !seasonSearch.trim()} onClick={runSeasonSearch}><Search size={16} /> Найти</button></div><div className="search-results">{searchResults.slice(0, 6).map((result) => <article key={`${result.kind}-${result.episode_id}-${result.start_time}`}><div><strong>{result.title}</strong><small>{result.episode_file_name} · {formatRange(result.start_time, result.end_time)} · score {result.score}</small></div><p>{result.snippet}</p>{workflowArc && result.candidate_id && <button className="text-button" onClick={() => addSearchResultToArc(workflowArc, result)}>Добавить в StoryArc</button>}</article>)}{!searchResults.length && <small>Поиск работает по кандидатам и транскриптам выбранного сезона.</small>}</div></div>
+        <div className="workflow-block"><h3>StoryArc редактор</h3>{workflowArc ? <><label className="setting-field"><span>План</span><select value={workflowArc.id} onChange={(event) => setWorkflowArcId(Number(event.target.value))}>{visibleStoryArcs.map((arc) => <option key={arc.id} value={arc.id}>{arc.title}</option>)}</select><small>{workflowArc.segments.length} частей · {formatElapsed(Math.round(workflowArc.total_duration_seconds))}</small></label><div className="arc-edit-row"><input value={workflowArc.title} onChange={(event) => patchArcLocal(workflowArc.id, { title: event.target.value })} /><select value={workflowArc.output_format} onChange={(event) => patchArcLocal(workflowArc.id, { output_format: event.target.value as StoryArc["output_format"] })}><option value="single_short">Один Shorts</option><option value="shorts_series">Серия Shorts</option><option value="story_video">Видео 2–10 мин</option><option value="long_video">Длинное видео</option></select><button onClick={() => saveArcMeta(workflowArc)}><Save size={16} /> Сохранить</button></div><label className="setting-field"><span>Переходы</span><select value={arcTransition} onChange={(event) => setArcTransition(event.target.value as "cut" | "fade")}><option value="fade">Fade</option><option value="cut">Склейка без перехода</option></select><small>Применяется при StoryArc-рендере.</small></label><div className="arc-actions"><button disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => enqueueStoryArcRender(workflowArc, true)}><Clapperboard size={16} /> В очередь</button><button className="secondary" disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => renderStoryArc(workflowArc, true)}>Сейчас</button><button className="secondary" onClick={() => synthesizeNarration(workflowArc)}><Volume2 size={16} /> WAV</button></div></> : <p className="empty">Создайте StoryArc, чтобы редактировать сезонный монтаж.</p>}</div>
+        <div className="workflow-block workflow-wide"><h3>Сегменты</h3>{workflowArc ? <div className="segment-editor">{workflowArc.segments.map((segment) => <article key={segment.id}><div className="segment-row"><button className="icon-button secondary" title="Выше" onClick={() => moveArcSegment(workflowArc.id, segment, -1)}>↑</button><button className="icon-button secondary" title="Ниже" onClick={() => moveArcSegment(workflowArc.id, segment, 1)}>↓</button><input type="number" min="0" step="0.1" value={segment.start_time} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { start_time: Number(event.target.value) })} /><input type="number" min="0" step="0.1" value={segment.end_time} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { end_time: Number(event.target.value) })} /><input value={segment.title} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { title: event.target.value })} /><input value={segment.role ?? ""} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { role: event.target.value || null })} /><button onClick={() => saveArcSegment(workflowArc.id, segment)}><Save size={16} /></button><button className="icon-button danger" title="Удалить" onClick={() => removeArcSegment(workflowArc.id, segment.id)}><Trash2 size={16} /></button></div><small>{segment.episode_file_name} · {segment.note}</small></article>)}</div> : <p className="empty">Сегменты появятся после создания плана.</p>}</div>
+        <div className="workflow-block"><h3>Сценарий</h3>{workflowArc ? <><textarea rows={3} value={scriptPrompt} onChange={(event) => setScriptPrompt(event.target.value)} placeholder="Акцент для сценария: конфликт, развитие героя, быстрый пересказ…" /><button onClick={() => createVideoScriptForArc(workflowArc)}><FileText size={16} /> Создать сценарий</button></> : <small>Нужен StoryArc.</small>}<div className="script-list">{workflowScripts.map((script) => <details key={script.id}><summary>{script.title}</summary><pre>{script.script_text}</pre></details>)}</div></div>
+        <div className="workflow-block"><h3>Публикация</h3>{workflowArc ? <button onClick={() => createPublishingPlanForArc(workflowArc)}><CalendarDays size={16} /> Создать пакет</button> : <small>Нужен StoryArc.</small>}<div className="publishing-list">{workflowPublishing.map((plan) => <article key={plan.id}><strong>{plan.title}</strong><small>{plan.platform} · {plan.status}</small><p>{plan.description}</p><small>{plan.hashtags.join(" ")}</small></article>)}</div></div>
+        <div className="workflow-block"><h3>Диагностика</h3><div className="checks compact">{projectDiagnostics?.checks.map((item) => <div className="check" key={item.name}><span className={item.ok ? "dot ok" : "dot fail"} /><strong>{item.name}</strong><span>{item.message}</span></div>)}</div>{projectDiagnostics?.recommendations.map((item) => <small className="warn-text" key={item}>{item}</small>)}</div>
+      </div>
+    </section>
 
     <section className="panel section-gap"><div className="panel-title"><FolderOpen size={19} /><h2>Готовые ролики</h2><span className="badge">{exports.length}</span></div><div className="exports-grid">{exports.map((item) => <article className="export-card" key={item.id}>{item.cover_path ? <img src={`/api/exports/${item.id}/cover`} alt="Обложка клипа" /> : <div className="export-placeholder"><Clapperboard /></div>}<div><strong>Экспорт №{item.id}</strong><small>{item.preset_name} · {item.include_subtitles ? "с субтитрами" : "без субтитров"}</small><small title={item.output_path}>{item.output_path}</small></div><video controls preload="none" src={`/api/exports/${item.id}/file`} /><button onClick={() => api(`/api/exports/${item.id}/open-folder`, { method: "POST" })}><FolderOpen size={16} /> Открыть папку</button></article>)}{!exports.length && <p className="empty">После рендера готовые MP4 появятся здесь.</p>}</div></section>
 

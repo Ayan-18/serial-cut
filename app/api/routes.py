@@ -29,6 +29,12 @@ from app.api.schemas import (
     ImportResponse,
     JobRead,
     ModelDiagnosticsRead,
+    NarrationAudioRead,
+    NarrationRead,
+    ProjectDiagnosticsRead,
+    PublishingPlanCreateRequest,
+    PublishingPlanRead,
+    PublishingPlanUpdateRequest,
     CandidateQualityRead,
     EpisodeOutlineRead,
     EpisodeQualityRead,
@@ -51,13 +57,21 @@ from app.api.schemas import (
     SpeakerIdentityUpdate,
     SpeakerLabelsRead,
     StoryArcCreateRequest,
+    StoryArcCandidateAddRequest,
     StoryArcExportRead,
     StoryArcRead,
+    StoryArcRenderJobResponse,
     StoryArcRenderRequest,
     StoryArcRenderResponse,
     StoryArcSegmentRead,
+    StoryArcSegmentUpdateRequest,
     StoryContextRead,
     StoryContextUpdate,
+    SearchResponse,
+    VideoScriptCreateRequest,
+    VideoScriptRead,
+    VideoScriptUpdateRequest,
+    StoryArcUpdateRequest,
 )
 from app.application.candidate_editor import (
     EditableSubtitle,
@@ -78,29 +92,46 @@ from app.application.characters import (
 )
 from app.application.importer import import_season
 from app.application.model_diagnostics import check_models
+from app.application.narration import story_arc_narration, synthesize_story_arc_narration
 from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.project_diagnostics import run_project_diagnostics
+from app.application.publishing import (
+    PublishingPlanRequest,
+    create_publishing_plan,
+    list_publishing_plans,
+    update_publishing_plan,
+)
 from app.application.queue_control import get_queue_state, set_queue_paused
 from app.application.quality_report import candidate_quality_report, episode_quality_report
 from app.application.review import review_candidate, save_candidate_edits
 from app.application.settings import RuntimeSettings, effective_settings, get_runtime_settings, save_runtime_settings
-from app.application.stage2 import run_stage2_media_analysis
-from app.application.stage3 import run_stage3_candidate_analysis
 from app.application.stage4 import render_candidate, render_candidate_preview
 from app.application.story_arcs import (
     StoryArcPlanRequest,
+    StoryArcSegmentUpdate,
+    StoryArcUpdate,
+    add_candidate_to_story_arc,
     create_story_arc_plan,
     delete_story_arc,
     get_story_arc,
     list_story_arcs,
     rebuild_story_arc_plan,
+    remove_story_arc_segment,
+    update_story_arc,
+    update_story_arc_segment,
 )
 from app.application.story_arc_render import render_story_arc
+from app.application.global_search import search_season
 from app.application.system_check import report_as_dict, run_system_check
+from app.application.video_scripts import (
+    VideoScriptRequest,
+    create_video_script,
+    list_video_scripts,
+    update_video_script,
+)
 from app.domain.enums import JobStatus
 from app.infrastructure.database import SessionLocal
 from app.media.ffprobe import apply_probe_to_episode, probe_media
-from app.media.character_recognition import CharacterProfile
-from app.media.face_tracking import SpeechRange, estimate_face_offset
 from app.media.rendering import smooth_crop_keyframes
 from app.models.entities import (
     Character,
@@ -110,18 +141,21 @@ from app.models.entities import (
     Export,
     Job,
     JobStage,
+    PublishingPlan,
     Season,
     SpeakerIdentity,
     StoryArc,
     StoryArcExport,
     StoryArcSegment,
     TranscriptSegment,
+    VideoScript,
 )
 from app.infrastructure.config import get_settings
 from app.workers.queue import (
     enqueue_candidate_render,
     enqueue_episode_analysis,
     enqueue_season_analysis,
+    enqueue_story_arc_render,
     queue_snapshot,
     recover_interrupted_jobs,
     request_cancel,
@@ -259,10 +293,76 @@ def read_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.patch("/story-arcs/{story_arc_id}", response_model=StoryArcRead)
+def patch_story_arc(
+    story_arc_id: int,
+    payload: StoryArcUpdateRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        arc = update_story_arc(session, story_arc_id, StoryArcUpdate(**payload.model_dump(exclude_unset=True)))
+        session.commit()
+        return _story_arc_read(session, arc)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/story-arcs/{story_arc_id}/rebuild", response_model=StoryArcRead)
 def rebuild_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
     try:
         arc = rebuild_story_arc_plan(session, story_arc_id)
+        session.commit()
+        return _story_arc_read(session, arc)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/story-arcs/{story_arc_id}/segments/{segment_id}", response_model=StoryArcRead)
+def patch_story_arc_segment(
+    story_arc_id: int,
+    segment_id: int,
+    payload: StoryArcSegmentUpdateRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        arc = update_story_arc_segment(
+            session,
+            story_arc_id,
+            segment_id,
+            StoryArcSegmentUpdate(**payload.model_dump(exclude_unset=True)),
+        )
+        session.commit()
+        return _story_arc_read(session, arc)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/story-arcs/{story_arc_id}/segments/{segment_id}", response_model=StoryArcRead)
+def delete_story_arc_segment(
+    story_arc_id: int,
+    segment_id: int,
+    session: Session = Depends(get_session),
+):
+    try:
+        arc = remove_story_arc_segment(session, story_arc_id, segment_id)
+        session.commit()
+        return _story_arc_read(session, arc)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/story-arcs/{story_arc_id}/segments", response_model=StoryArcRead)
+def add_story_arc_segment(
+    story_arc_id: int,
+    payload: StoryArcCandidateAddRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        arc = add_candidate_to_story_arc(session, story_arc_id, payload.candidate_id)
         session.commit()
         return _story_arc_read(session, arc)
     except Exception as exc:
@@ -289,12 +389,47 @@ def render_story_arc_endpoint(
                 preset_name=payload.preset_name,
                 loudnorm_two_pass=payload.loudnorm_two_pass,
                 force_rerender=payload.force_rerender,
+                transition_style=payload.transition_style,
             )
         session.commit()
         return result
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/story-arcs/{story_arc_id}/render-job", response_model=StoryArcRenderJobResponse)
+def enqueue_story_arc_render_endpoint(
+    story_arc_id: int,
+    payload: StoryArcRenderRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        job = enqueue_story_arc_render(session, story_arc_id, payload.model_dump())
+        session.commit()
+        return StoryArcRenderJobResponse(job=job)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/story-arcs/{story_arc_id}/narration", response_model=NarrationRead)
+def read_story_arc_narration(story_arc_id: int, session: Session = Depends(get_session)):
+    try:
+        return story_arc_narration(session, story_arc_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/story-arcs/{story_arc_id}/narration-audio", response_model=NarrationAudioRead)
+def create_story_arc_narration_audio(story_arc_id: int, session: Session = Depends(get_session)):
+    try:
+        audio = synthesize_story_arc_narration(session, story_arc_id, effective_settings(session, get_settings()))
+        session.commit()
+        return audio
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -329,6 +464,91 @@ def remove_story_arc(story_arc_id: int, session: Session = Depends(get_session))
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/seasons/{season_id}/search", response_model=SearchResponse)
+def search_season_endpoint(
+    season_id: int,
+    q: str,
+    limit: int = 30,
+    session: Session = Depends(get_session),
+):
+    if session.get(Season, season_id) is None:
+        raise HTTPException(status_code=404, detail="Сезон не найден")
+    return SearchResponse(query=q, results=search_season(session, season_id, q, max(1, min(limit, 100))))
+
+
+@router.get("/video-scripts", response_model=list[VideoScriptRead])
+def video_scripts(season_id: int | None = None, session: Session = Depends(get_session)):
+    return [_video_script_read(item) for item in list_video_scripts(session, season_id)]
+
+
+@router.post("/video-scripts", response_model=VideoScriptRead)
+def create_script(payload: VideoScriptCreateRequest, session: Session = Depends(get_session)):
+    try:
+        script = create_video_script(session, VideoScriptRequest(**payload.model_dump()))
+        session.commit()
+        return _video_script_read(script)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/video-scripts/{script_id}", response_model=VideoScriptRead)
+def patch_script(script_id: int, payload: VideoScriptUpdateRequest, session: Session = Depends(get_session)):
+    try:
+        script = update_video_script(
+            session,
+            script_id,
+            payload.title,
+            payload.script_text,
+            payload.status,
+        )
+        session.commit()
+        return _video_script_read(script)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/publishing-plans", response_model=list[PublishingPlanRead])
+def publishing_plans(season_id: int | None = None, session: Session = Depends(get_session)):
+    return [_publishing_plan_read(item) for item in list_publishing_plans(session, season_id)]
+
+
+@router.post("/publishing-plans", response_model=PublishingPlanRead)
+def create_publication(payload: PublishingPlanCreateRequest, session: Session = Depends(get_session)):
+    try:
+        plan = create_publishing_plan(session, PublishingPlanRequest(**payload.model_dump()))
+        session.commit()
+        return _publishing_plan_read(plan)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/publishing-plans/{plan_id}", response_model=PublishingPlanRead)
+def patch_publication(plan_id: int, payload: PublishingPlanUpdateRequest, session: Session = Depends(get_session)):
+    try:
+        plan = update_publishing_plan(
+            session,
+            plan_id,
+            title=payload.title,
+            description=payload.description,
+            hashtags=payload.hashtags,
+            scheduled_for=payload.scheduled_for,
+            status=payload.status,
+        )
+        session.commit()
+        return _publishing_plan_read(plan)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/project-diagnostics", response_model=ProjectDiagnosticsRead)
+def project_diagnostics(session: Session = Depends(get_session)):
+    return run_project_diagnostics(session, effective_settings(session, get_settings()))
 
 
 @router.get("/seasons/{season_id}/characters", response_model=list[CharacterRead])
@@ -578,6 +798,8 @@ def enqueue_season(season_id: int, payload: EnqueueSeasonRequest, session: Sessi
 @router.post("/episodes/{episode_id}/stage2", response_model=Stage2RunResponse)
 def run_stage2_episode(episode_id: int, session: Session = Depends(get_session)):
     try:
+        from app.application.stage2 import run_stage2_media_analysis
+
         settings = effective_settings(session, get_settings())
         _ensure_episode_not_enqueued(session, episode_id)
         session.commit()
@@ -596,6 +818,8 @@ def run_stage2_episode(episode_id: int, session: Session = Depends(get_session))
 @router.post("/episodes/{episode_id}/stage3", response_model=Stage3RunResponse)
 def run_stage3_episode(episode_id: int, session: Session = Depends(get_session)):
     try:
+        from app.application.stage3 import run_stage3_candidate_analysis
+
         settings = effective_settings(session, get_settings())
         _ensure_episode_not_enqueued(session, episode_id)
         session.commit()
@@ -731,6 +955,9 @@ def auto_split_subtitles(candidate_id: int, session: Session = Depends(get_sessi
 
 @router.post("/candidates/{candidate_id}/auto-crop", response_model=AutoCropResponse)
 def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_session)):
+    from app.media.character_recognition import CharacterProfile
+    from app.media.face_tracking import SpeechRange, estimate_face_offset
+
     candidate = session.get(ClipCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="Кандидат не найден")
@@ -1153,6 +1380,35 @@ def _story_arc_export_read(export: StoryArcExport) -> StoryArcExportRead:
         preset_name=export.preset_name,
         segment_count=export.segment_count,
         status=export.status,
+    )
+
+
+def _video_script_read(script: VideoScript) -> VideoScriptRead:
+    return VideoScriptRead(
+        id=script.id,
+        season_id=script.season_id,
+        story_arc_id=script.story_arc_id,
+        title=script.title,
+        prompt=script.prompt,
+        style=script.style,
+        script_text=script.script_text,
+        structure_json=script.structure_json,
+        status=script.status,
+    )
+
+
+def _publishing_plan_read(plan: PublishingPlan) -> PublishingPlanRead:
+    return PublishingPlanRead(
+        id=plan.id,
+        season_id=plan.season_id,
+        story_arc_id=plan.story_arc_id,
+        story_arc_export_id=plan.story_arc_export_id,
+        platform=plan.platform,
+        title=plan.title,
+        description=plan.description,
+        hashtags=list(plan.hashtags_json or []),
+        scheduled_for=plan.scheduled_for,
+        status=plan.status,
     )
 
 

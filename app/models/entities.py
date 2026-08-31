@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import EpisodeStage, JobKind, JobStatus, TrackKind
@@ -17,6 +19,7 @@ class Season(TimestampMixin, Base):
     episodes: Mapped[list["Episode"]] = relationship(back_populates="season", cascade="all, delete-orphan")
     characters: Mapped[list["Character"]] = relationship(back_populates="season", cascade="all, delete-orphan")
     story_arcs: Mapped[list["StoryArc"]] = relationship(back_populates="season", cascade="all, delete-orphan")
+    video_scripts: Mapped[list["VideoScript"]] = relationship(back_populates="season", cascade="all, delete-orphan")
 
 
 class Episode(TimestampMixin, Base):
@@ -188,6 +191,8 @@ class StoryArc(TimestampMixin, Base):
         order_by="StoryArcSegment.sort_order",
     )
     exports: Mapped[list["StoryArcExport"]] = relationship(back_populates="story_arc", cascade="all, delete-orphan")
+    video_scripts: Mapped[list["VideoScript"]] = relationship(back_populates="story_arc", cascade="all, delete-orphan")
+    publishing_plans: Mapped[list["PublishingPlan"]] = relationship(back_populates="story_arc", cascade="all, delete-orphan")
 
 
 class StoryArcSegment(TimestampMixin, Base):
@@ -225,6 +230,42 @@ class StoryArcExport(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), default="completed", nullable=False, index=True)
 
     story_arc: Mapped[StoryArc] = relationship(back_populates="exports")
+
+
+class VideoScript(TimestampMixin, Base):
+    __tablename__ = "video_scripts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id"), nullable=False, index=True)
+    story_arc_id: Mapped[int | None] = mapped_column(ForeignKey("story_arcs.id"), index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    style: Mapped[str] = mapped_column(String(64), default="chronological", nullable=False)
+    script_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    structure_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+
+    season: Mapped[Season] = relationship(back_populates="video_scripts")
+    story_arc: Mapped[StoryArc | None] = relationship(back_populates="video_scripts")
+
+
+class PublishingPlan(TimestampMixin, Base):
+    __tablename__ = "publishing_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id"), nullable=False, index=True)
+    story_arc_id: Mapped[int | None] = mapped_column(ForeignKey("story_arcs.id"), index=True)
+    story_arc_export_id: Mapped[int | None] = mapped_column(ForeignKey("story_arc_exports.id"), index=True)
+    platform: Mapped[str] = mapped_column(String(64), default="youtube_shorts", nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    hashtags_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+
+    season: Mapped[Season] = relationship()
+    story_arc: Mapped[StoryArc | None] = relationship(back_populates="publishing_plans")
+    story_arc_export: Mapped[StoryArcExport | None] = relationship()
 
 
 class Character(TimestampMixin, Base):

@@ -12,9 +12,8 @@ from sqlalchemy.orm import Session
 from app.application.auto import auto_approve_and_export
 from app.application.queue_control import get_queue_state
 from app.application.processing_guard import ProcessingBusyError, processing_guard
-from app.application.stage2 import run_stage2_media_analysis
-from app.application.stage3 import run_stage3_candidate_analysis
 from app.application.stage4 import render_candidate
+from app.application.story_arc_render import render_story_arc
 from app.domain.enums import JobKind, JobStatus
 from app.infrastructure.config import Settings
 from app.models.entities import Job, JobStage
@@ -39,8 +38,8 @@ class WorkerRunResult:
 def run_next_job(
     session: Session,
     settings: Settings,
-    stage2_func: Stage2Func = run_stage2_media_analysis,
-    stage3_func: Stage3Func = run_stage3_candidate_analysis,
+    stage2_func: Stage2Func | None = None,
+    stage3_func: Stage3Func | None = None,
 ) -> WorkerRunResult:
     if not _RUNNER_LOCK.acquire(blocking=False):
         return WorkerRunResult(False, None, "busy", "Обработчик уже выполняет другую задачу")
@@ -57,15 +56,15 @@ def run_next_job(
 def _run_next_job_unlocked(
     session: Session,
     settings: Settings,
-    stage2_func: Stage2Func,
-    stage3_func: Stage3Func,
+    stage2_func: Stage2Func | None,
+    stage3_func: Stage3Func | None,
 ) -> WorkerRunResult:
     if get_queue_state(session) == "paused":
         return WorkerRunResult(False, None, "paused", "Очередь на паузе")
     job = next_queued_job(session)
     if job is None:
         return WorkerRunResult(False, None, "idle", "Нет задач в очереди")
-    if job.episode_id is None:
+    if job.episode_id is None and job.kind != JobKind.RENDER_STORY_ARC.value:
         job.status = JobStatus.FAILED.value
         job.error_message = "У job нет episode_id"
         return WorkerRunResult(True, job.id, job.status, job.error_message)
@@ -98,7 +97,34 @@ def _run_next_job_unlocked(
                 ),
                 0.95,
             )
+        elif job.kind == JobKind.RENDER_STORY_ARC.value:
+            if resume_from_stage and resume_from_stage != "render_story_arc":
+                raise ValueError(f"Этап {resume_from_stage} нельзя запустить для StoryArc рендера")
+            story_arc_id = int(payload["story_arc_id"])
+            _run_stage(
+                session,
+                job,
+                "render_story_arc",
+                lambda: render_story_arc(
+                    session,
+                    story_arc_id,
+                    settings,
+                    include_subtitles=bool(payload.get("include_subtitles", True)),
+                    use_nvenc=payload.get("use_nvenc"),
+                    preset_name=payload.get("preset_name"),
+                    loudnorm_two_pass=payload.get("loudnorm_two_pass"),
+                    force_rerender=bool(payload.get("force_rerender", False)),
+                    transition_style=str(payload.get("transition_style") or "cut"),
+                ),
+                0.95,
+            )
         else:
+            if stage2_func is None or stage3_func is None:
+                from app.application.stage2 import run_stage2_media_analysis
+                from app.application.stage3 import run_stage3_candidate_analysis
+
+                stage2_func = stage2_func or run_stage2_media_analysis
+                stage3_func = stage3_func or run_stage3_candidate_analysis
             if resume_from_stage and resume_from_stage not in ANALYZE_STAGES:
                 raise ValueError(f"Неизвестный этап анализа: {resume_from_stage}")
             resume_stage = resume_from_stage or "stage2_media"
@@ -172,6 +198,7 @@ def _resume_progress(stage: str) -> float:
     return {
         "stage3_candidates": 0.45,
         "auto_export": 0.75,
+        "render_story_arc": 0.0,
     }.get(stage, 0.0)
 
 

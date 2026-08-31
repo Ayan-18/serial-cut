@@ -2,6 +2,26 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-31 - Season Workflow Tools
+
+Implemented the requested 10-point product pass without changing the launcher:
+
+- StoryArc render can now be queued with `render_story_arc` jobs.
+- StoryArc plans can be edited: metadata, segment order, timing, title, role, delete/add candidate.
+- Added video script drafts tied to a season or StoryArc.
+- Added local Windows TTS narration export to WAV from StoryArc narration text.
+- StoryArc render accepts `cut` or `fade` transition style; fade adds short in/out fades per segment.
+- Added global season search across candidates and transcript rows.
+- Added publishing plan drafts with platform, title, description, hashtags and optional schedule.
+- Quality benchmark now has a character-arc recap-vs-turn case and filters weak auto-selected candidates.
+- Added project diagnostics for DB counts, missing media paths, failed jobs, StoryArc consistency and cache/output dirs.
+- Added `scripts/create_demo_sample.ps1` to generate a tiny FFmpeg demo season.
+
+Verification: targeted backend tests passed (`11 passed`), frontend production build passed,
+quality benchmark passed. Full test suite was not run in this local venv because `numpy` is not
+installed; API/worker imports were made lazy so the app can still start far enough to show
+diagnostics before heavy media packages are installed.
+
 ## 2026-08-31 - StoryArc Multi-Source Render
 
 Implemented the first render/export path for saved multi-episode story arcs:

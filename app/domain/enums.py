@@ -30,6 +30,7 @@ class JobKind(str, Enum):
     ANALYZE_EPISODE = "analyze_episode"
     PROBE_EPISODE = "probe_episode"
     RENDER_CLIP = "render_clip"
+    RENDER_STORY_ARC = "render_story_arc"
 
 
 class TrackKind(str, Enum):

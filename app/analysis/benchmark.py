@@ -113,7 +113,7 @@ def evaluate_quality_case(case: QualityCaseFixture) -> QualityCaseResult:
             continue
         adjusted.append(calibrate_candidate(normalized, segments, scenes, words))
 
-    selected = dedupe_candidates(adjusted)
+    selected = dedupe_candidates(_quality_gate(adjusted))
     duplicate_rate = round(100 * (len(adjusted) - len(selected)) / len(adjusted)) if adjusted else 0
     expected_ranges = case.expected_good_ranges
     candidate_results = [
@@ -155,6 +155,23 @@ def discover_quality_cases(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
     return sorted(item for item in path.rglob("*.json") if item.is_file())
+
+
+def _quality_gate(candidates: list[CandidatePayload]) -> list[CandidatePayload]:
+    result: list[CandidatePayload] = []
+    hard_problem_markers = (
+        "слабый финал",
+        "похоже на пересказ",
+        "нет сильной концовки",
+        "непонятен без контекста",
+        "слабая концовка",
+    )
+    for candidate in candidates:
+        problems = " ".join(candidate.possible_problems).casefold()
+        has_hard_problem = any(marker in problems for marker in hard_problem_markers)
+        if candidate.score >= 68 and not (candidate.score < 78 and has_hard_problem):
+            result.append(candidate)
+    return result
 
 
 def format_quality_report(results: list[QualityCaseResult]) -> str:

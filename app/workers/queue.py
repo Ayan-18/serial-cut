@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.enums import EpisodeStage, JobKind, JobStatus
-from app.models.entities import ClipCandidate, Episode, Job, JobStage, Season
+from app.models.entities import ClipCandidate, Episode, Job, JobStage, Season, StoryArc
 
 
 PIPELINE_STAGES = [
@@ -25,6 +25,7 @@ PIPELINE_STAGES = [
 JOB_STAGE_ORDER = {
     JobKind.ANALYZE_EPISODE.value: ["stage2_media", "stage3_candidates", "auto_export"],
     JobKind.RENDER_CLIP.value: ["render_clip"],
+    JobKind.RENDER_STORY_ARC.value: ["render_story_arc"],
 }
 
 
@@ -96,6 +97,31 @@ def enqueue_candidate_render(session: Session, candidate_id: int, payload: dict)
         status=JobStatus.QUEUED.value,
         current_stage="render_clip",
         payload={"candidate_id": candidate_id, **payload},
+    )
+    session.add(job)
+    session.flush()
+    return job
+
+
+def enqueue_story_arc_render(session: Session, story_arc_id: int, payload: dict) -> Job:
+    arc = session.get(StoryArc, story_arc_id)
+    if arc is None:
+        raise ValueError(f"StoryArc {story_arc_id} not found")
+    existing_jobs = session.scalars(
+        select(Job).where(
+            Job.kind == JobKind.RENDER_STORY_ARC.value,
+            Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value]),
+        )
+    ).all()
+    for existing in existing_jobs:
+        if (existing.payload or {}).get("story_arc_id") == story_arc_id:
+            return existing
+    job = Job(
+        episode_id=arc.segments[0].episode_id if arc.segments else None,
+        kind=JobKind.RENDER_STORY_ARC.value,
+        status=JobStatus.QUEUED.value,
+        current_stage="render_story_arc",
+        payload={"story_arc_id": story_arc_id, **payload},
     )
     session.add(job)
     session.flush()
@@ -192,4 +218,5 @@ def _job_stage_progress(stage: str) -> float:
         "stage3_candidates": 0.45,
         "auto_export": 0.75,
         "render_clip": 0.0,
+        "render_story_arc": 0.0,
     }.get(stage, 0.0)

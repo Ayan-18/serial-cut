@@ -1,0 +1,98 @@
+{
+  "name": "character_arc_recap_vs_turn",
+  "min_clip_seconds": 25,
+  "max_clip_seconds": 75,
+  "transcript_segments": [
+    {
+      "start_time": 5.0,
+      "end_time": 16.0,
+      "text": "Ранее я боялся говорить правду и всё время отступал.",
+      "speaker_label": "Герой"
+    },
+    {
+      "start_time": 17.0,
+      "end_time": 27.0,
+      "text": "Это повторение того, что уже было в прошлой серии.",
+      "speaker_label": "Герой"
+    },
+    {
+      "start_time": 90.0,
+      "end_time": 101.0,
+      "text": "Я больше не буду прятаться за чужими решениями.",
+      "speaker_label": "Герой"
+    },
+    {
+      "start_time": 102.0,
+      "end_time": 114.0,
+      "text": "Если это моя сила, значит я сам отвечаю за то, что сделаю дальше.",
+      "speaker_label": "Герой"
+    },
+    {
+      "start_time": 115.0,
+      "end_time": 124.0,
+      "text": "Тогда впервые поступи как тот, кем хочешь стать.",
+      "speaker_label": "Наставник"
+    }
+  ],
+  "scenes": [
+    {
+      "start_time": 4.8,
+      "end_time": 28.0,
+      "label": "weak_recap"
+    },
+    {
+      "start_time": 89.6,
+      "end_time": 125.0,
+      "label": "character_turn"
+    }
+  ],
+  "candidates": [
+    {
+      "start_time": 5.0,
+      "end_time": 27.0,
+      "title": "Краткий пересказ страха",
+      "description": "Герой пересказывает уже известное, но не принимает нового решения.",
+      "moment_type": "другое",
+      "characters": ["Герой"],
+      "score": 54,
+      "scores": {
+        "hook": 45,
+        "standalone_context": 50,
+        "payoff": 32,
+        "emotion": 42,
+        "boundary_quality": 78,
+        "visual_potential": 56,
+        "audio_quality": 82
+      },
+      "standalone_reason": "Без следующей сцены момент не меняет историю.",
+      "possible_problems": ["Слабый финал", "Похоже на пересказ"]
+    },
+    {
+      "start_time": 90.0,
+      "end_time": 124.0,
+      "title": "Герой берёт ответственность",
+      "description": "Персонаж проговаривает внутренний перелом и получает ясный ответ наставника.",
+      "moment_type": "эмоциональный момент",
+      "characters": ["Герой", "Наставник"],
+      "score": 93,
+      "scores": {
+        "hook": 88,
+        "standalone_context": 86,
+        "payoff": 94,
+        "emotion": 92,
+        "boundary_quality": 88,
+        "visual_potential": 82,
+        "audio_quality": 90
+      },
+      "standalone_reason": "Сцена понятна сама по себе: страх, решение и ответ.",
+      "possible_problems": []
+    }
+  ],
+  "expected_good_ranges": [
+    {
+      "start_time": 90.0,
+      "end_time": 124.0,
+      "label": "character_turn"
+    }
+  ]
+}
