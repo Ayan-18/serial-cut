@@ -177,6 +177,26 @@ def test_quality_flags_a_boundary_inside_a_replica():
     assert "Конец попадает в середину реплики" in calibrated.possible_problems
 
 
+def test_quality_penalizes_weak_standalone_moment():
+    candidate = _candidate(70, 95, 72).model_copy(
+        update={
+            "title": "Мы пришли",
+            "description": "Короткий проход без самостоятельной драматургии.",
+            "standalone_reason": "Контекст слабый.",
+        }
+    )
+    segments = [
+        TranscriptSegment(episode_id=1, start_time=70, end_time=75, text="Ну, мы пришли."),
+        TranscriptSegment(episode_id=1, start_time=76, end_time=80, text="Да."),
+        TranscriptSegment(episode_id=1, start_time=81, end_time=85, text="Пошли."),
+    ]
+
+    calibrated = calibrate_candidate(candidate, segments, [], [])
+
+    assert calibrated.score < candidate.score
+    assert "Слабая концовка для короткого ролика" in calibrated.possible_problems
+
+
 def test_dedupe_candidates_keeps_highest_scored_overlap():
     selected = dedupe_candidates([_candidate(0, 40, 70), _candidate(5, 42, 95), _candidate(80, 120, 60)])
 

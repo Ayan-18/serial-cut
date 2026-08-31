@@ -2,6 +2,32 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-31 - Quality And Usability Pass
+
+Improved the existing quality-critical product functions without touching the one-click launcher:
+
+- Candidate scoring v2 now considers standalone clarity, payoff, emotion, long pauses, weak endings,
+  recap/credits markers and speech-cut problems more strongly.
+- Added `app/application/quality_report.py` plus API endpoints for per-episode and per-candidate
+  quality summaries and recommendations.
+- Added candidate edit saving via `PATCH /api/candidates/{id}` so preview can persist boundaries/crop
+  without marking the candidate approved.
+- Added fast preview rendering: `POST /api/candidates/{id}/preview` creates a 540x960 MP4 in cache,
+  and `GET /api/candidates/{id}/preview-file` serves it.
+- Render crop filters now use preset dimensions instead of hard-coded 1080x1920, and auto-follow
+  keyframes are smoothed before saving/rendering.
+- Added subtitle QA and auto-split for long/fast/overlapping subtitle rows.
+- Queue stages now record failed stage errors, and `GET /api/jobs/{id}/stages` exposes the timeline.
+- Added duplicate character merge support that moves photos/aliases/speaker identities into the
+  target profile.
+- React UI now has candidate search, filters, score breakdown, quality recommendations, preview MP4,
+  subtitle warnings/autosplit, job timelines and character merge controls.
+
+Verification on the laptop: focused scoring/benchmark tests passed (`5 passed`), quality benchmark
+passed with average `77/100`, Python compile passed for changed pure modules, and frontend production
+build passed. Full backend suite could not run on the laptop because its local `.venv` is Python
+3.10.4 and lacks `numpy`; the project requires Python 3.11+ and the main PC has the proper runtime.
+
 ## 2026-08-31 - Quality Benchmark
 
 Added a lightweight repository-shared quality benchmark instead of changing the one-click launcher:

@@ -85,6 +85,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
 precision, duplicate rate и invalid clips. Это базовый измеритель перед изменениями логики выбора
 моментов.
 
+## Улучшения Качества И Удобства
+
+Текущий quality/usability pass улучшает уже существующие функции, не меняя launcher:
+
+- Candidate scoring v2 сильнее учитывает самостоятельную понятность, payoff, эмоциональность,
+  длинные паузы, слабые концовки, recap/credits и обрезанные реплики.
+- В карточках кандидатов появились поиск, фильтры по статусу/типу/проблемам, минимальный score,
+  сортировка по score, времени или качеству границ.
+- Для выбранной серии показывается краткий quality summary: сегменты, сцены, кандидаты, средний
+  score и частые проблемы.
+- Для выбранного кандидата показываются breakdown score и рекомендации, что именно исправить.
+- `Preview` создаёт быстрый 540x960 MP4 в cache перед финальным render.
+- Субтитры получили quality-проверку и кнопку `Разбить` для длинных строк.
+- Auto-follow keyframes сглаживаются перед сохранением/рендером, чтобы вертикальный crop меньше
+  дёргался.
+- Очередь показывает историю этапов job из `job_stages`, включая упавший этап и сообщение ошибки.
+- Карточки персонажей можно объединять, чтобы чинить дубли и переносить speaker identities.
+
+Новые API:
+
+- `GET /api/episodes/{id}/quality`
+- `GET /api/candidates/{id}/quality`
+- `PATCH /api/candidates/{id}`
+- `POST /api/candidates/{id}/preview`
+- `GET /api/candidates/{id}/preview-file`
+- `GET /api/candidates/{id}/subtitles/quality`
+- `POST /api/candidates/{id}/subtitles/auto-split`
+- `GET /api/jobs/{id}/stages`
+- `POST /api/characters/{id}/merge`
+
 ## Работа Через Codex На Двух Компьютерах
 
 Общий контекст проекта хранится в GitHub, `AGENTS.md`, `WORKLOG.md` и документации. Перед работой на ноутбуке или компьютере делайте `git pull --ff-only`, после завершения - обновляйте `WORKLOG.md`, коммитьте и пушьте изменения. Подробная инструкция: `docs/CODEX_SYNC.md`.

@@ -212,6 +212,32 @@ def train_character_voice(
     return embedding.sample_count
 
 
+def merge_characters(session: Session, source_character_id: int, target_character_id: int) -> Character:
+    if source_character_id == target_character_id:
+        raise ValueError("Выберите двух разных персонажей")
+    source = session.get(Character, source_character_id)
+    target = session.get(Character, target_character_id)
+    if source is None or target is None:
+        raise ValueError("Персонаж не найден")
+    if source.season_id != target.season_id:
+        raise ValueError("Можно объединять только персонажей одного сезона")
+
+    target.description = _merge_text(target.description, source.description)
+    target.aliases_json = _unique([*(target.aliases_json or []), source.name, *(source.aliases_json or [])])
+    target.photos_json = _unique([*(target.photos_json or []), *(source.photos_json or [])])
+    if not target.voice_profile_json and source.voice_profile_json:
+        target.voice_profile_json = source.voice_profile_json
+    identities = session.scalars(
+        select(SpeakerIdentity).where(SpeakerIdentity.character_id == source_character_id)
+    ).all()
+    for identity in identities:
+        identity.character_id = target_character_id
+        identity.method = "manual" if identity.method == "manual" else f"{identity.method}+merged"
+    session.delete(source)
+    session.flush()
+    return target
+
+
 def speaker_name_map(session: Session, episode_id: int) -> dict[str, str]:
     rows = session.execute(
         select(SpeakerIdentity.source_label, Character.name)
@@ -228,3 +254,24 @@ def _validate_image(content: bytes) -> None:
     image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None or image.shape[0] < 80 or image.shape[1] < 80:
         raise ValueError("Не удалось прочитать фотографию или она слишком маленькая")
+
+
+def _merge_text(left: str, right: str) -> str:
+    left = left.strip()
+    right = right.strip()
+    if not left:
+        return right
+    if not right or right in left:
+        return left
+    return f"{left}\n{right}"
+
+
+def _unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        value = item.strip()
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result

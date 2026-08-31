@@ -23,6 +23,15 @@ class RenderResult:
     cover_path: str | None
 
 
+@dataclass(frozen=True)
+class PreviewRenderResult:
+    candidate_id: int
+    output_path: str
+    subtitle_path: str | None
+    cover_path: str | None
+    duration_seconds: float
+
+
 def render_candidate(
     session: Session,
     candidate_id: int,
@@ -41,7 +50,13 @@ def render_candidate(
         raise ValueError(f"Episode {candidate.episode_id} not found")
     existing = session.scalar(select(Export).where(Export.candidate_id == candidate_id))
     if existing is not None and not force_rerender:
-        return RenderResult(candidate_id, existing.id, existing.output_path, existing.subtitle_path, existing.cover_path)
+        return RenderResult(
+            candidate_id,
+            existing.id,
+            existing.output_path,
+            existing.subtitle_path,
+            existing.cover_path,
+        )
 
     cues = subtitle_cues_for_render(
         session,
@@ -97,3 +112,69 @@ def render_candidate(
     episode.stage = EpisodeStage.RENDERED.value
     session.commit()
     return RenderResult(candidate.id, export.id, export.output_path, export.subtitle_path, export.cover_path)
+
+
+def render_candidate_preview(
+    session: Session,
+    candidate_id: int,
+    settings: Settings,
+    include_subtitles: bool = True,
+) -> PreviewRenderResult:
+    candidate = session.get(ClipCandidate, candidate_id)
+    if candidate is None:
+        raise ValueError(f"Candidate {candidate_id} not found")
+    episode = session.get(Episode, candidate.episode_id)
+    if episode is None:
+        raise ValueError(f"Episode {candidate.episode_id} not found")
+    cues = subtitle_cues_for_render(
+        session,
+        candidate,
+        show_speaker_names=settings.subtitle_show_speaker_names,
+    )
+    subtitle_text = (
+        render_ass(
+            cues,
+            font_name=settings.subtitle_font_name,
+            font_size=max(24, settings.subtitle_font_size // 2),
+            play_res_x=540,
+            play_res_y=960,
+        )
+        if include_subtitles
+        else None
+    )
+    session.commit()
+    slug = f"preview-episode-{episode.id}-candidate-{candidate.id}"
+    artifacts = render_clip(
+        settings.ffmpeg_path,
+        Path(episode.file_path),
+        settings.cache_dir / "previews" / episode.fingerprint,
+        slug,
+        candidate.start_time,
+        candidate.end_time,
+        candidate.crop_mode,
+        subtitle_text,
+        {
+            "episode_id": episode.id,
+            "candidate_id": candidate.id,
+            "title": candidate.title,
+            "score": candidate.score,
+            "preview": True,
+            "crop_mode": candidate.crop_mode,
+            "crop_keyframes": candidate.crop_keyframes_json,
+            "start_time": candidate.start_time,
+            "end_time": candidate.end_time,
+        },
+        crop_offset_x=candidate.crop_offset_x,
+        crop_scale=candidate.crop_scale,
+        crop_keyframes=candidate.crop_keyframes_json,
+        use_nvenc=False,
+        preset_name="preview",
+        loudnorm_two_pass=False,
+    )
+    return PreviewRenderResult(
+        candidate.id,
+        str(artifacts.output_path),
+        str(artifacts.subtitle_path) if artifacts.subtitle_path else None,
+        str(artifacts.cover_path) if artifacts.cover_path else None,
+        round(candidate.end_time - candidate.start_time, 3),
+    )

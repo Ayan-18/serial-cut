@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.application.characters import speaker_name_map
-from app.media.subtitles import SubtitleCue, cues_for_range, cues_for_words
+from app.media.subtitles import SubtitleCue, cues_for_range, cues_for_words, wrap_russian_subtitle
 from app.models.entities import (
     CandidateSubtitle,
     ClipCandidate,
@@ -22,6 +22,16 @@ class EditableSubtitle:
     end_time: float
     text: str
     speaker_label: str | None = None
+
+
+@dataclass(frozen=True)
+class SubtitleQualityReport:
+    candidate_id: int
+    rows: int
+    warnings: list[str]
+    long_rows: int
+    overlaps: int
+    too_fast_rows: int
 
 
 def subtitles_for_candidate(session: Session, candidate_id: int) -> list[EditableSubtitle]:
@@ -109,6 +119,68 @@ def save_candidate_subtitles(
     return subtitles_for_candidate(session, candidate_id)
 
 
+def subtitle_quality_report(session: Session, candidate_id: int) -> SubtitleQualityReport:
+    subtitles = subtitles_for_candidate(session, candidate_id)
+    warnings: list[str] = []
+    long_rows = 0
+    overlaps = 0
+    too_fast_rows = 0
+    previous_end = 0.0
+    for index, subtitle in enumerate(subtitles, start=1):
+        text = subtitle.text.replace("\n", " ").strip()
+        duration = max(0.1, subtitle.end_time - subtitle.start_time)
+        if len(text) > 76 or any(len(line) > 38 for line in subtitle.text.splitlines()):
+            long_rows += 1
+            warnings.append(f"Строка {index}: длинный текст, лучше разбить")
+        if subtitle.start_time < previous_end - 0.05:
+            overlaps += 1
+            warnings.append(f"Строка {index}: пересекается с предыдущей")
+        if len(text) / duration > 24:
+            too_fast_rows += 1
+            warnings.append(f"Строка {index}: слишком быстро читается")
+        previous_end = max(previous_end, subtitle.end_time)
+    return SubtitleQualityReport(
+        candidate_id=candidate_id,
+        rows=len(subtitles),
+        warnings=_unique(warnings),
+        long_rows=long_rows,
+        overlaps=overlaps,
+        too_fast_rows=too_fast_rows,
+    )
+
+
+def auto_split_candidate_subtitles(
+    session: Session,
+    candidate_id: int,
+    max_chars_per_line: int = 32,
+) -> list[EditableSubtitle]:
+    current = subtitles_for_candidate(session, candidate_id)
+    split_rows: list[EditableSubtitle] = []
+    for row in current:
+        pages = [page.replace("\\N", "\n") for page in wrap_russian_subtitle(row.text, max_chars_per_line)]
+        if len(pages) <= 1:
+            split_rows.append(row)
+            continue
+        duration = row.end_time - row.start_time
+        weights = [max(1, len(page.replace("\n", " ").split())) for page in pages]
+        total = sum(weights)
+        elapsed = 0
+        for page, weight in zip(pages, weights, strict=True):
+            start = row.start_time + duration * elapsed / total
+            elapsed += weight
+            end = row.start_time + duration * elapsed / total
+            split_rows.append(
+                EditableSubtitle(
+                    None,
+                    round(start, 3),
+                    round(max(start + 0.25, end), 3),
+                    page,
+                    row.speaker_label,
+                )
+            )
+    return save_candidate_subtitles(session, candidate_id, split_rows)
+
+
 def reset_candidate_subtitles(session: Session, candidate_id: int) -> list[EditableSubtitle]:
     candidate = _candidate(session, candidate_id)
     session.execute(delete(CandidateSubtitle).where(CandidateSubtitle.candidate_id == candidate_id))
@@ -160,3 +232,13 @@ def _subtitle_render_text(item: EditableSubtitle, show_speaker_names: bool) -> s
         return text
     safe_label = item.speaker_label.replace("{", "").replace("}", "").replace("\\", "").strip()
     return f"{{\\b1}}{safe_label}:{{\\b0}}\\N{text}" if safe_label else text
+
+
+def _unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result

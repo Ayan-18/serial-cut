@@ -10,12 +10,14 @@ from app.application.stage4 import render_candidate
 from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessResult
 from app.media.rendering import (
+    RENDER_PRESETS,
     build_loudnorm_analysis_args,
     build_render_args,
     detect_nvenc,
     loudnorm_second_pass_filter,
     parse_loudnorm_stats,
     render_clip,
+    smooth_crop_keyframes,
 )
 from app.media.subtitles import SubtitleCue, cues_for_words, render_ass, render_srt, wrap_russian_subtitle
 from app.models.entities import ClipCandidate, Export, TranscriptSegment, WordTimestamp
@@ -31,6 +33,9 @@ def test_russian_subtitles_wrap_to_two_lines_and_render_formats():
     assert "PlayResX: 1080" in ass
     assert "PlayResY: 1920" in ass
     assert "Style: Default,Segoe UI,48" in ass
+    preview_ass = render_ass([SubtitleCue(1, 2.5, lines[0])], font_size=24, play_res_x=540, play_res_y=960)
+    assert "PlayResX: 540" in preview_ass
+    assert "PlayResY: 960" in preview_ass
 
 
 def test_word_subtitles_show_every_word_once_with_sequential_timing():
@@ -66,6 +71,38 @@ def test_render_command_builds_vertical_h264_aac_clip_without_shell():
     assert "aac" in args
     assert "-vf" in args
     assert args[-1] == r"C:\out\clip.mp4"
+
+
+def test_preview_preset_uses_fast_vertical_dimensions(tmp_path: Path):
+    args = build_render_args(
+        "ffmpeg",
+        tmp_path / "input.mp4",
+        tmp_path / "preview.mp4",
+        0,
+        10,
+        "center-crop",
+        None,
+        False,
+        preset=RENDER_PRESETS["preview"],
+    )
+
+    video_filter = args[args.index("-vf") + 1]
+    assert "crop=540:960" in video_filter
+    assert "1800k" in args
+
+
+def test_crop_keyframes_are_smoothed_for_preview_and_render():
+    smoothed = smooth_crop_keyframes([
+        {"time": 0, "offset": -0.9},
+        {"time": 1, "offset": 0.9},
+    ])
+    slow_move = smooth_crop_keyframes([
+        {"time": 0, "offset": -0.5},
+        {"time": 5, "offset": 0.5},
+    ])
+
+    assert smoothed[1]["offset"] == -0.62
+    assert slow_move[1]["offset"] == 0.5
 
 
 def test_render_clip_writes_metadata_and_uses_temp_output(tmp_path: Path):

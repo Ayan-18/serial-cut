@@ -118,11 +118,17 @@ def render_srt(cues: list[SubtitleCue]) -> str:
     return "\n".join(blocks)
 
 
-def render_ass(cues: list[SubtitleCue], font_name: str = "Segoe UI", font_size: int = 48) -> str:
+def render_ass(
+    cues: list[SubtitleCue],
+    font_name: str = "Segoe UI",
+    font_size: int = 48,
+    play_res_x: int = 1080,
+    play_res_y: int = 1920,
+) -> str:
     header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {play_res_x}
+PlayResY: {play_res_y}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 

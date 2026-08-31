@@ -153,6 +153,10 @@ class CharacterPhotoAdd(BaseModel):
     photo_data_url: str = Field(min_length=1, max_length=12_000_000)
 
 
+class CharacterMergeRequest(BaseModel):
+    target_character_id: int
+
+
 class CharacterRead(BaseModel):
     id: int
     season_id: int
@@ -200,6 +204,19 @@ class ReviewRequest(BaseModel):
     reason: str | None = None
 
 
+class CandidateEditRequest(BaseModel):
+    adjusted_start_time: float | None = None
+    adjusted_end_time: float | None = None
+    crop_mode: str | None = Field(default=None, pattern="^(auto-follow|center-crop|blurred-background)$")
+    crop_offset_x: float | None = Field(default=None, ge=-1, le=1)
+    crop_scale: float | None = Field(default=None, ge=1, le=2)
+
+
+class CandidateEditResponse(BaseModel):
+    candidate_id: int
+    status: str
+
+
 class ReviewResponse(BaseModel):
     candidate_id: int
     status: str
@@ -228,6 +245,15 @@ class CandidateSubtitlesUpdate(BaseModel):
     subtitles: list[CandidateSubtitlePayload] = Field(max_length=200)
 
 
+class SubtitleQualityRead(BaseModel):
+    candidate_id: int
+    rows: int
+    warnings: list[str]
+    long_rows: int
+    overlaps: int
+    too_fast_rows: int
+
+
 class AutoCropResponse(BaseModel):
     candidate_id: int
     crop_offset_x: float
@@ -246,6 +272,15 @@ class RenderResponse(BaseModel):
     output_path: str
     subtitle_path: str | None
     cover_path: str | None
+
+
+class PreviewRenderResponse(BaseModel):
+    candidate_id: int
+    output_path: str
+    subtitle_path: str | None
+    cover_path: str | None
+    duration_seconds: float
+    preview_url: str
 
 
 class RenderJobResponse(BaseModel):
@@ -271,6 +306,34 @@ class ModelDiagnosticsRead(BaseModel):
     face_ready: bool
     face_model: str
     details: list[str]
+
+
+class CandidateQualityRead(BaseModel):
+    candidate_id: int
+    duration_seconds: float
+    final_score: int
+    boundary_score: int
+    standalone_score: int
+    payoff_score: int
+    audio_score: int
+    visual_score: int
+    problems: list[str]
+    recommendations: list[str]
+
+
+class EpisodeQualityRead(BaseModel):
+    episode_id: int
+    stage: str
+    transcript_segments: int
+    words: int
+    scenes: int
+    candidates: int
+    approved: int
+    rejected: int
+    rendered: int
+    average_score: int
+    problem_candidates: int
+    top_problems: list[str]
 
 
 class ExportRead(BaseModel):
@@ -315,3 +378,16 @@ class QueueRunResponse(BaseModel):
 
 class QueueStateResponse(BaseModel):
     state: str
+
+
+class JobStageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: int
+    name: str
+    status: str
+    started_at: str | None
+    finished_at: str | None
+    error_message: str | None
+    artifact_path: str | None

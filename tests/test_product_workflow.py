@@ -5,23 +5,27 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from sqlalchemy import select
 
 from app.application.cache import cache_summary, clear_cache
 from app.application.candidate_editor import (
     EditableSubtitle,
+    auto_split_candidate_subtitles,
     save_candidate_subtitles,
+    subtitle_quality_report,
     subtitle_cues_for_render,
     subtitles_for_candidate,
 )
-from app.application.characters import add_character_photo, assign_speaker_identity
+from app.application.characters import add_character_photo, assign_speaker_identity, merge_characters
 from app.application.importer import import_season
 from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.quality_report import candidate_quality_report, episode_quality_report
 from app.infrastructure.config import Settings
 from app.infrastructure.database import make_engine
 from app.media.rendering import build_render_args
 from app.media.character_recognition import FaceObservation, face_signature, select_lip_active_face
 from app.media.voice_identity import VoiceEmbedding, merge_voice_profile, voice_signature
-from app.models.entities import Character, ClipCandidate, Episode, TranscriptSegment, WordTimestamp
+from app.models.entities import Character, ClipCandidate, Episode, JobStage, TranscriptSegment, WordTimestamp
 from app.workers.queue import enqueue_candidate_render
 from app.workers.runner import run_next_job
 
@@ -82,6 +86,41 @@ def test_candidate_subtitles_can_be_generated_edited_and_validated(session, tmp_
         save_candidate_subtitles(session, candidate.id, [EditableSubtitle(None, 9, 11, "Поздно")])
 
 
+def test_subtitle_quality_reports_and_auto_splits_long_rows(session, tmp_path: Path):
+    candidate = _candidate(session, tmp_path)
+    long_text = (
+        "Это очень длинная строка субтитров, которую сложно прочитать "
+        "в вертикальном видео за одну секунду."
+    )
+    save_candidate_subtitles(session, candidate.id, [EditableSubtitle(None, 0, 2.5, long_text)])
+
+    report = subtitle_quality_report(session, candidate.id)
+    split_rows = auto_split_candidate_subtitles(session, candidate.id)
+
+    assert report.long_rows == 1
+    assert len(split_rows) > 1
+
+
+def test_candidate_and_episode_quality_reports_surface_recommendations(session, tmp_path: Path):
+    candidate = _candidate(session, tmp_path)
+    candidate.scores_json = {
+        "boundary_quality": 55,
+        "standalone_context": 60,
+        "payoff": 62,
+        "audio_quality": 70,
+        "visual_potential": 68,
+    }
+    candidate.problems_json = ["Похоже на соседний кандидат"]
+    session.add(TranscriptSegment(episode_id=candidate.episode_id, start_time=10, end_time=20, text="Текст."))
+    session.flush()
+
+    candidate_report = candidate_quality_report(session, candidate.id)
+    episode_report = episode_quality_report(session, candidate.episode_id)
+
+    assert candidate_report.recommendations
+    assert episode_report.problem_candidates == 1
+
+
 def test_character_identity_resolves_speaker_and_can_render_name(session, tmp_path: Path):
     candidate = _candidate(session, tmp_path)
     segment = TranscriptSegment(
@@ -129,6 +168,28 @@ def test_character_photo_is_validated_and_stored_in_local_character_directory(se
     assert (tmp_path / "characters").resolve() in path.parents
     assert second_path.exists()
     assert len(character.photos_json) == 2
+
+
+def test_duplicate_characters_can_be_merged_without_losing_links(session, tmp_path: Path):
+    candidate = _candidate(session, tmp_path)
+    episode = session.get(Episode, candidate.episode_id)
+    assert episode is not None
+    target = Character(season_id=episode.season_id, name="Мария", photos_json=["a.jpg"])
+    source = Character(
+        season_id=episode.season_id,
+        name="Маша",
+        photos_json=["b.jpg"],
+        aliases_json=["Машенька"],
+    )
+    session.add_all([target, source])
+    session.flush()
+    assign_speaker_identity(session, episode.id, "Говорящий 1", source.id)
+
+    merged = merge_characters(session, source.id, target.id)
+
+    assert merged.id == target.id
+    assert "Маша" in merged.aliases_json
+    assert "b.jpg" in merged.photos_json
 
 
 def test_face_signature_is_deterministic_for_the_same_crop():
@@ -209,6 +270,19 @@ def test_render_job_runs_through_persistent_queue(session, tmp_path: Path, monke
     assert result.job_id == job.id
     assert result.status == "completed"
     assert called == {"candidate_id": candidate.id, "include_subtitles": True}
+
+
+def test_failed_queue_stage_records_error(session, tmp_path: Path):
+    candidate = _candidate(session, tmp_path)
+    job = enqueue_candidate_render(session, candidate.id, {"include_subtitles": True})
+
+    result = run_next_job(session, Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"))
+    stage = session.scalar(select(JobStage).where(JobStage.job_id == job.id))
+
+    assert result.status == "failed"
+    assert stage is not None
+    assert stage.status == "failed"
+    assert stage.error_message
 
 
 def test_crop_offset_and_scale_are_in_ffmpeg_filter(tmp_path: Path):

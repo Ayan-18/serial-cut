@@ -32,6 +32,7 @@ class RenderPresetConfig:
 RENDER_PRESETS = {
     "youtube_shorts": RenderPresetConfig(name="youtube_shorts", video_bitrate="8M", audio_bitrate="160k"),
     "instagram_reels": RenderPresetConfig(name="instagram_reels", video_bitrate="10M", audio_bitrate="192k"),
+    "preview": RenderPresetConfig(name="preview", width=540, height=960, video_bitrate="1800k", audio_bitrate="96k"),
 }
 
 
@@ -51,7 +52,16 @@ def build_render_args(
     loudnorm_filter: str = "loudnorm=I=-16:TP=-1.5:LRA=11",
 ) -> list[str]:
     preset = preset or RENDER_PRESETS["youtube_shorts"]
-    filters = [_crop_filter(crop_mode, crop_offset_x, crop_scale, crop_keyframes)]
+    filters = [
+        _crop_filter(
+            crop_mode,
+            crop_offset_x,
+            crop_scale,
+            crop_keyframes,
+            width=preset.width,
+            height=preset.height,
+        )
+    ]
     if subtitle_path is not None:
         filters.append(f"ass='{_escape_filter_path(subtitle_path)}'")
     encoder = "h264_nvenc" if use_nvenc else "libx264"
@@ -149,7 +159,7 @@ def build_cover_args(ffmpeg_path: str, input_path: Path, output_path: Path, at_s
         "-frames:v",
         "1",
         "-vf",
-        _crop_filter("blurred-background"),
+        _crop_filter("blurred-background", width=1080, height=1920),
         str(output_path),
     ]
 
@@ -227,11 +237,14 @@ def _crop_filter(
     offset_x: float = 0.0,
     scale: float = 1.0,
     keyframes: list[dict] | None = None,
+    width: int = 1080,
+    height: int = 1920,
 ) -> str:
     offset_x = max(-1.0, min(1.0, offset_x))
     scale = max(1.0, min(2.0, scale))
+    keyframes = smooth_crop_keyframes(keyframes or [])
     if crop_mode == "center-crop" or crop_mode == "auto-follow":
-        target_height = round(1920 * scale)
+        target_height = round(height * scale)
         x_ratio = (offset_x + 1.0) / 2.0
         ratio_expression = (
             _tracking_ratio_expression(keyframes)
@@ -240,17 +253,40 @@ def _crop_filter(
         )
         return (
             f"scale=-2:{target_height},"
-            f"crop=1080:1920:x='max(0,min(iw-ow,(iw-ow)*({ratio_expression})))':y='(ih-oh)/2'"
+            f"crop={width}:{height}:x='max(0,min(iw-ow,(iw-ow)*({ratio_expression})))':y='(ih-oh)/2'"
         )
-    foreground_width = round(1080 * scale)
-    foreground_height = round(1920 * scale)
+    foreground_width = round(width * scale)
+    foreground_height = round(height * scale)
     x_ratio = (offset_x + 1.0) / 2.0
     return (
         "split=2[base][fg];"
-        "[base]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=28[bg];"
+        f"[base]scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},gblur=sigma=28[bg];"
         f"[fg]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease[fit];"
         f"[bg][fit]overlay='max(0,min(W-w,(W-w)*{x_ratio:.4f}))':'(H-h)/2'"
     )
+
+
+def smooth_crop_keyframes(keyframes: list[dict], max_step_per_second: float = 0.28) -> list[dict]:
+    points: list[dict] = []
+    last_offset: float | None = None
+    last_time: float | None = None
+    for item in sorted(keyframes, key=lambda value: float(value.get("time", 0))):
+        try:
+            timestamp = max(0.0, float(item["time"]))
+            offset = max(-1.0, min(1.0, float(item["offset"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if last_offset is not None and last_time is not None:
+            max_step = max_step_per_second * max(0.25, timestamp - last_time)
+            offset = max(last_offset - max_step, min(last_offset + max_step, offset))
+        if points and abs(points[-1]["time"] - timestamp) < 0.05:
+            points[-1] = {"time": timestamp, "offset": round(offset, 4)}
+        else:
+            points.append({"time": timestamp, "offset": round(offset, 4)})
+        last_offset = offset
+        last_time = timestamp
+    return points
 
 
 def _tracking_ratio_expression(keyframes: list[dict]) -> str:

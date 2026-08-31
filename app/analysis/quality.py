@@ -17,8 +17,13 @@ def calibrate_candidate(
 ) -> CandidatePayload:
     text = _range_text(segments, candidate.start_time, candidate.end_time)
     range_words = [word for word in words if candidate.start_time <= word.start_time <= candidate.end_time]
-    range_scenes = [scene for scene in scenes if scene.end_time >= candidate.start_time and scene.start_time <= candidate.end_time]
+    range_scenes = [
+        scene
+        for scene in scenes
+        if scene.end_time >= candidate.start_time and scene.start_time <= candidate.end_time
+    ]
     duration = max(0.1, candidate.end_time - candidate.start_time)
+    pauses = _speech_pauses(segments, candidate.start_time, candidate.end_time)
 
     cuts_start = any(
         item.start_time + 0.05 < candidate.start_time < item.end_time - 0.05 for item in segments
@@ -26,17 +31,29 @@ def calibrate_candidate(
     cuts_end = any(
         item.start_time + 0.05 < candidate.end_time < item.end_time - 0.05 for item in segments
     )
-    boundary = 38 if cuts_start or cuts_end else (92 if text.rstrip().endswith((".", "!", "?", "…")) else 66)
+    completed_ending = text.rstrip().endswith((".", "!", "?", "…"))
+    boundary = 38 if cuts_start or cuts_end else (94 if completed_ending else 62)
     opening = text[:180]
-    hook = min(100, 68 + (10 if "?" in opening else 0) + (8 if "!" in opening else 0))
+    hook = min(100, 64 + (11 if "?" in opening else 0) + (9 if "!" in opening else 0))
+    hook -= 18 if _looks_like_recap_or_credits(opening, candidate.title, candidate.description) else 0
+    standalone = _standalone_score(text, candidate.standalone_reason)
+    payoff = _payoff_score(text, completed_ending)
+    emotion = _emotion_score(text, candidate.moment_type)
     word_density = len(range_words) / duration
-    audio = 92 if 0.8 <= word_density <= 4.5 else 70
+    audio = 92 if 0.8 <= word_density <= 4.5 else 68
+    if any(pause >= 2.2 for pause in pauses):
+        audio -= 14
     scene_rate = len(range_scenes) / max(1.0, duration / 10)
     visual = min(96, max(58, round(64 + scene_rate * 7)))
+    if duration > 45 and len(range_scenes) <= 1:
+        visual -= 6
 
     scores = candidate.scores.model_copy(
         update={
             "hook": round((candidate.scores.hook * 2 + hook) / 3),
+            "standalone_context": round((candidate.scores.standalone_context + standalone) / 2),
+            "payoff": round((candidate.scores.payoff + payoff) / 2),
+            "emotion": round((candidate.scores.emotion * 2 + emotion) / 3),
             "boundary_quality": round((candidate.scores.boundary_quality + boundary) / 2),
             "visual_potential": round((candidate.scores.visual_potential * 2 + visual) / 3),
             "audio_quality": round((candidate.scores.audio_quality * 2 + audio) / 3),
@@ -60,6 +77,10 @@ def calibrate_candidate(
         problems.append("Конец реплики может быть незавершённым")
     if audio < 80 and len(problems) < 5:
         problems.append("Проверьте паузы и плотность речи")
+    if standalone < 70 and len(problems) < 5:
+        problems.append("Момент может быть непонятен без контекста")
+    if payoff < 70 and len(problems) < 5:
+        problems.append("Слабая концовка для короткого ролика")
     return candidate.model_copy(update={"score": calibrated, "scores": scores, "possible_problems": problems})
 
 
@@ -112,3 +133,72 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _speech_pauses(segments: list[TranscriptSegment], start: float, end: float) -> list[float]:
+    selected = [
+        item for item in sorted(segments, key=lambda segment: segment.start_time)
+        if item.end_time >= start and item.start_time <= end
+    ]
+    return [
+        max(0.0, right.start_time - left.end_time)
+        for left, right in zip(selected, selected[1:])
+    ]
+
+
+def _looks_like_recap_or_credits(*parts: str) -> bool:
+    text = " ".join(parts).casefold()
+    markers = [
+        "ранее в сериале",
+        "в предыдущей серии",
+        "заставк",
+        "титр",
+        "opening",
+        "credits",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _standalone_score(text: str, reason: str) -> int:
+    tokens = _tokens(f"{text} {reason}")
+    score = 62
+    if len(tokens) >= 18:
+        score += 12
+    if any(marker in tokens for marker in {"деньги", "письмо", "секрет", "отец", "обман", "правда"}):
+        score += 12
+    if "?" in text:
+        score += 5
+    vague = {"это", "там", "тот", "она", "они", "него", "куда", "потом"}
+    if len(tokens & vague) >= 4:
+        score -= 8
+    return max(35, min(96, score))
+
+
+def _payoff_score(text: str, completed_ending: bool) -> int:
+    tail = text[-220:].casefold()
+    score = 58 + (18 if completed_ending else 0)
+    if any(mark in tail for mark in ["?", "!", "правда", "жив", "у меня", "не могу", "никогда"]):
+        score += 16
+    if len(_tokens(tail)) < 8:
+        score -= 8
+    return max(30, min(98, score))
+
+
+def _emotion_score(text: str, moment_type: str) -> int:
+    emotional_markers = [
+        "!",
+        "правда",
+        "скрывал",
+        "разрушил",
+        "защитить",
+        "жив",
+        "люблю",
+        "ненавижу",
+        "прости",
+    ]
+    text_cf = text.casefold()
+    score = 56
+    score += sum(7 for marker in emotional_markers if marker in text_cf)
+    if moment_type in {"конфликт", "откровение", "эмоциональный момент", "напряжение"}:
+        score += 12
+    return max(35, min(98, score))

@@ -28,6 +28,11 @@ type Subtitle = { id?: number | null; start_time: number; end_time: number; text
 type ExportItem = { id: number; candidate_id: number; output_path: string; cover_path: string | null; include_subtitles: boolean; preset_name: string; status: string };
 type ModelDiagnostics = { asr_adapter: string; asr_ready: boolean; llm_adapter: string; llm_ready: boolean; llm_url: string; face_ready: boolean; face_model: string; details: string[] };
 type CacheInfo = { cache_dir: string; files: number; bytes: number };
+type CandidateQuality = { candidate_id: number; duration_seconds: number; final_score: number; boundary_score: number; standalone_score: number; payoff_score: number; audio_score: number; visual_score: number; problems: string[]; recommendations: string[] };
+type EpisodeQuality = { episode_id: number; stage: string; transcript_segments: number; words: number; scenes: number; candidates: number; approved: number; rejected: number; rendered: number; average_score: number; problem_candidates: number; top_problems: string[] };
+type SubtitleQuality = { candidate_id: number; rows: number; warnings: string[]; long_rows: number; overlaps: number; too_fast_rows: number };
+type JobStage = { id: number; job_id: number; name: string; status: string; started_at: string | null; finished_at: string | null; error_message: string | null; artifact_path: string | null };
+type PreviewRender = { candidate_id: number; output_path: string; preview_url: string; duration_seconds: number };
 type BlockingProgress = { kind: "media" | "candidates"; episodeId: number; fileName: string; startedAt: number };
 type StoryContext = {
   season_id: number; episode_id: number; season_context: string; episode_summary: string;
@@ -54,6 +59,15 @@ function App() {
   const [subtitleBusy, setSubtitleBusy] = useState(false);
   const [candidateFilter, setCandidateFilter] = useState("all");
   const [candidateSort, setCandidateSort] = useState("score");
+  const [candidateSearch, setCandidateSearch] = useState("");
+  const [candidateMomentType, setCandidateMomentType] = useState("all");
+  const [candidateMinScore, setCandidateMinScore] = useState(0);
+  const [candidateQuality, setCandidateQuality] = useState<CandidateQuality | null>(null);
+  const [episodeQuality, setEpisodeQuality] = useState<EpisodeQuality | null>(null);
+  const [subtitleQuality, setSubtitleQuality] = useState<SubtitleQuality | null>(null);
+  const [jobStages, setJobStages] = useState<Record<number, JobStage[]>>({});
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [blockingProgress, setBlockingProgress] = useState<BlockingProgress | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -148,6 +162,7 @@ function App() {
   async function loadCandidates(episodeId: number, selectEpisode = true) {
     const data = await api<Candidate[]>(`/api/episodes/${episodeId}/candidates`);
     setCandidates((current) => ({ ...current, [episodeId]: data }));
+    setEpisodeQuality(await api<EpisodeQuality>(`/api/episodes/${episodeId}/quality`).catch(() => null));
     if (selectEpisode) { setSelectedEpisodeId(episodeId); await loadEpisodeDetails(episodeId); }
     setEdits((current) => { const next = { ...current }; for (const candidate of data) next[candidate.id] ??= editFromCandidate(candidate); return next; });
     if (selectedCandidate?.episode_id === episodeId) { const updated = data.find((item) => item.id === selectedCandidate.id); if (updated) setSelectedCandidate(updated); }
@@ -244,9 +259,14 @@ function App() {
   }
 
   async function openCandidate(candidate: Candidate, play = false) {
-    setSelectedCandidate(candidate); setSubtitleBusy(true);
+    setSelectedCandidate(candidate); setSubtitleBusy(true); setPreviewUrl(null);
     try {
-      setSubtitles(await api<Subtitle[]>(`/api/candidates/${candidate.id}/subtitles`));
+      const [subtitleRows, quality, subtitleReport] = await Promise.all([
+        api<Subtitle[]>(`/api/candidates/${candidate.id}/subtitles`),
+        api<CandidateQuality>(`/api/candidates/${candidate.id}/quality`),
+        api<SubtitleQuality>(`/api/candidates/${candidate.id}/subtitles/quality`),
+      ]);
+      setSubtitles(subtitleRows); setCandidateQuality(quality); setSubtitleQuality(subtitleReport);
       window.setTimeout(() => { const player = videoRef.current; if (!player) return; player.currentTime = Number((edits[candidate.id] ?? editFromCandidate(candidate)).start); if (play) player.play().catch(() => undefined); }, 0);
     } finally { setSubtitleBusy(false); }
   }
@@ -272,14 +292,30 @@ function App() {
     if (!selectedCandidate) return; setSubtitleBusy(true);
     try {
       const saved = await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`, { method: "PUT", headers: jsonHeaders, body: JSON.stringify({ subtitles }) });
-      setSubtitles(saved); setMessage("Субтитры сохранены");
+      setSubtitles(saved);
+      setSubtitleQuality(await api<SubtitleQuality>(`/api/candidates/${selectedCandidate.id}/subtitles/quality`));
+      setMessage("Субтитры сохранены");
     } catch (error) { setMessage(`Субтитры не сохранены: ${errorMessage(error)}`); }
     finally { setSubtitleBusy(false); }
   }
 
   async function resetSubtitles() {
     if (!selectedCandidate) return; setSubtitleBusy(true);
-    try { setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`, { method: "DELETE" })); setMessage("Субтитры пересобраны из распознанных слов"); }
+    try {
+      setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`, { method: "DELETE" }));
+      setSubtitleQuality(await api<SubtitleQuality>(`/api/candidates/${selectedCandidate.id}/subtitles/quality`));
+      setMessage("Субтитры пересобраны из распознанных слов");
+    }
+    finally { setSubtitleBusy(false); }
+  }
+
+  async function autoSplitSubtitles() {
+    if (!selectedCandidate) return; setSubtitleBusy(true);
+    try {
+      setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles/auto-split`, { method: "POST" }));
+      setSubtitleQuality(await api<SubtitleQuality>(`/api/candidates/${selectedCandidate.id}/subtitles/quality`));
+      setMessage("Длинные субтитры разбиты на короткие строки");
+    } catch (error) { setMessage(`Не удалось разбить субтитры: ${errorMessage(error)}`); }
     finally { setSubtitleBusy(false); }
   }
 
@@ -288,6 +324,31 @@ function App() {
     await api(`/api/candidates/${candidate.id}/review`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ decision: "approve", adjusted_start_time: Number(edit.start), adjusted_end_time: Number(edit.end), crop_mode: edit.crop, crop_offset_x: edit.offset, crop_scale: edit.scale }) });
     const job = await api<Job>(`/api/candidates/${candidate.id}/render-job`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ include_subtitles: includeSubtitles, use_nvenc: settings?.render_use_nvenc ?? null, preset_name: settings?.render_preset, loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null, force_rerender: true }) });
     setMessage(`Рендер поставлен в очередь, задача №${job.id}. Можно продолжать работу.`); await refreshActivity();
+  }
+
+  async function renderPreview(candidate: Candidate) {
+    const edit = edits[candidate.id] ?? editFromCandidate(candidate);
+    setPreviewBusy(true); setMessage("Быстрый preview рендерится…");
+    try {
+      await api(`/api/candidates/${candidate.id}`, { method: "PATCH", headers: jsonHeaders, body: JSON.stringify({ adjusted_start_time: Number(edit.start), adjusted_end_time: Number(edit.end), crop_mode: edit.crop, crop_offset_x: edit.offset, crop_scale: edit.scale }) });
+      const data = await api<PreviewRender>(`/api/candidates/${candidate.id}/preview`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ include_subtitles: true, force_rerender: true }) });
+      setPreviewUrl(`${data.preview_url}?t=${Date.now()}`);
+      setMessage(`Preview готов: ${data.duration_seconds.toFixed(1)} сек`);
+      await loadCandidates(candidate.episode_id, false);
+    } catch (error) { setMessage(`Preview не создан: ${errorMessage(error)}`); }
+    finally { setPreviewBusy(false); }
+  }
+
+  async function loadJobStages(jobId: number) {
+    const stages = await api<JobStage[]>(`/api/jobs/${jobId}/stages`);
+    setJobStages((current) => ({ ...current, [jobId]: stages }));
+  }
+
+  async function mergeCharacter(sourceId: number, targetId: number) {
+    if (!storyContext || !targetId || sourceId === targetId) return;
+    if (!window.confirm("Объединить этого персонажа с выбранным? Привязки голосов перейдут к целевой карточке.")) return;
+    await api<Character>(`/api/characters/${sourceId}/merge`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ target_character_id: targetId }) });
+    await loadEpisodeDetails(storyContext.episode_id); setMessage("Карточки персонажей объединены");
   }
 
   async function autoExport(episodeId: number) {
@@ -322,9 +383,18 @@ function App() {
 
   const visibleCandidates = useMemo(() => {
     const items = [...(selectedEpisodeId ? candidates[selectedEpisodeId] ?? [] : [])];
-    const filtered = candidateFilter === "all" ? items : items.filter((item) => item.status === candidateFilter);
-    return filtered.sort(candidateSort === "time" ? (a, b) => a.start_time - b.start_time : (a, b) => b.score - a.score);
-  }, [candidateFilter, candidateSort, candidates, selectedEpisodeId]);
+    const search = candidateSearch.trim().toLocaleLowerCase("ru");
+    const filtered = items.filter((item) => {
+      if (candidateFilter === "problem" && !item.problems_json.length) return false;
+      if (candidateFilter !== "all" && candidateFilter !== "problem" && item.status !== candidateFilter) return false;
+      if (candidateMomentType !== "all" && item.moment_type !== candidateMomentType) return false;
+      if (item.score < candidateMinScore) return false;
+      if (!search) return true;
+      return `${item.title} ${item.description} ${item.rationale} ${item.moment_type}`.toLocaleLowerCase("ru").includes(search);
+    });
+    return filtered.sort(candidateSort === "time" ? (a, b) => a.start_time - b.start_time : candidateSort === "boundary" ? (a, b) => (b.scores_json.boundary_quality ?? 0) - (a.scores_json.boundary_quality ?? 0) : (a, b) => b.score - a.score);
+  }, [candidateFilter, candidateMinScore, candidateMomentType, candidateSearch, candidateSort, candidates, selectedEpisodeId]);
+  const momentTypes = useMemo(() => Array.from(new Set((selectedEpisodeId ? candidates[selectedEpisodeId] ?? [] : []).map((item) => item.moment_type))).sort(), [candidates, selectedEpisodeId]);
   const activeSubtitle = selectedCandidate ? subtitles.find((item) => { const relative = videoTime - Number((edits[selectedCandidate.id] ?? editFromCandidate(selectedCandidate)).start); return relative >= item.start_time && relative <= item.end_time; }) : undefined;
   const selectedEdit = selectedCandidate ? edits[selectedCandidate.id] ?? editFromCandidate(selectedCandidate) : null;
 
@@ -340,7 +410,7 @@ function App() {
       </div></div>
       <div className="panel"><div className="panel-title"><Server size={19} /><h2>Очередь</h2><span className={queue?.snapshot.paused ? "badge warn" : "badge ok"}>{queue?.snapshot.paused ? "пауза" : "авто"}</span></div><div className="queue-actions"><button className="icon-button" title="Выполнить следующую сейчас" onClick={runQueueNext}><Play size={18} /></button><button className="icon-button secondary" title="Пауза" onClick={() => setPaused(true)}><Pause size={18} /></button><button className="icon-button" title="Продолжить" onClick={() => setPaused(false)}><Play size={18} /></button></div>
         <div className="queue-stats"><span><strong>{queue?.snapshot.queued ?? 0}</strong> ожидают</span><span><strong>{queue?.snapshot.running ?? 0}</strong> работают</span><span><strong>{queue?.snapshot.failed ?? 0}</strong> ошибок</span><span><strong>{formatEta(queue?.snapshot.eta_seconds)}</strong> ETA</span></div>
-        <div className="job-list">{(queue?.items ?? []).slice(0, 6).map((job) => <article className="job" key={job.id}><div><strong>№{job.id} · {jobLabel(job.kind)}</strong><span>{stageLabel(job.current_stage)} · {statusLabel(job.status)}{job.status === "running" ? ` · ${elapsedFrom(job.updated_at)}` : ""}</span></div><div className={`progress ${job.status === "running" ? "active" : ""}`}><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>{job.error_message && <small className="error-text">{job.error_message}</small>}<div className="job-actions">{["queued", "running", "paused", "cancel_requested"].includes(job.status) && <button className="text-button danger" onClick={() => cancelJob(job.id)}>Остановить</button>}{job.status === "failed" && <button className="text-button" onClick={() => retryJob(job.id)}>Повторить</button>}</div></article>)}</div>
+        <div className="job-list">{(queue?.items ?? []).slice(0, 6).map((job) => <article className="job" key={job.id}><div><strong>№{job.id} · {jobLabel(job.kind)}</strong><span>{stageLabel(job.current_stage)} · {statusLabel(job.status)}{job.status === "running" ? ` · ${elapsedFrom(job.updated_at)}` : ""}</span></div><div className={`progress ${job.status === "running" ? "active" : ""}`}><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>{job.error_message && <small className="error-text">{job.error_message}</small>}<div className="job-actions"><button className="text-button" onClick={() => loadJobStages(job.id)}>Этапы</button>{["queued", "running", "paused", "cancel_requested"].includes(job.status) && <button className="text-button danger" onClick={() => cancelJob(job.id)}>Остановить</button>}{job.status === "failed" && <button className="text-button" onClick={() => retryJob(job.id)}>Повторить</button>}</div>{jobStages[job.id] && <ol className="job-timeline">{jobStages[job.id].map((stage) => <li key={stage.id}><span className={`dot ${stage.status === "completed" ? "ok" : stage.status === "failed" ? "fail" : ""}`} /><strong>{stageLabel(stage.name)}</strong><small>{statusLabel(stage.status)}{stage.error_message ? ` · ${stage.error_message}` : ""}</small></li>)}</ol>}</article>)}</div>
       </div>
     </section>
 
@@ -358,21 +428,24 @@ function App() {
       </div>
       <div className="panel character-panel"><div className="panel-title"><UserRound size={19} /><h2>Персонажи и голоса</h2><span className="badge">{characters.length}</span></div>
         <div className="character-create"><input value={characterName} onChange={(event) => setCharacterName(event.target.value)} placeholder="Имя персонажа" /><input value={characterDescription} onChange={(event) => setCharacterDescription(event.target.value)} placeholder="Краткое описание" /><label className="file-picker">{characterPhotos.length ? `Выбрано фото: ${characterPhotos.length}` : "Выбрать несколько фото"}<input multiple type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => readCharacterPhotos(event.target.files)} /></label><button disabled={!characterName.trim()} onClick={createCharacter}>Добавить</button></div>
-        <div className="character-list">{characters.map((character) => <article className="character-card" key={character.id}><div className="character-photos">{character.photo_urls.map((url, index) => <span className="character-photo" key={url}><img src={url} alt={`${character.name}, фото ${index + 1}`} /><button title="Удалить это фото" onClick={() => deleteCharacterPhoto(character.id, index)}>×</button></span>)}{!character.photo_urls.length && <span className="character-placeholder"><UserRound /></span>}<label className="character-photo-add" title="Добавить фотографии">+<input multiple type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => addCharacterPhotos(character.id, event.target.files)} /></label></div><div className="character-info"><strong>{character.name}</strong><small>{character.description || "Без описания"}</small><small>{character.photo_count} фото · голосовых образцов: {character.voice_sample_count}</small></div><button className="icon-button danger" title="Удалить персонажа" onClick={() => deleteCharacter(character.id)}><Trash2 size={15} /></button></article>)}{!characters.length && <p className="empty">Добавьте имя и 3–8 фотографий с разными ракурсами. Все файлы останутся на компьютере.</p>}</div>
+        <div className="character-list">{characters.map((character) => <article className="character-card" key={character.id}><div className="character-photos">{character.photo_urls.map((url, index) => <span className="character-photo" key={url}><img src={url} alt={`${character.name}, фото ${index + 1}`} /><button title="Удалить это фото" onClick={() => deleteCharacterPhoto(character.id, index)}>×</button></span>)}{!character.photo_urls.length && <span className="character-placeholder"><UserRound /></span>}<label className="character-photo-add" title="Добавить фотографии">+<input multiple type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => addCharacterPhotos(character.id, event.target.files)} /></label></div><div className="character-info"><strong>{character.name}</strong><small>{character.description || "Без описания"}</small><small>{character.photo_count} фото · голосовых образцов: {character.voice_sample_count}</small><select title="Объединить дубль в другого персонажа" value="" onChange={(event) => mergeCharacter(character.id, Number(event.target.value))}><option value="">Объединить в…</option>{characters.filter((item) => item.id !== character.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><button className="icon-button danger" title="Удалить персонажа" onClick={() => deleteCharacter(character.id)}><Trash2 size={15} /></button></article>)}{!characters.length && <p className="empty">Добавьте имя и 3–8 фотографий с разными ракурсами. Все файлы останутся на компьютере.</p>}</div>
         {!!speakerLabels.length && <div className="speaker-map"><h3>Кто скрывается за голосами</h3>{speakerLabels.map((label) => { const current = speakerIdentities.find((item) => item.source_label === label); return <label key={label}><span>{label}</span><select value={current?.character_id ?? ""} onChange={(event) => assignSpeaker(label, Number(event.target.value))}><option value="">Не определён</option>{characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select>{current && <small>{current.confidence != null ? `${Math.round(current.confidence * 100)}% · ` : ""}{identityMethodLabel(current.method)}</small>}</label>; })}</div>}
         <button className="secondary identify-button" disabled={!characters.some((item) => item.photo_count > 0 || item.voice_sample_count > 0) || isEpisodeBusy(selectedEpisodeId)} onClick={identifyCharacters}><WandSparkles size={16} /> Лица + губы + голоса</button>
       </div>
     </section>}
 
     {selectedEpisodeId && <section className="workspace section-gap">
-      <div className="panel candidate-panel"><div className="panel-title"><Clapperboard size={19} /><h2>Кандидаты</h2></div><div className="candidate-toolbar"><label><ListFilter size={16} /><select value={candidateFilter} onChange={(event) => setCandidateFilter(event.target.value)}><option value="all">Все статусы</option><option value="new">Новые</option><option value="approved">Принятые</option><option value="rejected">Отклонённые</option><option value="rendered">Готовые</option></select></label><select value={candidateSort} onChange={(event) => setCandidateSort(event.target.value)}><option value="score">Сначала лучшие</option><option value="time">По времени</option></select></div>
-        <div className="candidate-list">{visibleCandidates.map((candidate) => { const edit = edits[candidate.id] ?? editFromCandidate(candidate); const busy = isEpisodeBusy(candidate.episode_id); return <article className={`candidate ${selectedCandidate?.id === candidate.id ? "selected" : ""}`} key={candidate.id}><button className="candidate-main" onClick={() => openCandidate(candidate, true)}><span className="score">{candidate.score}</span><span><strong>{candidate.story_order ? `Часть ${candidate.story_order} · ` : ""}{candidate.title}</strong><small>{candidate.story_role ? `${candidate.story_role} · ` : ""}{candidate.moment_type} · {statusLabel(candidate.status)} · {formatRange(candidate.start_time, candidate.end_time)}</small></span><Play size={18} /></button><p>{candidate.description}</p>{candidate.continuity_note && <small className="continuity-note">Связность: {candidate.continuity_note}</small>}{!!candidate.problems_json.length && <small className="error-text">{candidate.problems_json.join(" · ")}</small>}<div className="compact-edit"><label>Начало<input value={edit.start} onChange={(event) => setCandidateEdit(candidate.id, { start: event.target.value })} /></label><label>Конец<input value={edit.end} onChange={(event) => setCandidateEdit(candidate.id, { end: event.target.value })} /></label><select value={edit.crop} onChange={(event) => setCandidateEdit(candidate.id, { crop: event.target.value as Candidate["crop_mode"] })}><option value="blurred-background">Фон с размытием</option><option value="center-crop">Центр</option><option value="auto-follow">По лицам</option></select></div><div className="candidate-actions"><button disabled={busy} onClick={() => reviewCandidate(candidate, "approve")}><Check size={16} /> Принять</button><button className="secondary" disabled={busy} onClick={() => reviewCandidate(candidate, "reject")}><X size={16} /> Отклонить</button><button disabled={busy} onClick={() => renderCandidate(candidate, true)}>Рендер с субтитрами</button><button className="secondary" disabled={busy} onClick={() => renderCandidate(candidate, false)}>Без субтитров</button></div></article>; })}{!visibleCandidates.length && <p className="empty">Кандидатов с выбранным фильтром нет.</p>}</div>
+      <div className="panel candidate-panel"><div className="panel-title"><Clapperboard size={19} /><h2>Кандидаты</h2>{episodeQuality && <span className="badge">средний score {episodeQuality.average_score}</span>}</div><div className="candidate-toolbar expanded"><label><ListFilter size={16} /><select value={candidateFilter} onChange={(event) => setCandidateFilter(event.target.value)}><option value="all">Все статусы</option><option value="new">Новые</option><option value="approved">Принятые</option><option value="rejected">Отклонённые</option><option value="rendered">Готовые</option><option value="problem">С проблемами</option></select></label><select value={candidateSort} onChange={(event) => setCandidateSort(event.target.value)}><option value="score">Сначала лучшие</option><option value="boundary">Лучшие границы</option><option value="time">По времени</option></select><select value={candidateMomentType} onChange={(event) => setCandidateMomentType(event.target.value)}><option value="all">Все типы</option>{momentTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select><input value={candidateSearch} onChange={(event) => setCandidateSearch(event.target.value)} placeholder="Поиск по смыслу" /><label className="score-filter">Score ≥ <input type="number" min="0" max="100" value={candidateMinScore} onChange={(event) => setCandidateMinScore(Number(event.target.value))} /></label></div>{episodeQuality && <div className="quality-strip"><span>{episodeQuality.transcript_segments} сегм.</span><span>{episodeQuality.scenes} сцен</span><span>{episodeQuality.candidates} кандид.</span><span>{episodeQuality.problem_candidates} с замечаниями</span>{episodeQuality.top_problems.slice(0, 2).map((problem) => <span key={problem}>{problem}</span>)}</div>}
+        <div className="candidate-list">{visibleCandidates.map((candidate) => { const edit = edits[candidate.id] ?? editFromCandidate(candidate); const busy = isEpisodeBusy(candidate.episode_id); return <article className={`candidate ${selectedCandidate?.id === candidate.id ? "selected" : ""}`} key={candidate.id}><button className="candidate-main" onClick={() => openCandidate(candidate, true)}><span className="score">{candidate.score}</span><span><strong>{candidate.story_order ? `Часть ${candidate.story_order} · ` : ""}{candidate.title}</strong><small>{candidate.story_role ? `${candidate.story_role} · ` : ""}{candidate.moment_type} · {statusLabel(candidate.status)} · {formatRange(candidate.start_time, candidate.end_time)}</small></span><Play size={18} /></button><div className="score-breakdown"><span>Hook {candidate.scores_json.hook ?? "—"}</span><span>Контекст {candidate.scores_json.standalone_context ?? "—"}</span><span>Финал {candidate.scores_json.payoff ?? "—"}</span><span>Границы {candidate.scores_json.boundary_quality ?? "—"}</span></div><p>{candidate.description}</p>{candidate.continuity_note && <small className="continuity-note">Связность: {candidate.continuity_note}</small>}{!!candidate.problems_json.length && <small className="error-text">{candidate.problems_json.join(" · ")}</small>}<div className="compact-edit"><label>Начало<input value={edit.start} onChange={(event) => setCandidateEdit(candidate.id, { start: event.target.value })} /></label><label>Конец<input value={edit.end} onChange={(event) => setCandidateEdit(candidate.id, { end: event.target.value })} /></label><select value={edit.crop} onChange={(event) => setCandidateEdit(candidate.id, { crop: event.target.value as Candidate["crop_mode"] })}><option value="blurred-background">Фон с размытием</option><option value="center-crop">Центр</option><option value="auto-follow">По лицам</option></select></div><div className="candidate-actions"><button disabled={busy} onClick={() => reviewCandidate(candidate, "approve")}><Check size={16} /> Принять</button><button className="secondary" disabled={busy} onClick={() => reviewCandidate(candidate, "reject")}><X size={16} /> Отклонить</button><button className="secondary" disabled={busy || previewBusy} onClick={() => renderPreview(candidate)}><Play size={16} /> Preview</button><button disabled={busy} onClick={() => renderCandidate(candidate, true)}>Рендер с субтитрами</button><button className="secondary" disabled={busy} onClick={() => renderCandidate(candidate, false)}>Без субтитров</button></div></article>; })}{!visibleCandidates.length && <p className="empty">Кандидатов с выбранным фильтром нет.</p>}</div>
       </div>
       <div className="panel editor-panel"><div className="panel-title"><WandSparkles size={19} /><h2>Предпросмотр и редактор</h2></div>{selectedCandidate && selectedEdit ? <>
         <div className={`preview-frame ${selectedEdit.crop}`}><video className="preview-background" ref={backgroundVideoRef} muted src={`/api/episodes/${selectedEpisodeId}/proxy`} /><video className="preview-foreground" ref={videoRef} controls src={`/api/episodes/${selectedEpisodeId}/proxy`} onTimeUpdate={onVideoTimeUpdate} onPlay={() => backgroundVideoRef.current?.play().catch(() => undefined)} onPause={() => backgroundVideoRef.current?.pause()} style={{ objectPosition: `${50 + previewCropOffset(selectedCandidate, selectedEdit, videoTime) * 35}% 50%`, transform: `scale(${selectedEdit.scale})` }} />{activeSubtitle && <div className="subtitle-preview"><small>{activeSubtitle.speaker_label}</small>{activeSubtitle.text}</div>}</div>
+        {previewUrl && <video className="render-preview" controls src={previewUrl} />}
         <div className="preview-summary"><strong>{selectedCandidate.title}</strong><span>{formatRange(Number(selectedEdit.start), Number(selectedEdit.end))}</span></div>
+        {candidateQuality && <div className="quality-panel"><div className="quality-grid"><span><strong>{candidateQuality.final_score}</strong> score</span><span><strong>{candidateQuality.boundary_score}</strong> границы</span><span><strong>{candidateQuality.standalone_score}</strong> контекст</span><span><strong>{candidateQuality.payoff_score}</strong> финал</span></div>{candidateQuality.recommendations.length ? <ul>{candidateQuality.recommendations.map((item) => <li key={item}>{item}</li>)}</ul> : <small>Критичных замечаний нет.</small>}</div>}
         <div className="crop-controls"><label>Смещение по горизонтали <span>{selectedEdit.offset.toFixed(2)}</span><input type="range" min="-1" max="1" step="0.02" value={selectedEdit.offset} onChange={(event) => setCandidateEdit(selectedCandidate.id, { offset: Number(event.target.value) })} /></label><label>Масштаб <span>{selectedEdit.scale.toFixed(2)}×</span><input type="range" min="1" max="2" step="0.02" value={selectedEdit.scale} onChange={(event) => setCandidateEdit(selectedCandidate.id, { scale: Number(event.target.value) })} /></label><button disabled={isEpisodeBusy(selectedCandidate.episode_id)} onClick={() => autoCrop(selectedCandidate)}><WandSparkles size={16} /> Найти лица</button></div>
-        <div className="subtitle-header"><div><h3>Субтитры</h3><small>Время указано относительно начала клипа.</small></div><div><button className="icon-button secondary" title="Пересобрать" disabled={subtitleBusy || isEpisodeBusy(selectedCandidate.episode_id)} onClick={resetSubtitles}><RotateCcw size={17} /></button><button onClick={saveSubtitles} disabled={subtitleBusy || isEpisodeBusy(selectedCandidate.episode_id)}><Save size={16} /> Сохранить</button></div></div>
+        <div className="subtitle-header"><div><h3>Субтитры</h3><small>{subtitleQuality ? `${subtitleQuality.rows} строк · замечаний ${subtitleQuality.warnings.length}` : "Время указано относительно начала клипа."}</small></div><div><button className="secondary" disabled={subtitleBusy || isEpisodeBusy(selectedCandidate.episode_id)} onClick={autoSplitSubtitles}>Разбить</button><button className="icon-button secondary" title="Пересобрать" disabled={subtitleBusy || isEpisodeBusy(selectedCandidate.episode_id)} onClick={resetSubtitles}><RotateCcw size={17} /></button><button onClick={saveSubtitles} disabled={subtitleBusy || isEpisodeBusy(selectedCandidate.episode_id)}><Save size={16} /> Сохранить</button></div></div>
+        {subtitleQuality?.warnings.length ? <div className="subtitle-warnings">{subtitleQuality.warnings.slice(0, 4).map((warning) => <small key={warning}>{warning}</small>)}</div> : null}
         <div className="subtitle-list">{subtitles.map((subtitle, index) => <article className="subtitle-row" key={`${subtitle.id ?? "new"}-${index}`}><input type="number" step="0.05" value={subtitle.start_time} onChange={(event) => updateSubtitle(index, { start_time: Number(event.target.value) })} /><input type="number" step="0.05" value={subtitle.end_time} onChange={(event) => updateSubtitle(index, { end_time: Number(event.target.value) })} /><textarea rows={2} value={subtitle.text} onChange={(event) => updateSubtitle(index, { text: event.target.value })} /><select title="Говорящий" value={subtitle.speaker_label ?? ""} onChange={(event) => updateSubtitle(index, { speaker_label: event.target.value || null })}><option value="">Неизвестный</option>{subtitle.speaker_label && !characters.some((item) => item.name === subtitle.speaker_label) && <option value={subtitle.speaker_label}>{subtitle.speaker_label}</option>}{characters.map((character) => <option key={character.id} value={character.name}>{character.name}</option>)}</select><button className="icon-button danger" title="Удалить строку" onClick={() => setSubtitles((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={16} /></button></article>)}</div>
         <button className="secondary add-subtitle" onClick={() => setSubtitles((current) => [...current, { start_time: 0, end_time: 1, text: "Новая строка", speaker_label: null }])}>Добавить строку</button>
       </> : <p className="empty">Нажмите на кандидата, чтобы посмотреть только его отрывок и отредактировать кадр и субтитры.</p>}</div>

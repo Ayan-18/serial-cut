@@ -159,12 +159,20 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
     stage.started_at = datetime.now(timezone.utc).isoformat()
     job.current_stage = name
     session.commit()
-    fn()
-    stage.status = JobStatus.COMPLETED.value
-    stage.finished_at = datetime.now(timezone.utc).isoformat()
-    stage.error_message = None
-    job.progress = progress
-    session.commit()
+    try:
+        fn()
+    except Exception as exc:
+        stage.status = JobStatus.FAILED.value
+        stage.finished_at = datetime.now(timezone.utc).isoformat()
+        stage.error_message = str(exc)
+        session.commit()
+        raise
+    else:
+        stage.status = JobStatus.COMPLETED.value
+        stage.finished_at = datetime.now(timezone.utc).isoformat()
+        stage.error_message = None
+        job.progress = progress
+        session.commit()
 
 
 def _get_or_create_stage(session: Session, job: Job, name: str) -> JobStage:

@@ -14,10 +14,13 @@ from app.api.schemas import (
     AutoExportResponse,
     CacheClearRequest,
     CacheRead,
+    CandidateEditRequest,
+    CandidateEditResponse,
     CandidateRead,
     CandidateSubtitlePayload,
     CandidateSubtitlesUpdate,
     CharacterCreate,
+    CharacterMergeRequest,
     CharacterPhotoAdd,
     CharacterRead,
     CharacterRecognitionResponse,
@@ -26,9 +29,13 @@ from app.api.schemas import (
     ImportResponse,
     JobRead,
     ModelDiagnosticsRead,
+    CandidateQualityRead,
     EpisodeOutlineRead,
+    EpisodeQualityRead,
+    JobStageRead,
     QueueRunResponse,
     QueueStateResponse,
+    PreviewRenderResponse,
     RenderRequest,
     RenderResponse,
     ReviewRequest,
@@ -38,6 +45,7 @@ from app.api.schemas import (
     SeasonRead,
     Stage2RunResponse,
     Stage3RunResponse,
+    SubtitleQualityRead,
     SpeakerIdentityRead,
     SpeakerIdentityUpdate,
     SpeakerLabelsRead,
@@ -46,8 +54,10 @@ from app.api.schemas import (
 )
 from app.application.candidate_editor import (
     EditableSubtitle,
+    auto_split_candidate_subtitles,
     reset_candidate_subtitles,
     save_candidate_subtitles,
+    subtitle_quality_report,
     subtitles_for_candidate,
 )
 from app.application.auto import auto_approve_and_export
@@ -55,6 +65,7 @@ from app.application.cache import cache_summary, clear_cache
 from app.application.characters import (
     add_character_photo,
     assign_speaker_identity,
+    merge_characters,
     recognize_episode_characters,
     train_character_voice,
 )
@@ -62,17 +73,19 @@ from app.application.importer import import_season
 from app.application.model_diagnostics import check_models
 from app.application.processing_guard import ProcessingBusyError, processing_guard
 from app.application.queue_control import get_queue_state, set_queue_paused
-from app.application.review import review_candidate
+from app.application.quality_report import candidate_quality_report, episode_quality_report
+from app.application.review import review_candidate, save_candidate_edits
 from app.application.settings import RuntimeSettings, effective_settings, get_runtime_settings, save_runtime_settings
 from app.application.stage2 import run_stage2_media_analysis
 from app.application.stage3 import run_stage3_candidate_analysis
-from app.application.stage4 import render_candidate
+from app.application.stage4 import render_candidate, render_candidate_preview
 from app.application.system_check import report_as_dict, run_system_check
 from app.domain.enums import JobStatus
 from app.infrastructure.database import SessionLocal
 from app.media.ffprobe import apply_probe_to_episode, probe_media
 from app.media.character_recognition import CharacterProfile
 from app.media.face_tracking import SpeechRange, estimate_face_offset
+from app.media.rendering import smooth_crop_keyframes
 from app.models.entities import (
     Character,
     ClipCandidate,
@@ -80,13 +93,21 @@ from app.models.entities import (
     EpisodeOutline,
     Export,
     Job,
+    JobStage,
     Season,
     SpeakerIdentity,
     TranscriptSegment,
 )
 from app.infrastructure.config import get_settings
-from app.workers.queue import enqueue_candidate_render, enqueue_episode_analysis, queue_snapshot, recover_interrupted_jobs
-from app.workers.queue import enqueue_season_analysis, request_cancel, retry_job
+from app.workers.queue import (
+    enqueue_candidate_render,
+    enqueue_episode_analysis,
+    enqueue_season_analysis,
+    queue_snapshot,
+    recover_interrupted_jobs,
+    request_cancel,
+    retry_job,
+)
 from app.workers.runner import estimate_eta_seconds, run_next_job
 
 router = APIRouter(prefix="/api")
@@ -293,6 +314,22 @@ def delete_character(character_id: int, session: Session = Depends(get_session))
     return {"deleted": True}
 
 
+@router.post("/characters/{character_id}/merge", response_model=CharacterRead)
+def merge_character_endpoint(
+    character_id: int,
+    payload: CharacterMergeRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        character = merge_characters(session, character_id, payload.target_character_id)
+        session.commit()
+        session.refresh(character)
+        return _character_read(character)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/episodes/{episode_id}/speaker-identities", response_model=list[SpeakerIdentityRead])
 def list_speaker_identities(episode_id: int, session: Session = Depends(get_session)):
     _get_episode(session, episode_id)
@@ -471,6 +508,14 @@ def list_episode_candidates(episode_id: int, session: Session = Depends(get_sess
     ).all()
 
 
+@router.get("/episodes/{episode_id}/quality", response_model=EpisodeQualityRead)
+def episode_quality(episode_id: int, session: Session = Depends(get_session)):
+    try:
+        return episode_quality_report(session, episode_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/episodes/{episode_id}/proxy")
 def episode_proxy(episode_id: int, session: Session = Depends(get_session)):
     episode = session.get(Episode, episode_id)
@@ -511,6 +556,14 @@ def read_candidate_subtitles(candidate_id: int, session: Session = Depends(get_s
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/candidates/{candidate_id}/quality", response_model=CandidateQualityRead)
+def candidate_quality(candidate_id: int, session: Session = Depends(get_session)):
+    try:
+        return candidate_quality_report(session, candidate_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.put("/candidates/{candidate_id}/subtitles", response_model=list[CandidateSubtitlePayload])
 def update_candidate_subtitles(
     candidate_id: int,
@@ -534,6 +587,25 @@ def update_candidate_subtitles(
 def reset_candidate_subtitles_endpoint(candidate_id: int, session: Session = Depends(get_session)):
     try:
         result = reset_candidate_subtitles(session, candidate_id)
+        session.commit()
+        return result
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/candidates/{candidate_id}/subtitles/quality", response_model=SubtitleQualityRead)
+def read_subtitle_quality(candidate_id: int, session: Session = Depends(get_session)):
+    try:
+        return subtitle_quality_report(session, candidate_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/candidates/{candidate_id}/subtitles/auto-split", response_model=list[CandidateSubtitlePayload])
+def auto_split_subtitles(candidate_id: int, session: Session = Depends(get_session)):
+    try:
+        result = auto_split_candidate_subtitles(session, candidate_id)
         session.commit()
         return result
     except Exception as exc:
@@ -595,14 +667,14 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
             )
         candidate.crop_mode = "auto-follow"
         candidate.crop_offset_x = result.offset_x
-        candidate.crop_keyframes_json = result.keyframes
+        candidate.crop_keyframes_json = smooth_crop_keyframes(result.keyframes)
         session.commit()
         return AutoCropResponse(
             candidate_id=candidate.id,
             crop_offset_x=candidate.crop_offset_x,
             faces_detected=result.faces_detected,
             frames_sampled=result.frames_sampled,
-            keyframes=result.keyframes,
+            keyframes=candidate.crop_keyframes_json,
             active_speaker_frames=result.active_speaker_frames,
             identified_speaker_frames=result.identified_speaker_frames,
             lip_motion_frames=result.lip_motion_frames,
@@ -644,6 +716,79 @@ def render_candidate_endpoint(candidate_id: int, payload: RenderRequest, session
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
+
+
+@router.patch("/candidates/{candidate_id}", response_model=CandidateEditResponse)
+def update_candidate_edits(
+    candidate_id: int,
+    payload: CandidateEditRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        result = save_candidate_edits(
+            session,
+            candidate_id,
+            payload.adjusted_start_time,
+            payload.adjusted_end_time,
+            payload.crop_mode,
+            payload.crop_offset_x,
+            payload.crop_scale,
+        )
+        session.commit()
+        return result
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/candidates/{candidate_id}/preview", response_model=PreviewRenderResponse)
+def render_candidate_preview_endpoint(
+    candidate_id: int,
+    payload: RenderRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        candidate = session.get(ClipCandidate, candidate_id)
+        if candidate is None:
+            raise ValueError(f"Candidate {candidate_id} not found")
+        _ensure_episode_not_enqueued(session, candidate.episode_id)
+        settings = effective_settings(session, get_settings())
+        session.commit()
+        with processing_guard():
+            result = render_candidate_preview(
+                session,
+                candidate_id,
+                settings,
+                include_subtitles=payload.include_subtitles,
+            )
+        session.commit()
+        return PreviewRenderResponse(
+            **result.__dict__,
+            preview_url=f"/api/candidates/{candidate_id}/preview-file",
+        )
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/candidates/{candidate_id}/preview-file")
+def candidate_preview_file(candidate_id: int, session: Session = Depends(get_session)):
+    candidate = session.get(ClipCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Кандидат не найден")
+    episode = session.get(Episode, candidate.episode_id)
+    if episode is None:
+        raise HTTPException(status_code=404, detail="Серия не найдена")
+    settings = effective_settings(session, get_settings())
+    slug = f"preview-episode-{episode.id}-candidate-{candidate.id}.mp4"
+    path = (settings.cache_dir / "previews" / episode.fingerprint / slug).resolve()
+    root = (settings.cache_dir / "previews").resolve()
+    if root not in path.parents or not path.exists():
+        raise HTTPException(status_code=404, detail="Preview ещё не создан")
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
 @router.post("/candidates/{candidate_id}/render-job", response_model=JobRead)
@@ -779,6 +924,15 @@ def jobs(session: Session = Depends(get_session)):
     )
     items = session.scalars(select(Job).order_by(Job.updated_at.desc())).all()
     return {"snapshot": snapshot.__dict__, "items": items}
+
+
+@router.get("/jobs/{job_id}/stages", response_model=list[JobStageRead])
+def job_stages(job_id: int, session: Session = Depends(get_session)):
+    if session.get(Job, job_id) is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    return session.scalars(
+        select(JobStage).where(JobStage.job_id == job_id).order_by(JobStage.id)
+    ).all()
 
 
 def _get_export(session: Session, export_id: int) -> Export:
