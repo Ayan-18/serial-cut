@@ -5,6 +5,14 @@ from dataclasses import dataclass
 from app.models.entities import TranscriptSegment, WordTimestamp
 
 
+SAFE_ZONE_MARGINS = {
+    "standard": (72, 72, 220),
+    "shorts": (90, 90, 320),
+    "reels": (90, 90, 300),
+    "high": (96, 96, 380),
+}
+
+
 @dataclass(frozen=True)
 class SubtitleCue:
     start_time: float
@@ -124,7 +132,9 @@ def render_ass(
     font_size: int = 48,
     play_res_x: int = 1080,
     play_res_y: int = 1920,
+    safe_zone: str = "standard",
 ) -> str:
+    margin_l, margin_r, margin_v = _scaled_margins(safe_zone, play_res_x, play_res_y)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {play_res_x}
@@ -134,7 +144,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H00111111,&H99000000,0,0,0,0,100,100,0,0,1,3,1,2,72,72,220,1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H00111111,&H99000000,0,0,0,0,100,100,0,0,1,3,1,2,{margin_l},{margin_r},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -160,3 +170,14 @@ def _ass_time(seconds: float) -> str:
     minutes, rem = divmod(rem, 6_000)
     secs, cs = divmod(rem, 100)
     return f"{hours}:{minutes:02}:{secs:02}.{cs:02}"
+
+
+def _scaled_margins(safe_zone: str, play_res_x: int, play_res_y: int) -> tuple[int, int, int]:
+    margin_l, margin_r, margin_v = SAFE_ZONE_MARGINS.get(safe_zone, SAFE_ZONE_MARGINS["standard"])
+    x_scale = play_res_x / 1080
+    y_scale = play_res_y / 1920
+    return (
+        max(16, round(margin_l * x_scale)),
+        max(16, round(margin_r * x_scale)),
+        max(24, round(margin_v * y_scale)),
+    )

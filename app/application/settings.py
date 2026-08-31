@@ -28,7 +28,9 @@ class RuntimeSettings(BaseModel):
     render_loudnorm_two_pass: bool
     subtitle_font_name: str = Field(min_length=1, max_length=128)
     subtitle_font_size: int = Field(ge=24, le=96)
+    subtitle_safe_zone: Literal["standard", "shorts", "reels", "high"]
     subtitle_show_speaker_names: bool
+    export_filename_template: str = Field(min_length=1, max_length=160)
     asr_adapter: Literal["stub", "faster-whisper"]
     llm_adapter: Literal["stub", "llama-cpp-http"]
     llm_base_url: str
@@ -58,7 +60,9 @@ def runtime_settings_from_env(settings: Settings) -> RuntimeSettings:
         render_loudnorm_two_pass=settings.render_loudnorm_two_pass,
         subtitle_font_name=settings.subtitle_font_name,
         subtitle_font_size=settings.subtitle_font_size,
+        subtitle_safe_zone=settings.subtitle_safe_zone,
         subtitle_show_speaker_names=settings.subtitle_show_speaker_names,
+        export_filename_template=settings.export_filename_template,
         asr_adapter=settings.asr_adapter,
         llm_adapter=settings.llm_adapter,
         llm_base_url=settings.llm_base_url,
@@ -102,6 +106,11 @@ def effective_settings(session: Session, env_settings: Settings) -> Settings:
             "render_loudnorm_two_pass": runtime.render_loudnorm_two_pass,
             "subtitle_font_name": runtime.subtitle_font_name,
             "subtitle_font_size": runtime.subtitle_font_size,
+            "subtitle_safe_zone": runtime.subtitle_safe_zone,
             "subtitle_show_speaker_names": runtime.subtitle_show_speaker_names,
+            "export_filename_template": runtime.export_filename_template,
+            "asr_adapter": runtime.asr_adapter,
+            "llm_adapter": runtime.llm_adapter,
+            "llm_base_url": runtime.llm_base_url,
         }
     )

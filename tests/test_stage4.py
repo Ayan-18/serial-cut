@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.application.importer import import_season
 from app.application.review import review_candidate
-from app.application.stage4 import render_candidate
+from app.application.stage4 import export_slug, render_candidate
 from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessResult
 from app.media.rendering import (
@@ -20,7 +20,7 @@ from app.media.rendering import (
     smooth_crop_keyframes,
 )
 from app.media.subtitles import SubtitleCue, cues_for_words, render_ass, render_srt, wrap_russian_subtitle
-from app.models.entities import ClipCandidate, Export, TranscriptSegment, WordTimestamp
+from app.models.entities import ClipCandidate, Episode, Export, TranscriptSegment, WordTimestamp
 
 
 def test_russian_subtitles_wrap_to_two_lines_and_render_formats():
@@ -36,6 +36,16 @@ def test_russian_subtitles_wrap_to_two_lines_and_render_formats():
     preview_ass = render_ass([SubtitleCue(1, 2.5, lines[0])], font_size=24, play_res_x=540, play_res_y=960)
     assert "PlayResX: 540" in preview_ass
     assert "PlayResY: 960" in preview_ass
+
+
+def test_subtitle_safe_zones_change_ass_margins():
+    standard = render_ass([SubtitleCue(1, 2.5, "Текст")], safe_zone="standard")
+    shorts = render_ass([SubtitleCue(1, 2.5, "Текст")], safe_zone="shorts")
+    preview = render_ass([SubtitleCue(1, 2.5, "Текст")], play_res_x=540, play_res_y=960, safe_zone="shorts")
+
+    assert ",72,72,220,1" in standard
+    assert ",90,90,320,1" in shorts
+    assert ",45,45,160,1" in preview
 
 
 def test_word_subtitles_show_every_word_once_with_sequential_timing():
@@ -128,6 +138,34 @@ def test_render_clip_writes_metadata_and_uses_temp_output(tmp_path: Path):
     assert artifacts.output_path.exists()
     assert artifacts.metadata_path.read_text(encoding="utf-8")
     assert artifacts.subtitle_path is not None and artifacts.subtitle_path.exists()
+
+
+def test_export_slug_uses_template_and_sanitizes_windows_names(session, tmp_path: Path):
+    season = tmp_path / "Сезон"
+    season.mkdir()
+    source = season / "episode 01.mkv"
+    source.write_bytes(b"video")
+    episode_id = import_season(session, season).episode_ids[0]
+    candidate = ClipCandidate(
+        episode_id=episode_id,
+        start_time=12.34,
+        end_time=45.67,
+        title='Секрет: "деньги"',
+        description="Описание",
+        moment_type="конфликт",
+        score=91,
+        scores_json={},
+        rationale="Понятен",
+        problems_json=[],
+    )
+    session.add(candidate)
+    session.flush()
+    episode = session.get(Episode, episode_id)
+    assert episode is not None
+
+    slug = export_slug("{episode}_{moment_type}_{title}_{start}-{end}_s{score}", episode, candidate)
+
+    assert slug == "episode 01_конфликт_Секрет-деньги_12.3-45.7_s91"
 
 
 def test_render_clip_falls_back_to_cpu_when_nvenc_fails(tmp_path: Path):

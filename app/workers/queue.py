@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.enums import EpisodeStage, JobKind, JobStatus
-from app.models.entities import ClipCandidate, Episode, Job, Season
+from app.models.entities import ClipCandidate, Episode, Job, JobStage, Season
 
 
 PIPELINE_STAGES = [
@@ -21,6 +21,11 @@ PIPELINE_STAGES = [
     EpisodeStage.AWAITING_REVIEW.value,
     EpisodeStage.RENDERED.value,
 ]
+
+JOB_STAGE_ORDER = {
+    JobKind.ANALYZE_EPISODE.value: ["stage2_media", "stage3_candidates", "auto_export"],
+    JobKind.RENDER_CLIP.value: ["render_clip"],
+}
 
 
 @dataclass(frozen=True)
@@ -116,10 +121,38 @@ def request_cancel(session: Session, job_id: int) -> Job:
 
 def retry_job(session: Session, job_id: int) -> Job:
     job = _get_job(session, job_id)
+    payload = dict(job.payload or {})
+    payload.pop("resume_from_stage", None)
+    job.payload = payload or None
     job.status = JobStatus.QUEUED.value
     job.cancel_requested = False
     job.error_message = None
     job.attempts += 1
+    return job
+
+
+def retry_job_from_stage(session: Session, job_id: int, stage_name: str) -> Job:
+    job = _get_job(session, job_id)
+    stages = JOB_STAGE_ORDER.get(job.kind)
+    if stages is None or stage_name not in stages:
+        raise ValueError(f"Stage {stage_name} cannot be retried for job kind {job.kind}")
+    payload = dict(job.payload or {})
+    payload["resume_from_stage"] = stage_name
+    job.payload = payload
+    job.current_stage = stage_name
+    job.progress = _job_stage_progress(stage_name)
+    job.status = JobStatus.QUEUED.value
+    job.cancel_requested = False
+    job.error_message = None
+    job.attempts += 1
+    start_index = stages.index(stage_name)
+    rows = session.scalars(select(JobStage).where(JobStage.job_id == job.id)).all()
+    for stage in rows:
+        if stage.name in stages and stages.index(stage.name) >= start_index:
+            stage.status = JobStatus.QUEUED.value
+            stage.started_at = None
+            stage.finished_at = None
+            stage.error_message = None
     return job
 
 
@@ -151,3 +184,12 @@ def _stage_index(stage: str | None) -> int:
     if stage in PIPELINE_STAGES:
         return PIPELINE_STAGES.index(stage)
     return 0
+
+
+def _job_stage_progress(stage: str) -> float:
+    return {
+        "stage2_media": 0.0,
+        "stage3_candidates": 0.45,
+        "auto_export": 0.75,
+        "render_clip": 0.0,
+    }.get(stage, 0.0)

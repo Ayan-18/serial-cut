@@ -165,6 +165,29 @@ def test_adjust_boundaries_never_caps_in_the_middle_of_a_spoken_segment():
     assert adjusted.end_time - adjusted.start_time <= 59
 
 
+def test_adjust_boundaries_can_pull_in_missing_setup_replica():
+    candidate = _candidate(24.4, 57.5)
+    segments = [
+        TranscriptSegment(episode_id=1, start_time=19.0, end_time=23.1, text="Ты опять пришёл сюда?"),
+        TranscriptSegment(episode_id=1, start_time=24.0, end_time=31.0, text="Я пришёл не просить прощения."),
+        TranscriptSegment(episode_id=1, start_time=32.0, end_time=42.0, text="Тогда зачем ты здесь?"),
+        TranscriptSegment(episode_id=1, start_time=43.0, end_time=58.0, text="Потому что контракт всё ещё у меня."),
+    ]
+
+    adjusted = adjust_candidate_boundaries(
+        candidate,
+        [],
+        [],
+        min_seconds=25,
+        max_seconds=45,
+        segments=segments,
+    )
+
+    assert adjusted is not None
+    assert adjusted.start_time == 19.0
+    assert adjusted.end_time == 58.0
+
+
 def test_quality_flags_a_boundary_inside_a_replica():
     candidate = _candidate(657.63, 716.28)
     segments = [

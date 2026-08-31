@@ -33,6 +33,7 @@ from app.api.schemas import (
     EpisodeOutlineRead,
     EpisodeQualityRead,
     JobStageRead,
+    JobStageRetryRequest,
     QueueRunResponse,
     QueueStateResponse,
     PreviewRenderResponse,
@@ -107,6 +108,7 @@ from app.workers.queue import (
     recover_interrupted_jobs,
     request_cancel,
     retry_job,
+    retry_job_from_stage,
 )
 from app.workers.runner import estimate_eta_seconds, run_next_job
 
@@ -910,6 +912,21 @@ def retry_job_endpoint(job_id: int, session: Session = Depends(get_session)):
     job = retry_job(session, job_id)
     session.commit()
     return job
+
+
+@router.post("/jobs/{job_id}/retry-stage", response_model=JobRead)
+def retry_job_from_stage_endpoint(
+    job_id: int,
+    payload: JobStageRetryRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        job = retry_job_from_stage(session, job_id, payload.stage_name)
+        session.commit()
+        return job
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/jobs")

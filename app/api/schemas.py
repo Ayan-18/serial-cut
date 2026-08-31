@@ -48,7 +48,9 @@ class RuntimeSettingsRead(BaseModel):
     render_loudnorm_two_pass: bool
     subtitle_font_name: str
     subtitle_font_size: int
+    subtitle_safe_zone: str
     subtitle_show_speaker_names: bool
+    export_filename_template: str
     asr_adapter: str
     llm_adapter: str
     llm_base_url: str
@@ -300,12 +302,29 @@ class CacheClearRequest(BaseModel):
 class ModelDiagnosticsRead(BaseModel):
     asr_adapter: str
     asr_ready: bool
+    asr_model: str
+    asr_device: str
+    asr_compute_type: str
+    asr_package_installed: bool
+    asr_local_model_path: str | None
+    asr_local_model_exists: bool
     llm_adapter: str
     llm_ready: bool
     llm_url: str
+    llm_model_hint: str
+    llm_latency_ms: int | None
     face_ready: bool
     face_model: str
+    face_detector_path: str
+    face_recognizer_path: str
+    face_detector_exists: bool
+    face_recognizer_exists: bool
     details: list[str]
+    recommendations: list[str]
+
+
+class JobStageRetryRequest(BaseModel):
+    stage_name: str = Field(pattern="^(stage2_media|stage3_candidates|auto_export|render_clip)$")
 
 
 class CandidateQualityRead(BaseModel):

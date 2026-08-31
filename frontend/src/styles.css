@@ -193,6 +193,25 @@ button:disabled {
   grid-template-columns: 110px minmax(0, 1fr);
 }
 
+.diagnostic-details {
+  background: #f8fafc;
+  border: 1px solid #e7e9ee;
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+  grid-column: 1 / -1;
+  padding: 10px;
+}
+
+.diagnostic-details small {
+  color: #667085;
+  overflow-wrap: anywhere;
+}
+
+.warn-text {
+  color: #b54708 !important;
+}
+
 .dot {
   border-radius: 99px;
   height: 10px;
@@ -1175,7 +1194,7 @@ button.danger {
   align-items: center;
   display: grid;
   gap: 7px;
-  grid-template-columns: auto minmax(100px, 0.6fr) 1fr;
+  grid-template-columns: auto minmax(100px, 0.6fr) 1fr auto;
 }
 
 .job-timeline small {

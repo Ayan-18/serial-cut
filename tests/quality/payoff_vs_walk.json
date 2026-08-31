@@ -1,0 +1,104 @@
+{
+  "name": "payoff_vs_walk",
+  "min_clip_seconds": 25,
+  "max_clip_seconds": 59,
+  "transcript_segments": [
+    {
+      "start_time": 10.0,
+      "end_time": 15.0,
+      "text": "Ну, мы пришли.",
+      "speaker_label": "Оля"
+    },
+    {
+      "start_time": 16.0,
+      "end_time": 20.0,
+      "text": "Да.",
+      "speaker_label": "Кирилл"
+    },
+    {
+      "start_time": 21.0,
+      "end_time": 26.0,
+      "text": "Пошли.",
+      "speaker_label": "Оля"
+    },
+    {
+      "start_time": 60.0,
+      "end_time": 67.0,
+      "text": "Ты видел это письмо?",
+      "speaker_label": "Кирилл"
+    },
+    {
+      "start_time": 68.0,
+      "end_time": 78.0,
+      "text": "Видела. И подпись на нём не мамина.",
+      "speaker_label": "Оля"
+    },
+    {
+      "start_time": 79.0,
+      "end_time": 92.0,
+      "text": "Значит, отец всё это время был жив?",
+      "speaker_label": "Кирилл"
+    }
+  ],
+  "scenes": [
+    {
+      "start_time": 9.5,
+      "end_time": 27.0,
+      "label": "walk"
+    },
+    {
+      "start_time": 59.7,
+      "end_time": 93.0,
+      "label": "letter_payoff"
+    }
+  ],
+  "candidates": [
+    {
+      "start_time": 10.0,
+      "end_time": 26.0,
+      "title": "Мы пришли",
+      "description": "Проход без самостоятельного поворота.",
+      "moment_type": "другое",
+      "characters": ["Оля", "Кирилл"],
+      "score": 48,
+      "scores": {
+        "hook": 38,
+        "standalone_context": 42,
+        "payoff": 28,
+        "emotion": 34,
+        "boundary_quality": 72,
+        "visual_potential": 52,
+        "audio_quality": 80
+      },
+      "standalone_reason": "Сцена мало что сообщает сама по себе.",
+      "possible_problems": ["Нет сильной концовки"]
+    },
+    {
+      "start_time": 60.4,
+      "end_time": 91.5,
+      "title": "Отец был жив",
+      "description": "Письмо приводит к ясному эмоциональному вопросу.",
+      "moment_type": "откровение",
+      "characters": ["Оля", "Кирилл"],
+      "score": 91,
+      "scores": {
+        "hook": 88,
+        "standalone_context": 90,
+        "payoff": 95,
+        "emotion": 88,
+        "boundary_quality": 84,
+        "visual_potential": 78,
+        "audio_quality": 90
+      },
+      "standalone_reason": "Зрителю понятен предмет разговора и ставка сцены.",
+      "possible_problems": []
+    }
+  ],
+  "expected_good_ranges": [
+    {
+      "start_time": 60.0,
+      "end_time": 92.0,
+      "label": "letter_payoff"
+    }
+  ]
+}

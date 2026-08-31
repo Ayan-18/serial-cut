@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -64,12 +65,17 @@ def render_candidate(
         show_speaker_names=settings.subtitle_show_speaker_names,
     )
     subtitle_text = (
-        render_ass(cues, font_name=settings.subtitle_font_name, font_size=settings.subtitle_font_size)
+        render_ass(
+            cues,
+            font_name=settings.subtitle_font_name,
+            font_size=settings.subtitle_font_size,
+            safe_zone=settings.subtitle_safe_zone,
+        )
         if include_subtitles
         else None
     )
     session.commit()
-    slug = f"episode-{episode.id}-candidate-{candidate.id}"
+    slug = export_slug(settings.export_filename_template, episode, candidate)
     resolved_nvenc = detect_nvenc(settings.ffmpeg_path) if use_nvenc is None else use_nvenc
     artifacts = render_clip(
         settings.ffmpeg_path,
@@ -138,6 +144,7 @@ def render_candidate_preview(
             font_size=max(24, settings.subtitle_font_size // 2),
             play_res_x=540,
             play_res_y=960,
+            safe_zone=settings.subtitle_safe_zone,
         )
         if include_subtitles
         else None
@@ -178,3 +185,30 @@ def render_candidate_preview(
         str(artifacts.cover_path) if artifacts.cover_path else None,
         round(candidate.end_time - candidate.start_time, 3),
     )
+
+
+def export_slug(template: str, episode: Episode, candidate: ClipCandidate) -> str:
+    values = {
+        "episode": Path(episode.file_name).stem,
+        "episode_id": episode.id,
+        "candidate": candidate.id,
+        "candidate_id": candidate.id,
+        "title": candidate.title,
+        "score": candidate.score,
+        "moment_type": candidate.moment_type,
+        "start": f"{candidate.start_time:.1f}",
+        "end": f"{candidate.end_time:.1f}",
+    }
+    try:
+        raw = template.format(**values)
+    except (KeyError, IndexError, ValueError):
+        raw = "{episode}_clip-{candidate}_{title}_score-{score}".format(**values)
+    slug = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", raw)
+    slug = re.sub(r"\s*-\s*", "-", slug)
+    slug = re.sub(r"-+_", "_", slug)
+    slug = re.sub(r"_-+", "_", slug)
+    slug = re.sub(r"\s+", " ", slug).strip(" .-_")
+    slug = re.sub(r"-{2,}", "-", slug)
+    if not slug:
+        slug = f"episode-{episode.id}-candidate-{candidate.id}"
+    return slug[:120].rstrip(" .-_")

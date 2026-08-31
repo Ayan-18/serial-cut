@@ -1,0 +1,67 @@
+{
+  "name": "boundary_optimizer_v2",
+  "min_clip_seconds": 25,
+  "max_clip_seconds": 45,
+  "transcript_segments": [
+    {
+      "start_time": 19.0,
+      "end_time": 23.1,
+      "text": "Ты опять пришёл сюда?",
+      "speaker_label": "Ира"
+    },
+    {
+      "start_time": 24.0,
+      "end_time": 31.0,
+      "text": "Я пришёл не просить прощения.",
+      "speaker_label": "Дима"
+    },
+    {
+      "start_time": 32.0,
+      "end_time": 42.0,
+      "text": "Тогда зачем ты здесь?",
+      "speaker_label": "Ира"
+    },
+    {
+      "start_time": 43.0,
+      "end_time": 58.0,
+      "text": "Потому что контракт всё ещё у меня.",
+      "speaker_label": "Дима"
+    }
+  ],
+  "scenes": [
+    {
+      "start_time": 18.8,
+      "end_time": 58.2,
+      "label": "contract_reveal"
+    }
+  ],
+  "candidates": [
+    {
+      "start_time": 24.4,
+      "end_time": 57.5,
+      "title": "Контракт у меня",
+      "description": "Сцена получает недостающий вопрос перед объяснением и заканчивается reveal.",
+      "moment_type": "откровение",
+      "characters": ["Ира", "Дима"],
+      "score": 87,
+      "scores": {
+        "hook": 84,
+        "standalone_context": 82,
+        "payoff": 91,
+        "emotion": 86,
+        "boundary_quality": 72,
+        "visual_potential": 76,
+        "audio_quality": 88
+      },
+      "standalone_reason": "После вопроса зрителю понятно, зачем герой пришёл.",
+      "possible_problems": []
+    }
+  ],
+  "expected_good_ranges": [
+    {
+      "start_time": 19.0,
+      "end_time": 58.0,
+      "label": "contract_reveal"
+    }
+  ]
+}

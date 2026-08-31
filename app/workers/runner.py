@@ -72,12 +72,15 @@ def _run_next_job_unlocked(
 
     job.status = JobStatus.RUNNING.value
     job.error_message = None
-    job.progress = 0.0
+    payload = job.payload or {}
+    resume_from_stage = str(payload.get("resume_from_stage") or "")
+    job.progress = _resume_progress(resume_from_stage)
     session.commit()
     started = monotonic()
     try:
-        payload = job.payload or {}
         if job.kind == JobKind.RENDER_CLIP.value:
+            if resume_from_stage and resume_from_stage != "render_clip":
+                raise ValueError(f"Этап {resume_from_stage} нельзя запустить для рендера")
             candidate_id = int(payload["candidate_id"])
             _run_stage(
                 session,
@@ -96,12 +99,17 @@ def _run_next_job_unlocked(
                 0.95,
             )
         else:
-            _run_stage(session, job, "stage2_media", lambda: stage2_func(session, job.episode_id, settings), 0.45)
-            _raise_if_cancelled(session, job)
-            _run_stage(session, job, "stage3_candidates", lambda: stage3_func(session, job.episode_id, settings), 0.75)
-            _raise_if_cancelled(session, job)
+            if resume_from_stage and resume_from_stage not in ANALYZE_STAGES:
+                raise ValueError(f"Неизвестный этап анализа: {resume_from_stage}")
+            resume_stage = resume_from_stage or "stage2_media"
+            if _should_run_analyze_stage("stage2_media", resume_stage):
+                _run_stage(session, job, "stage2_media", lambda: stage2_func(session, job.episode_id, settings), 0.45)
+                _raise_if_cancelled(session, job)
+            if _should_run_analyze_stage("stage3_candidates", resume_stage):
+                _run_stage(session, job, "stage3_candidates", lambda: stage3_func(session, job.episode_id, settings), 0.75)
+                _raise_if_cancelled(session, job)
             auto_enabled = bool(payload.get("auto", settings.auto_mode_enabled))
-            if auto_enabled:
+            if auto_enabled or resume_stage == "auto_export":
                 _run_stage(
                     session,
                     job,
@@ -151,6 +159,20 @@ def estimate_eta_seconds(session: Session) -> float | None:
 
 class CancelledError(RuntimeError):
     pass
+
+
+ANALYZE_STAGES = ["stage2_media", "stage3_candidates", "auto_export"]
+
+
+def _should_run_analyze_stage(stage: str, resume_stage: str) -> bool:
+    return ANALYZE_STAGES.index(stage) >= ANALYZE_STAGES.index(resume_stage)
+
+
+def _resume_progress(stage: str) -> float:
+    return {
+        "stage3_candidates": 0.45,
+        "auto_export": 0.75,
+    }.get(stage, 0.0)
 
 
 def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], progress: float) -> None:

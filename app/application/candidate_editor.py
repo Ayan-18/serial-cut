@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.application.characters import speaker_name_map
+from app.application.speaker_names import speaker_name_map
 from app.media.subtitles import SubtitleCue, cues_for_range, cues_for_words, wrap_russian_subtitle
 from app.models.entities import (
     CandidateSubtitle,

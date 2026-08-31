@@ -38,6 +38,7 @@ def adjust_candidate_boundaries(
         start, end = _snap_to_scene_edges(start, end, scenes)
     if segments:
         start, end = _fit_complete_speech(start, end, segments, min_seconds, max_seconds)
+        start, end = _optimize_semantic_window(start, end, segments, min_seconds, max_seconds)
     elif end - start > max_seconds:
         end = start + max_seconds
     if end <= start or end - start < min_seconds:
@@ -83,6 +84,126 @@ def _fit_complete_speech(
         end = max(safe_ends) if safe_ends else hard_end
 
     return start, end
+
+
+def _optimize_semantic_window(
+    start: float,
+    end: float,
+    segments: list[TranscriptSegment],
+    min_seconds: int,
+    max_seconds: int,
+) -> tuple[float, float]:
+    ordered = sorted(segments, key=lambda item: item.start_time)
+    selected = [item for item in ordered if item.end_time > start and item.start_time < end]
+    if not selected:
+        return start, end
+
+    start, end = _trim_weak_edges(start, end, selected, min_seconds)
+
+    first_index = ordered.index(selected[0])
+    previous = ordered[first_index - 1] if first_index > 0 else None
+    if (
+        previous is not None
+        and 0 <= start - previous.end_time <= 1.2
+        and not _is_recap_or_credits(previous.text)
+        and not _is_weak_opening(previous.text)
+        and end - previous.start_time <= max_seconds
+    ):
+        start = previous.start_time
+
+    selected = [item for item in ordered if item.end_time > start and item.start_time < end]
+    if end - start > max_seconds or not _has_strong_ending(selected):
+        hard_end = start + max_seconds
+        safe_segments = [
+            item
+            for item in ordered
+            if item.end_time <= hard_end and item.end_time - start >= min_seconds and item.end_time > start
+        ]
+        strong_ends = [
+            item.end_time
+            for item in safe_segments
+            if _has_payoff_marker(item.text) or _has_terminal_punctuation(item.text)
+        ]
+        if strong_ends:
+            end = max(strong_ends)
+        elif safe_segments:
+            end = safe_segments[-1].end_time
+        else:
+            end = min(end, hard_end)
+
+    if end - start < min_seconds:
+        later = [
+            item.end_time
+            for item in ordered
+            if item.end_time > end and item.end_time - start <= max_seconds and item.end_time - start >= min_seconds
+        ]
+        if later:
+            end = later[0]
+    return start, min(end, start + max_seconds)
+
+
+def _trim_weak_edges(
+    start: float,
+    end: float,
+    selected: list[TranscriptSegment],
+    min_seconds: int,
+) -> tuple[float, float]:
+    while len(selected) > 1 and _is_weak_opening(selected[0].text):
+        candidate_start = selected[1].start_time
+        if end - candidate_start < min_seconds:
+            break
+        start = candidate_start
+        selected = selected[1:]
+    while len(selected) > 1 and _is_recap_or_credits(selected[-1].text):
+        candidate_end = selected[-2].end_time
+        if candidate_end - start < min_seconds:
+            break
+        end = candidate_end
+        selected = selected[:-1]
+    return start, end
+
+
+def _has_strong_ending(segments: list[TranscriptSegment]) -> bool:
+    if not segments:
+        return False
+    tail = " ".join(item.text.strip() for item in segments[-2:]).strip()
+    return _has_payoff_marker(tail) or _has_terminal_punctuation(tail)
+
+
+def _has_terminal_punctuation(text: str) -> bool:
+    return text.strip().endswith((".", "!", "?", "…"))
+
+
+def _has_payoff_marker(text: str) -> bool:
+    lowered = text.lower()
+    markers = [
+        "всё это время",
+        "значит",
+        "тогда",
+        "оказывается",
+        "правда",
+        "секрет",
+        "письмо",
+        "деньги",
+        "жив",
+        "умер",
+        "люблю",
+        "ненавижу",
+    ]
+    return any(marker in lowered for marker in markers)
+
+
+def _is_weak_opening(text: str) -> bool:
+    lowered = text.strip().lower().strip(" ,.!?…")
+    prefixes = ("ну", "ладно", "так", "слушай", "в общем", "короче", "погоди", "подожди")
+    short_words = len(lowered.split()) <= 4
+    return short_words and lowered.startswith(prefixes)
+
+
+def _is_recap_or_credits(text: str) -> bool:
+    lowered = text.lower()
+    markers = ("ранее в сериале", "в предыдущих сериях", "продолжение следует", "в ролях", "режиссёр", "режиссер")
+    return any(marker in lowered for marker in markers)
 
 
 def dedupe_candidates(candidates: list[CandidatePayload], overlap_threshold: float = 0.65) -> list[CandidatePayload]:
