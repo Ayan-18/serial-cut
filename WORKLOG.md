@@ -2,6 +2,30 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-31 - Multimodal Character Identity And Active-Speaker Crop
+
+Completed the five requested identity and framing features:
+
+- Replaced the primary face path with local OpenCV Zoo YuNet + SFace. The official ONNX files are
+  downloaded by a dedicated confirmation script, verified against pinned SHA-256 values and kept in
+  ignored `data/models/face`; Haar/DCT remains only as an explicit fallback.
+- Character cards now accept up to eight photos per selection, show all saved angles, and can add or
+  remove individual local copies without touching the user's originals.
+- Added lip-motion analysis over the detected mouth region. Speaker-cluster recognition samples the
+  face whose mouth changes during each transcript segment instead of assuming the largest face talks.
+- Added persistent local spectral voiceprints. A manual speaker mapping trains the character profile;
+  conservative automatic matching can reuse it in later episodes and fuses agreeing face/lip/voice
+  evidence while rejecting conflicts.
+- Auto-follow crop now prefers the known character assigned to the active transcript segment, then
+  lip motion, then the largest face. The API reports how many points came from identity or lips.
+- Added Alembic revision `0006_multimodal_character_identity`, model diagnostics and focused tests.
+
+Verification: the live and a clean database migrated to 0006; official model checksums passed; the
+real episode proxy was read-only sampled with YuNet + SFace (22 face detections in six frames) and
+lip-motion selection executed. Backend tests passed (`56 passed, 1 upstream warning`), the frontend
+production build passed, and every system check succeeded. Original
+media and existing exports were not modified.
+
 ## 2026-08-30 - Story Packs, Characters And Complete Boundaries
 
 Implemented the first complete narrative-quality pass requested after reviewing a real clip that

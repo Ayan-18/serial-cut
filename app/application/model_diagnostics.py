@@ -16,6 +16,8 @@ class ModelDiagnostics:
     llm_adapter: str
     llm_ready: bool
     llm_url: str
+    face_ready: bool
+    face_model: str
     details: list[str]
 
 
@@ -35,12 +37,21 @@ def check_models(settings: Settings) -> ModelDiagnostics:
         llm_ready = _llm_health(settings.llm_base_url)
         details.append("Локальный LLM отвечает" if llm_ready else "Локальный LLM не отвечает")
 
+    face_ready = settings.face_detector_model.exists() and settings.face_recognizer_model.exists()
+    details.append(
+        "YuNet и SFace готовы"
+        if face_ready
+        else "YuNet/SFace не установлены — доступен резервный поиск лиц"
+    )
+
     return ModelDiagnostics(
         asr_adapter=settings.asr_adapter,
         asr_ready=asr_ready,
         llm_adapter=settings.llm_adapter,
         llm_ready=llm_ready,
         llm_url=settings.llm_base_url,
+        face_ready=face_ready,
+        face_model="YuNet + SFace" if face_ready else "Haar + DCT",
         details=details,
     )
 

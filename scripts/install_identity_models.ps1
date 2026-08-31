@@ -6,14 +6,13 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $env:PYTHONUTF8 = "1"
 
-Write-Host "Local model download:"
-Write-Host "  faster-whisper-small: about 486 MB"
-Write-Host "  Qwen3-4B Q4_K_M: about 2.5 GB"
-Write-Host "  YuNet + SFace: about 39 MB"
-Write-Host "  Total: about 3.1 GB; files stay under data\models"
+Write-Host "Local identity models from the official OpenCV Zoo:"
+Write-Host "  YuNet face detector: about 0.3 MB"
+Write-Host "  SFace face recognizer: about 39 MB"
+Write-Host "  Files stay under data\models\face; video and photos stay on this computer"
 
 if (-not $ConfirmDownload) {
-  $answer = Read-Host "Download these models from official Hugging Face repositories? [y/N]"
+  $answer = Read-Host "Download and verify these models? [y/N]"
   if ($answer -notin @("y", "Y", "yes", "YES")) {
     Write-Host "Cancelled."
     exit 1
@@ -25,7 +24,5 @@ if (-not (Test-Path -LiteralPath $Python)) {
   throw "Project virtual environment is missing. Run scripts\setup.ps1 first."
 }
 
-& $Python .\scripts\download_models.py
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $Python .\scripts\download_identity_models.py
 exit $LASTEXITCODE

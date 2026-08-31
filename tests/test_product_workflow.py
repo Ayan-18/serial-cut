@@ -19,7 +19,8 @@ from app.application.processing_guard import ProcessingBusyError, processing_gua
 from app.infrastructure.config import Settings
 from app.infrastructure.database import make_engine
 from app.media.rendering import build_render_args
-from app.media.character_recognition import face_signature
+from app.media.character_recognition import FaceObservation, face_signature, select_lip_active_face
+from app.media.voice_identity import VoiceEmbedding, merge_voice_profile, voice_signature
 from app.models.entities import Character, ClipCandidate, Episode, TranscriptSegment, WordTimestamp
 from app.workers.queue import enqueue_candidate_render
 from app.workers.runner import run_next_job
@@ -122,10 +123,12 @@ def test_character_photo_is_validated_and_stored_in_local_character_directory(se
     data_url = "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
 
     path = Path(add_character_photo(character, data_url, tmp_path / "characters"))
+    second_path = Path(add_character_photo(character, data_url, tmp_path / "characters"))
 
     assert path.exists()
     assert (tmp_path / "characters").resolve() in path.parents
-    assert len(character.photos_json) == 1
+    assert second_path.exists()
+    assert len(character.photos_json) == 2
 
 
 def test_face_signature_is_deterministic_for_the_same_crop():
@@ -135,6 +138,40 @@ def test_face_signature_is_deterministic_for_the_same_crop():
     second = face_signature(image.copy())
 
     assert np.allclose(first, second)
+
+
+def test_lip_motion_selects_the_face_whose_mouth_changed():
+    still = np.full((120, 220, 3), 100, dtype=np.uint8)
+    current = still.copy()
+    quiet = FaceObservation(20, 20, 60, 80, 1.0, np.ones(4, dtype=np.float32))
+    speaking = FaceObservation(130, 20, 60, 80, 1.0, np.ones(4, dtype=np.float32))
+    current[72:82, 148:172] = 20
+
+    selected, score = select_lip_active_face(
+        current,
+        [quiet, speaking],
+        still,
+        [quiet, speaking],
+    )
+
+    assert selected is speaking
+    assert score > 0
+
+
+def test_local_voiceprint_is_deterministic_and_profiles_can_be_merged():
+    sample_rate = 16_000
+    time = np.arange(sample_rate, dtype=np.float32) / sample_rate
+    low_voice = np.sin(2 * np.pi * 170 * time).astype(np.float32)
+    high_voice = np.sin(2 * np.pi * 510 * time).astype(np.float32)
+    low_signature = voice_signature(low_voice, sample_rate)
+
+    assert np.allclose(low_signature, voice_signature(low_voice.copy(), sample_rate))
+    assert float(np.dot(low_signature, voice_signature(high_voice, sample_rate))) < 0.8
+
+    profile = merge_voice_profile(None, VoiceEmbedding(low_signature, 3, 4.5))
+    updated = merge_voice_profile(profile, VoiceEmbedding(low_signature, 2, 3.0))
+    assert updated["sample_count"] == 5
+    assert updated["seconds"] == 7.5
 
 
 def test_cache_cleanup_only_removes_files_inside_cache(tmp_path: Path):

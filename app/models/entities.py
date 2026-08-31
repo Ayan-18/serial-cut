@@ -175,6 +175,7 @@ class Character(TimestampMixin, Base):
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     aliases_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     photos_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    voice_profile_json: Mapped[dict | None] = mapped_column(JSON)
     color: Mapped[str] = mapped_column(String(16), default="#b9ddff", nullable=False)
 
     season: Mapped[Season] = relationship(back_populates="characters")

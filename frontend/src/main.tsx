@@ -26,14 +26,14 @@ type Candidate = {
 type CandidateEdit = { start: string; end: string; crop: Candidate["crop_mode"]; offset: number; scale: number };
 type Subtitle = { id?: number | null; start_time: number; end_time: number; text: string; speaker_label?: string | null };
 type ExportItem = { id: number; candidate_id: number; output_path: string; cover_path: string | null; include_subtitles: boolean; preset_name: string; status: string };
-type ModelDiagnostics = { asr_adapter: string; asr_ready: boolean; llm_adapter: string; llm_ready: boolean; llm_url: string; details: string[] };
+type ModelDiagnostics = { asr_adapter: string; asr_ready: boolean; llm_adapter: string; llm_ready: boolean; llm_url: string; face_ready: boolean; face_model: string; details: string[] };
 type CacheInfo = { cache_dir: string; files: number; bytes: number };
 type BlockingProgress = { kind: "media" | "candidates"; episodeId: number; fileName: string; startedAt: number };
 type StoryContext = {
   season_id: number; episode_id: number; season_context: string; episode_summary: string;
   required_events: string[]; excluded_events: string[]; spoilers_allowed: boolean; candidate_mode: "highlights" | "story";
 };
-type Character = { id: number; season_id: number; name: string; description: string; aliases: string[]; color: string; photo_count: number; photo_urls: string[] };
+type Character = { id: number; season_id: number; name: string; description: string; aliases: string[]; color: string; photo_count: number; photo_urls: string[]; voice_sample_count: number };
 type SpeakerIdentity = { source_label: string; character_id: number; character_name: string; confidence: number | null; method: string };
 type EpisodeOutline = { summary: string; main_events: string[]; conflicts: string[]; time_ranges: { start_time: number; end_time: number; summary: string }[] };
 
@@ -65,7 +65,7 @@ function App() {
   const [episodeOutline, setEpisodeOutline] = useState<EpisodeOutline | null>(null);
   const [characterName, setCharacterName] = useState("");
   const [characterDescription, setCharacterDescription] = useState("");
-  const [characterPhoto, setCharacterPhoto] = useState<string | null>(null);
+  const [characterPhotos, setCharacterPhotos] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const backgroundVideoRef = useRef<HTMLVideoElement>(null);
 
@@ -183,13 +183,18 @@ function App() {
 
   async function createCharacter() {
     if (!storyContext || !characterName.trim()) return;
-    await api<Character>(`/api/seasons/${storyContext.season_id}/characters`, {
+    const created = await api<Character>(`/api/seasons/${storyContext.season_id}/characters`, {
       method: "POST", headers: jsonHeaders, body: JSON.stringify({
-        name: characterName, description: characterDescription, photo_data_url: characterPhoto,
+        name: characterName, description: characterDescription, photo_data_url: characterPhotos[0] ?? null,
       }),
     });
-    setCharacterName(""); setCharacterDescription(""); setCharacterPhoto(null);
-    await loadEpisodeDetails(storyContext.episode_id); setMessage("Персонаж добавлен локально");
+    for (const photo of characterPhotos.slice(1)) {
+      await api<Character>(`/api/characters/${created.id}/photos`, {
+        method: "POST", headers: jsonHeaders, body: JSON.stringify({ photo_data_url: photo }),
+      });
+    }
+    setCharacterName(""); setCharacterDescription(""); setCharacterPhotos([]);
+    await loadEpisodeDetails(storyContext.episode_id); setMessage(`Персонаж добавлен: ${Math.max(0, characterPhotos.length)} фото сохранено локально`);
   }
 
   async function deleteCharacter(characterId: number) {
@@ -198,12 +203,23 @@ function App() {
     await loadEpisodeDetails(storyContext.episode_id); setMessage("Персонаж удалён; исходная фотография не изменена");
   }
 
-  function readCharacterPhoto(file: File | undefined) {
-    if (!file) { setCharacterPhoto(null); return; }
-    const reader = new FileReader();
-    reader.onload = () => setCharacterPhoto(typeof reader.result === "string" ? reader.result : null);
-    reader.onerror = () => setMessage("Не удалось прочитать фотографию");
-    reader.readAsDataURL(file);
+  async function readCharacterPhotos(files: FileList | null) {
+    if (!files?.length) { setCharacterPhotos([]); return; }
+    try { setCharacterPhotos(await Promise.all(Array.from(files).slice(0, 8).map(fileDataUrl))); }
+    catch (error) { setMessage(`Не удалось прочитать фотографию: ${errorMessage(error)}`); }
+  }
+
+  async function addCharacterPhotos(characterId: number, files: FileList | null) {
+    if (!storyContext || !files?.length) return;
+    const photos = await Promise.all(Array.from(files).slice(0, 8).map(fileDataUrl));
+    for (const photo of photos) await api<Character>(`/api/characters/${characterId}/photos`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ photo_data_url: photo }) });
+    await loadEpisodeDetails(storyContext.episode_id); setMessage(`Добавлено фотографий: ${photos.length}`);
+  }
+
+  async function deleteCharacterPhoto(characterId: number, photoIndex: number) {
+    if (!storyContext) return;
+    await api<Character>(`/api/characters/${characterId}/photos/${photoIndex}`, { method: "DELETE" });
+    await loadEpisodeDetails(storyContext.episode_id); setMessage("Локальная копия фотографии удалена");
   }
 
   async function assignSpeaker(sourceLabel: string, characterId: number) {
@@ -213,17 +229,17 @@ function App() {
     });
     await loadEpisodeDetails(selectedEpisodeId);
     if (selectedCandidate) setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`));
-    setMessage(`Голос «${sourceLabel}» привязан к персонажу`);
+    setMessage(`Голос «${sourceLabel}» привязан; голосовой профиль персонажа обновлён локально`);
   }
 
   async function identifyCharacters() {
     if (!selectedEpisodeId) return;
-    setMessage("Сравниваем лица с фотографиями персонажей…");
+    setMessage("Сравниваем лица, движение губ и локальные голосовые профили…");
     try {
-      const result = await api<{ assigned_labels: number }>(`/api/episodes/${selectedEpisodeId}/identify-characters`, { method: "POST" });
+      const result = await api<{ assigned_labels: number; face_model: string; voice_profiles_used: number }>(`/api/episodes/${selectedEpisodeId}/identify-characters`, { method: "POST" });
       await loadEpisodeDetails(selectedEpisodeId);
       if (selectedCandidate) setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`));
-      setMessage(result.assigned_labels ? `Автоматически определено голосов: ${result.assigned_labels}` : "Надёжных совпадений не найдено — имена не назначены");
+      setMessage(result.assigned_labels ? `Определено голосов: ${result.assigned_labels} · ${result.face_model} · голосовых профилей: ${result.voice_profiles_used}` : "Надёжных совпадений лиц, губ и голосов не найдено — имена не назначены");
     } catch (error) { setMessage(`Распознавание персонажей: ${errorMessage(error)}`); }
   }
 
@@ -245,11 +261,11 @@ function App() {
   }
 
   async function autoCrop(candidate: Candidate) {
-    setMessage("Ищем лица в выбранном отрывке…");
-    const data = await api<{ crop_offset_x: number; faces_detected: number; keyframes: { time: number; offset: number }[] }>(`/api/candidates/${candidate.id}/auto-crop`, { method: "POST" });
+    setMessage("Ищем активного говорящего по персонажу и движению губ…");
+    const data = await api<{ crop_offset_x: number; faces_detected: number; keyframes: { time: number; offset: number }[]; active_speaker_frames: number; identified_speaker_frames: number; lip_motion_frames: number; face_model: string }>(`/api/candidates/${candidate.id}/auto-crop`, { method: "POST" });
     setCandidateEdit(candidate.id, { crop: "auto-follow", offset: data.crop_offset_x });
     await loadCandidates(candidate.episode_id, false);
-    setMessage(data.faces_detected ? `Плавное слежение построено по ${data.keyframes.length} кадрам с лицами` : "Лица не найдены, оставлен центр кадра");
+    setMessage(data.faces_detected ? `Траектория: ${data.keyframes.length} точек · персонаж: ${data.identified_speaker_frames} · губы: ${data.lip_motion_frames} · ${data.face_model}` : "Лица не найдены, оставлен центр кадра");
   }
 
   async function saveSubtitles() {
@@ -341,10 +357,10 @@ function App() {
         {episodeOutline && <details className="outline-card"><summary>Построенная карта серии</summary><p>{episodeOutline.summary}</p><ol>{episodeOutline.time_ranges.map((item, index) => <li key={`${item.start_time}-${index}`}><strong>{formatClock(item.start_time)}–{formatClock(item.end_time)}</strong> {item.summary}</li>)}</ol></details>}
       </div>
       <div className="panel character-panel"><div className="panel-title"><UserRound size={19} /><h2>Персонажи и голоса</h2><span className="badge">{characters.length}</span></div>
-        <div className="character-create"><input value={characterName} onChange={(event) => setCharacterName(event.target.value)} placeholder="Имя персонажа" /><input value={characterDescription} onChange={(event) => setCharacterDescription(event.target.value)} placeholder="Краткое описание" /><label className="file-picker">{characterPhoto ? "Фото выбрано" : "Выбрать фото"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => readCharacterPhoto(event.target.files?.[0])} /></label><button disabled={!characterName.trim()} onClick={createCharacter}>Добавить</button></div>
-        <div className="character-list">{characters.map((character) => <article className="character-card" key={character.id}>{character.photo_urls[0] ? <img src={character.photo_urls[0]} alt={character.name} /> : <span className="character-placeholder"><UserRound /></span>}<div><strong>{character.name}</strong><small>{character.description || "Без описания"}</small><small>{character.photo_count} фото</small></div><button className="icon-button danger" title="Удалить персонажа" onClick={() => deleteCharacter(character.id)}><Trash2 size={15} /></button></article>)}{!characters.length && <p className="empty">Добавьте имя и чёткое фронтальное фото. Несовпадения останутся «Неизвестными».</p>}</div>
-        {!!speakerLabels.length && <div className="speaker-map"><h3>Кто скрывается за голосами</h3>{speakerLabels.map((label) => { const current = speakerIdentities.find((item) => item.source_label === label); return <label key={label}><span>{label}</span><select value={current?.character_id ?? ""} onChange={(event) => assignSpeaker(label, Number(event.target.value))}><option value="">Не определён</option>{characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select>{current?.confidence != null && <small>{Math.round(current.confidence * 100)}% · по лицу</small>}</label>; })}</div>}
-        <button className="secondary identify-button" disabled={!characters.some((item) => item.photo_count > 0) || isEpisodeBusy(selectedEpisodeId)} onClick={identifyCharacters}><WandSparkles size={16} /> Распознать по фотографиям</button>
+        <div className="character-create"><input value={characterName} onChange={(event) => setCharacterName(event.target.value)} placeholder="Имя персонажа" /><input value={characterDescription} onChange={(event) => setCharacterDescription(event.target.value)} placeholder="Краткое описание" /><label className="file-picker">{characterPhotos.length ? `Выбрано фото: ${characterPhotos.length}` : "Выбрать несколько фото"}<input multiple type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => readCharacterPhotos(event.target.files)} /></label><button disabled={!characterName.trim()} onClick={createCharacter}>Добавить</button></div>
+        <div className="character-list">{characters.map((character) => <article className="character-card" key={character.id}><div className="character-photos">{character.photo_urls.map((url, index) => <span className="character-photo" key={url}><img src={url} alt={`${character.name}, фото ${index + 1}`} /><button title="Удалить это фото" onClick={() => deleteCharacterPhoto(character.id, index)}>×</button></span>)}{!character.photo_urls.length && <span className="character-placeholder"><UserRound /></span>}<label className="character-photo-add" title="Добавить фотографии">+<input multiple type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => addCharacterPhotos(character.id, event.target.files)} /></label></div><div className="character-info"><strong>{character.name}</strong><small>{character.description || "Без описания"}</small><small>{character.photo_count} фото · голосовых образцов: {character.voice_sample_count}</small></div><button className="icon-button danger" title="Удалить персонажа" onClick={() => deleteCharacter(character.id)}><Trash2 size={15} /></button></article>)}{!characters.length && <p className="empty">Добавьте имя и 3–8 фотографий с разными ракурсами. Все файлы останутся на компьютере.</p>}</div>
+        {!!speakerLabels.length && <div className="speaker-map"><h3>Кто скрывается за голосами</h3>{speakerLabels.map((label) => { const current = speakerIdentities.find((item) => item.source_label === label); return <label key={label}><span>{label}</span><select value={current?.character_id ?? ""} onChange={(event) => assignSpeaker(label, Number(event.target.value))}><option value="">Не определён</option>{characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select>{current && <small>{current.confidence != null ? `${Math.round(current.confidence * 100)}% · ` : ""}{identityMethodLabel(current.method)}</small>}</label>; })}</div>}
+        <button className="secondary identify-button" disabled={!characters.some((item) => item.photo_count > 0 || item.voice_sample_count > 0) || isEpisodeBusy(selectedEpisodeId)} onClick={identifyCharacters}><WandSparkles size={16} /> Лица + губы + голоса</button>
       </div>
     </section>}
 
@@ -365,7 +381,7 @@ function App() {
     <section className="panel section-gap"><div className="panel-title"><FolderOpen size={19} /><h2>Готовые ролики</h2><span className="badge">{exports.length}</span></div><div className="exports-grid">{exports.map((item) => <article className="export-card" key={item.id}>{item.cover_path ? <img src={`/api/exports/${item.id}/cover`} alt="Обложка клипа" /> : <div className="export-placeholder"><Clapperboard /></div>}<div><strong>Экспорт №{item.id}</strong><small>{item.preset_name} · {item.include_subtitles ? "с субтитрами" : "без субтитров"}</small><small title={item.output_path}>{item.output_path}</small></div><video controls preload="none" src={`/api/exports/${item.id}/file`} /><button onClick={() => api(`/api/exports/${item.id}/open-folder`, { method: "POST" })}><FolderOpen size={16} /> Открыть папку</button></article>)}{!exports.length && <p className="empty">После рендера готовые MP4 появятся здесь.</p>}</div></section>
 
     <section className="grid section-gap">
-      <div className="panel"><div className="panel-title"><Server size={19} /><h2>Готовность системы</h2><button className="icon-button secondary" onClick={runSystemCheck}><RefreshCcw size={17} /></button></div><div className="checks">{checks.map((item) => <div className="check" key={item.name}><span className={item.ok ? "dot ok" : "dot fail"} /><strong>{item.name}</strong><span>{item.message}</span></div>)}{diagnostics && <><div className="check"><span className={diagnostics.asr_ready ? "dot ok" : "dot fail"} /><strong>Whisper</strong><span>{diagnostics.asr_adapter}</span></div><div className="check"><span className={diagnostics.llm_ready ? "dot ok" : "dot fail"} /><strong>Qwen</strong><span>{diagnostics.llm_adapter} · {diagnostics.details.at(-1)}</span></div></>}</div><div className="cache-card"><div><strong>Временные файлы</strong><small>{cacheInfo?.files ?? 0} файлов · {formatBytes(cacheInfo?.bytes ?? 0)}</small><small>{cacheInfo?.cache_dir}</small></div><button className="danger" onClick={clearCache}><Trash2 size={16} /> Очистить кэш</button></div></div>
+      <div className="panel"><div className="panel-title"><Server size={19} /><h2>Готовность системы</h2><button className="icon-button secondary" onClick={runSystemCheck}><RefreshCcw size={17} /></button></div><div className="checks">{checks.map((item) => <div className="check" key={item.name}><span className={item.ok ? "dot ok" : "dot fail"} /><strong>{item.name}</strong><span>{item.message}</span></div>)}{diagnostics && <><div className="check"><span className={diagnostics.asr_ready ? "dot ok" : "dot fail"} /><strong>Whisper</strong><span>{diagnostics.asr_adapter}</span></div><div className="check"><span className={diagnostics.llm_ready ? "dot ok" : "dot fail"} /><strong>Qwen</strong><span>{diagnostics.llm_adapter}</span></div><div className="check"><span className={diagnostics.face_ready ? "dot ok" : "dot fail"} /><strong>Лица</strong><span>{diagnostics.face_model}</span></div></>}</div><div className="cache-card"><div><strong>Временные файлы</strong><small>{cacheInfo?.files ?? 0} файлов · {formatBytes(cacheInfo?.bytes ?? 0)}</small><small>{cacheInfo?.cache_dir}</small></div><button className="danger" onClick={clearCache}><Trash2 size={16} /> Очистить кэш</button></div></div>
       <div className="panel"><div className="panel-title"><Server size={19} /><h2>Настройки</h2></div>{settings && <div className="settings-sections">
         <section className="settings-section"><h3>Файлы</h3><div className="settings-grid"><SettingText title="Папка временных файлов" hint="Proxy, WAV и промежуточные данные; их можно безопасно удалить." value={settings.cache_dir} onChange={(value) => patchSettings({ cache_dir: value })} wide /><SettingText title="Папка готовых роликов" hint="Готовые MP4, обложки, субтитры и метаданные." value={settings.output_dir} onChange={(value) => patchSettings({ output_dir: value })} wide /></div></section>
         <section className="settings-section"><h3>Анализ и Auto</h3><div className="settings-grid"><label className="setting-field"><span>Профиль качества</span><select value={settings.quality_profile} onChange={(event) => patchSettings({ quality_profile: event.target.value as RuntimeSettings["quality_profile"] })}><option value="fast">Быстрый</option><option value="balanced">Сбалансированный</option><option value="quality">Качественный</option></select><small>Баланс скорости и тщательности локального анализа.</small></label><SettingNumber title="Минимальная длина, сек." hint="Короткий кандидат будет расширен." value={settings.min_clip_seconds} min={5} max={300} onChange={(value) => patchSettings({ min_clip_seconds: value })} /><SettingNumber title="Максимальная длина, сек." hint="Клип не выйдет за этот предел." value={settings.max_clip_seconds} min={5} max={300} onChange={(value) => patchSettings({ max_clip_seconds: value })} /><SettingNumber title="Порог Auto, баллы" hint="Auto принимает кандидатов с этой оценкой и выше." value={settings.auto_score_threshold} min={0} max={100} onChange={(value) => patchSettings({ auto_score_threshold: value })} /><SettingNumber title="Максимум клипов" hint="Лимит автоматического экспорта из серии." value={settings.max_clips_per_episode} min={1} max={20} onChange={(value) => patchSettings({ max_clips_per_episode: value })} /><SettingCheck title="Фоновая очередь" hint="Новые задачи запускаются сами." checked={settings.background_queue_enabled} onChange={(value) => patchSettings({ background_queue_enabled: value })} /><SettingCheck title="Auto по умолчанию" hint="Лучшие кандидаты принимаются и экспортируются." checked={settings.auto_mode_enabled} onChange={(value) => patchSettings({ auto_mode_enabled: value })} /></div></section>
@@ -378,6 +394,8 @@ function App() {
 
 const jsonHeaders = { "Content-Type": "application/json" };
 function splitLines(value: string) { return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); }
+function fileDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Пустой файл")); reader.onerror = () => reject(reader.error ?? new Error("Ошибка чтения")); reader.readAsDataURL(file); }); }
+function identityMethodLabel(method: string) { const labels: Record<string, string> = { manual: "подтверждено вручную", face: "лицо", "face+lip": "лицо + губы", voice: "голос", "face+lip+voice": "лицо + губы + голос" }; return labels[method] ?? method; }
 function SettingText({ title, hint, value, onChange, wide = false }: { title: string; hint: string; value: string; onChange: (value: string) => void; wide?: boolean }) { return <label className={`setting-field ${wide ? "setting-field-wide" : ""}`}><span>{title}</span><input value={value} onChange={(event) => onChange(event.target.value)} /><small>{hint}</small></label>; }
 function SettingNumber({ title, hint, value, min, max, onChange }: { title: string; hint: string; value: number; min: number; max: number; onChange: (value: number) => void }) { return <label className="setting-field"><span>{title}</span><input type="number" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} /><small>{hint}</small></label>; }
 function SettingCheck({ title, hint, checked, onChange }: { title: string; hint: string; checked: boolean; onChange: (value: boolean) => void }) { return <label className="setting-checkbox"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span><strong>{title}</strong><small>{hint}</small></span></label>; }

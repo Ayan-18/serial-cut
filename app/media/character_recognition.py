@@ -19,125 +19,306 @@ class RecognitionSuggestion:
     character_id: int
     character_name: str
     confidence: float
+    lip_confidence: float
+    face_model: str
+
+
+@dataclass(frozen=True)
+class FaceObservation:
+    x: int
+    y: int
+    width: int
+    height: int
+    score: float
+    embedding: np.ndarray
+    landmarks: tuple[tuple[float, float], ...] = ()
+
+    @property
+    def center_x(self) -> float:
+        return self.x + self.width / 2
+
+    @property
+    def center_y(self) -> float:
+        return self.y + self.height / 2
+
+
+class LocalFaceRecognizer:
+    """YuNet + SFace when local ONNX weights exist, with a deterministic offline fallback."""
+
+    def __init__(self, detector_model: Path | None = None, recognizer_model: Path | None = None):
+        import cv2
+
+        self.cv2 = cv2
+        self.detector = None
+        self.recognizer = None
+        self.cascade = None
+        if detector_model and recognizer_model and detector_model.exists() and recognizer_model.exists():
+            try:
+                self.detector = cv2.FaceDetectorYN.create(
+                    str(detector_model), "", (320, 320), 0.72, 0.3, 5000
+                )
+                self.recognizer = cv2.FaceRecognizerSF.create(str(recognizer_model), "")
+            except cv2.error:
+                self.detector = None
+                self.recognizer = None
+        if self.detector is None or self.recognizer is None:
+            cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+            self.cascade = cv2.CascadeClassifier(str(cascade_path))
+
+    @property
+    def neural(self) -> bool:
+        return self.detector is not None and self.recognizer is not None
+
+    @property
+    def model_name(self) -> str:
+        return "YuNet + SFace" if self.neural else "Haar + DCT (резервный режим)"
+
+    def detect(self, frame: np.ndarray) -> list[FaceObservation]:
+        if frame is None or frame.size == 0:
+            return []
+        if self.neural:
+            return self._detect_neural(frame)
+        return self._detect_fallback(frame)
+
+    def _detect_neural(self, frame: np.ndarray) -> list[FaceObservation]:
+        assert self.detector is not None and self.recognizer is not None
+        height, width = frame.shape[:2]
+        self.detector.setInputSize((width, height))
+        _, faces = self.detector.detect(frame)
+        if faces is None:
+            return []
+        observations: list[FaceObservation] = []
+        for face in faces:
+            row = np.asarray(face, dtype=np.float32)
+            try:
+                aligned = self.recognizer.alignCrop(frame, row)
+                vector = np.asarray(self.recognizer.feature(aligned), dtype=np.float32).reshape(-1)
+            except self.cv2.error:
+                continue
+            x, y, face_width, face_height = [int(round(value)) for value in row[:4]]
+            x = max(0, min(width - 1, x))
+            y = max(0, min(height - 1, y))
+            face_width = max(1, min(width - x, face_width))
+            face_height = max(1, min(height - y, face_height))
+            landmarks = tuple((float(row[index]), float(row[index + 1])) for index in range(4, 14, 2))
+            observations.append(
+                FaceObservation(
+                    x=x,
+                    y=y,
+                    width=face_width,
+                    height=face_height,
+                    score=float(row[14]),
+                    embedding=_normalized(vector),
+                    landmarks=landmarks,
+                )
+            )
+        return observations
+
+    def _detect_fallback(self, frame: np.ndarray) -> list[FaceObservation]:
+        gray = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        faces = self.cascade.detectMultiScale(
+            gray, scaleFactor=1.12, minNeighbors=5, minSize=(36, 36)
+        )
+        observations: list[FaceObservation] = []
+        for x, y, width, height in faces:
+            crop = frame[y : y + height, x : x + width]
+            observations.append(
+                FaceObservation(
+                    int(x),
+                    int(y),
+                    int(width),
+                    int(height),
+                    1.0,
+                    face_signature(crop, self.cv2),
+                )
+            )
+        return observations
 
 
 def recognize_speaker_clusters(
     video_path: Path,
     labeled_ranges: dict[str, list[tuple[float, float]]],
     profiles: list[CharacterProfile],
-    samples_per_label: int = 10,
-) -> list[RecognitionSuggestion]:
+    detector_model: Path | None = None,
+    recognizer_model: Path | None = None,
+    samples_per_label: int = 12,
+) -> tuple[list[RecognitionSuggestion], str]:
     import cv2
 
-    reference_vectors = _reference_vectors(profiles)
+    engine = LocalFaceRecognizer(detector_model, recognizer_model)
+    reference_vectors = build_reference_vectors(engine, profiles)
     if not reference_vectors:
-        return []
+        return [], engine.model_name
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise RuntimeError("Не удалось открыть видео для распознавания персонажей")
-    cascade = _face_cascade(cv2)
     suggestions: list[RecognitionSuggestion] = []
     try:
         for source_label, ranges in sorted(labeled_ranges.items()):
             selected = _evenly_spaced(ranges, samples_per_label)
-            matches: list[tuple[int, str, float]] = []
+            matches: list[tuple[int, str, float, float]] = []
             for start, end in selected:
-                capture.set(cv2.CAP_PROP_POS_MSEC, ((start + end) / 2) * 1000)
-                ok, frame = capture.read()
-                if not ok:
+                timestamp = (start + end) / 2
+                current = _read_frame(capture, timestamp, cv2)
+                previous = _read_frame(capture, max(start, timestamp - 0.12), cv2)
+                if current is None or previous is None:
                     continue
-                face = _largest_face(frame, cascade, cv2)
-                if face is None:
+                current_faces = engine.detect(current)
+                previous_faces = engine.detect(previous)
+                selected_face, lip_score = select_lip_active_face(
+                    current, current_faces, previous, previous_faces, cv2
+                )
+                if selected_face is None or lip_score < 0.012:
                     continue
-                match = _best_match(face_signature(face, cv2), reference_vectors)
+                match = best_character_match(selected_face.embedding, reference_vectors, engine.neural)
                 if match is not None:
-                    matches.append(match)
-            suggestion = _majority_suggestion(source_label, matches)
+                    matches.append((*match, lip_score))
+            suggestion = _majority_suggestion(source_label, matches, engine.model_name)
             if suggestion is not None:
                 suggestions.append(suggestion)
     finally:
         capture.release()
-    return suggestions
+    return suggestions, engine.model_name
 
 
-def face_signature(image: np.ndarray, cv2_module=None) -> np.ndarray:
-    if cv2_module is None:
-        import cv2 as cv2_module
-
-    gray = image if image.ndim == 2 else cv2_module.cvtColor(image, cv2_module.COLOR_BGR2GRAY)
-    normalized = cv2_module.resize(gray, (96, 96), interpolation=cv2_module.INTER_AREA)
-    normalized = cv2_module.equalizeHist(normalized)
-    dct = cv2_module.dct(normalized.astype(np.float32) / 255.0)
-    vector = dct[:20, :20].reshape(-1)[1:]
-    norm = float(np.linalg.norm(vector))
-    return vector / norm if norm > 1e-8 else vector
-
-
-def _reference_vectors(profiles: list[CharacterProfile]) -> list[tuple[int, str, np.ndarray]]:
-    import cv2
-
-    cascade = _face_cascade(cv2)
+def build_reference_vectors(
+    engine: LocalFaceRecognizer,
+    profiles: list[CharacterProfile],
+) -> list[tuple[int, str, np.ndarray]]:
+    cv2 = engine.cv2
     vectors: list[tuple[int, str, np.ndarray]] = []
     for profile in profiles:
         for path in profile.photo_paths:
             image = cv2.imread(str(path))
             if image is None:
                 continue
-            face = _largest_face(image, cascade, cv2)
-            if face is None:
-                face = image
-            vectors.append((profile.character_id, profile.name, face_signature(face, cv2)))
+            image = _downscale(image, 1280, cv2)
+            faces = engine.detect(image)
+            if not faces:
+                continue
+            face = max(faces, key=lambda item: item.width * item.height)
+            vectors.append((profile.character_id, profile.name, face.embedding))
     return vectors
 
 
-def _face_cascade(cv2_module):
-    cascade_path = Path(cv2_module.data.haarcascades) / "haarcascade_frontalface_default.xml"
-    return cv2_module.CascadeClassifier(str(cascade_path))
-
-
-def _largest_face(frame: np.ndarray, cascade, cv2_module) -> np.ndarray | None:
-    gray = cv2_module.cvtColor(frame, cv2_module.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(48, 48))
-    if len(faces) == 0:
-        return None
-    x, y, width, height = max(faces, key=lambda item: item[2] * item[3])
-    pad_x = round(width * 0.12)
-    pad_y = round(height * 0.12)
-    left = max(0, x - pad_x)
-    top = max(0, y - pad_y)
-    right = min(frame.shape[1], x + width + pad_x)
-    bottom = min(frame.shape[0], y + height + pad_y)
-    return frame[top:bottom, left:right]
-
-
-def _best_match(
+def best_character_match(
     vector: np.ndarray,
     references: list[tuple[int, str, np.ndarray]],
-    threshold: float = 0.86,
-    margin: float = 0.04,
+    neural: bool,
+    character_id: int | None = None,
 ) -> tuple[int, str, float] | None:
     best_by_character: dict[int, tuple[int, str, float]] = {}
-    for character_id, name, reference in references:
+    for reference_character_id, name, reference in references:
+        if character_id is not None and reference_character_id != character_id:
+            continue
         score = float(np.dot(vector, reference))
-        current = best_by_character.get(character_id)
+        current = best_by_character.get(reference_character_id)
         if current is None or score > current[2]:
-            best_by_character[character_id] = (character_id, name, score)
+            best_by_character[reference_character_id] = (reference_character_id, name, score)
     scores = sorted(best_by_character.values(), key=lambda item: item[2], reverse=True)
+    threshold = 0.43 if neural else 0.86
+    margin = 0.07 if neural else 0.04
     if not scores or scores[0][2] < threshold:
         return None
-    if len(scores) > 1 and scores[0][2] - scores[1][2] < margin:
+    if character_id is None and len(scores) > 1 and scores[0][2] - scores[1][2] < margin:
         return None
     return scores[0]
 
 
+def select_lip_active_face(
+    current_frame: np.ndarray,
+    current_faces: list[FaceObservation],
+    previous_frame: np.ndarray,
+    previous_faces: list[FaceObservation],
+    cv2_module=None,
+) -> tuple[FaceObservation | None, float]:
+    if cv2_module is None:
+        import cv2 as cv2_module
+    if not current_faces or not previous_faces:
+        return None, 0.0
+    scored: list[tuple[FaceObservation, float]] = []
+    diagonal = max(1.0, float(np.hypot(current_frame.shape[1], current_frame.shape[0])))
+    for face in current_faces:
+        previous = min(
+            previous_faces,
+            key=lambda item: np.hypot(face.center_x - item.center_x, face.center_y - item.center_y),
+        )
+        distance = float(np.hypot(face.center_x - previous.center_x, face.center_y - previous.center_y))
+        if distance / diagonal > 0.18:
+            continue
+        score = mouth_motion_score(current_frame, face, previous_frame, previous, cv2_module)
+        scored.append((face, score))
+    if not scored:
+        return None, 0.0
+    return max(scored, key=lambda item: item[1])
+
+
+def mouth_motion_score(
+    current_frame: np.ndarray,
+    current_face: FaceObservation,
+    previous_frame: np.ndarray,
+    previous_face: FaceObservation,
+    cv2_module=None,
+) -> float:
+    if cv2_module is None:
+        import cv2 as cv2_module
+    current = _mouth_crop(current_frame, current_face, cv2_module)
+    previous = _mouth_crop(previous_frame, previous_face, cv2_module)
+    if current is None or previous is None:
+        return 0.0
+    current = cv2_module.resize(current, (48, 24), interpolation=cv2_module.INTER_AREA)
+    previous = cv2_module.resize(previous, (48, 24), interpolation=cv2_module.INTER_AREA)
+    current = current.astype(np.float32)
+    previous = previous.astype(np.float32)
+    current = (current - current.mean()) / max(8.0, float(current.std()))
+    previous = (previous - previous.mean()) / max(8.0, float(previous.std()))
+    return float(np.mean(np.abs(current - previous)))
+
+
+def face_signature(image: np.ndarray, cv2_module=None) -> np.ndarray:
+    if cv2_module is None:
+        import cv2 as cv2_module
+    gray = image if image.ndim == 2 else cv2_module.cvtColor(image, cv2_module.COLOR_BGR2GRAY)
+    normalized = cv2_module.resize(gray, (96, 96), interpolation=cv2_module.INTER_AREA)
+    normalized = cv2_module.equalizeHist(normalized)
+    dct = cv2_module.dct(normalized.astype(np.float32) / 255.0)
+    vector = dct[:20, :20].reshape(-1)[1:]
+    return _normalized(vector)
+
+
+def _mouth_crop(frame: np.ndarray, face: FaceObservation, cv2_module) -> np.ndarray | None:
+    gray = frame if frame.ndim == 2 else cv2_module.cvtColor(frame, cv2_module.COLOR_BGR2GRAY)
+    if len(face.landmarks) >= 5:
+        mouth_left, mouth_right = face.landmarks[3], face.landmarks[4]
+        center_x = (mouth_left[0] + mouth_right[0]) / 2
+        center_y = (mouth_left[1] + mouth_right[1]) / 2
+        mouth_width = max(abs(mouth_right[0] - mouth_left[0]) * 2.1, face.width * 0.34)
+        mouth_height = max(face.height * 0.28, mouth_width * 0.42)
+        left = int(center_x - mouth_width / 2)
+        right = int(center_x + mouth_width / 2)
+        top = int(center_y - mouth_height * 0.35)
+        bottom = int(center_y + mouth_height * 0.65)
+    else:
+        left = int(face.x + face.width * 0.18)
+        right = int(face.x + face.width * 0.82)
+        top = int(face.y + face.height * 0.58)
+        bottom = int(face.y + face.height * 0.93)
+    left, right = max(0, left), min(gray.shape[1], right)
+    top, bottom = max(0, top), min(gray.shape[0], bottom)
+    if right - left < 8 or bottom - top < 5:
+        return None
+    return gray[top:bottom, left:right]
+
+
 def _majority_suggestion(
     source_label: str,
-    matches: list[tuple[int, str, float]],
+    matches: list[tuple[int, str, float, float]],
+    face_model: str,
 ) -> RecognitionSuggestion | None:
     if len(matches) < 2:
         return None
     counts: dict[int, int] = {}
-    for character_id, _, _ in matches:
+    for character_id, _, _, _ in matches:
         counts[character_id] = counts.get(character_id, 0) + 1
     winner_id, winner_count = max(counts.items(), key=lambda item: item[1])
     if winner_count / len(matches) < 0.65:
@@ -148,7 +329,30 @@ def _majority_suggestion(
         character_id=winner_id,
         character_name=winner_matches[0][1],
         confidence=round(sum(item[2] for item in winner_matches) / len(winner_matches), 3),
+        lip_confidence=round(sum(item[3] for item in winner_matches) / len(winner_matches), 3),
+        face_model=face_model,
     )
+
+
+def _read_frame(capture, timestamp: float, cv2_module) -> np.ndarray | None:
+    capture.set(cv2_module.CAP_PROP_POS_MSEC, max(0.0, timestamp) * 1000)
+    ok, frame = capture.read()
+    if not ok:
+        return None
+    return _downscale(frame, 720, cv2_module)
+
+
+def _downscale(frame: np.ndarray, max_width: int, cv2_module) -> np.ndarray:
+    height, width = frame.shape[:2]
+    if width <= max_width:
+        return frame
+    scale = max_width / width
+    return cv2_module.resize(frame, (max_width, max(1, round(height * scale))))
+
+
+def _normalized(vector: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 1e-8 else vector
 
 
 def _evenly_spaced(items: list[tuple[float, float]], limit: int) -> list[tuple[float, float]]:

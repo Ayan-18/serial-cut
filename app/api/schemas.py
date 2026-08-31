@@ -162,6 +162,7 @@ class CharacterRead(BaseModel):
     color: str
     photo_count: int
     photo_urls: list[str]
+    voice_sample_count: int
 
 
 class SpeakerIdentityUpdate(BaseModel):
@@ -185,6 +186,8 @@ class CharacterRecognitionResponse(BaseModel):
     analyzed_labels: int
     assigned_labels: int
     assignments: list[SpeakerIdentityRead]
+    face_model: str
+    voice_profiles_used: int
 
 
 class ReviewRequest(BaseModel):
@@ -231,6 +234,10 @@ class AutoCropResponse(BaseModel):
     faces_detected: int
     frames_sampled: int
     keyframes: list[dict]
+    active_speaker_frames: int
+    identified_speaker_frames: int
+    lip_motion_frames: int
+    face_model: str
 
 
 class RenderResponse(BaseModel):
@@ -261,6 +268,8 @@ class ModelDiagnosticsRead(BaseModel):
     llm_adapter: str
     llm_ready: bool
     llm_url: str
+    face_ready: bool
+    face_model: str
     details: list[str]
 
 

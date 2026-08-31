@@ -52,7 +52,12 @@ from app.application.candidate_editor import (
 )
 from app.application.auto import auto_approve_and_export
 from app.application.cache import cache_summary, clear_cache
-from app.application.characters import add_character_photo, assign_speaker_identity, recognize_episode_characters
+from app.application.characters import (
+    add_character_photo,
+    assign_speaker_identity,
+    recognize_episode_characters,
+    train_character_voice,
+)
 from app.application.importer import import_season
 from app.application.model_diagnostics import check_models
 from app.application.processing_guard import ProcessingBusyError, processing_guard
@@ -66,7 +71,8 @@ from app.application.system_check import report_as_dict, run_system_check
 from app.domain.enums import JobStatus
 from app.infrastructure.database import SessionLocal
 from app.media.ffprobe import apply_probe_to_episode, probe_media
-from app.media.face_tracking import estimate_face_offset
+from app.media.character_recognition import CharacterProfile
+from app.media.face_tracking import SpeechRange, estimate_face_offset
 from app.models.entities import (
     Character,
     ClipCandidate,
@@ -254,6 +260,22 @@ def character_photo(character_id: int, photo_index: int, session: Session = Depe
     return FileResponse(path)
 
 
+@router.delete("/characters/{character_id}/photos/{photo_index}", response_model=CharacterRead)
+def delete_character_photo(character_id: int, photo_index: int, session: Session = Depends(get_session)):
+    character = session.get(Character, character_id)
+    photos = list(character.photos_json or []) if character is not None else []
+    if character is None or photo_index < 0 or photo_index >= len(photos):
+        raise HTTPException(status_code=404, detail="Фотография не найдена")
+    path = Path(photos.pop(photo_index)).resolve()
+    root = get_settings().characters_dir.resolve()
+    if root not in path.parents:
+        raise HTTPException(status_code=400, detail="Небезопасный путь фотографии")
+    character.photos_json = photos
+    session.commit()
+    path.unlink(missing_ok=True)
+    return _character_read(character)
+
+
 @router.delete("/characters/{character_id}")
 def delete_character(character_id: int, session: Session = Depends(get_session)):
     character = session.get(Character, character_id)
@@ -302,6 +324,7 @@ def update_speaker_identity(
     session: Session = Depends(get_session),
 ):
     try:
+        _ensure_episode_not_enqueued(session, episode_id)
         identity = assign_speaker_identity(
             session,
             episode_id,
@@ -309,7 +332,21 @@ def update_speaker_identity(
             payload.character_id,
         )
         session.commit()
+        with processing_guard():
+            train_character_voice(session, episode_id, payload.source_label, payload.character_id)
+        identity = session.scalar(
+            select(SpeakerIdentity).where(
+                SpeakerIdentity.episode_id == episode_id,
+                SpeakerIdentity.source_label == payload.source_label,
+            )
+        )
+        session.commit()
+        if identity is None:
+            raise ValueError("Не удалось сохранить привязку говорящего")
         return _speaker_identity_read(session, identity)
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -318,6 +355,7 @@ def update_speaker_identity(
 @router.post("/episodes/{episode_id}/identify-characters", response_model=CharacterRecognitionResponse)
 def identify_episode_characters(episode_id: int, session: Session = Depends(get_session)):
     try:
+        settings = effective_settings(session, get_settings())
         _ensure_episode_not_enqueued(session, episode_id)
         episode = _get_episode(session, episode_id)
         labels = {
@@ -329,12 +367,14 @@ def identify_episode_characters(episode_id: int, session: Session = Depends(get_
         }
         session.commit()
         with processing_guard():
-            identities = recognize_episode_characters(session, episode.id)
+            result = recognize_episode_characters(session, episode.id, settings)
         session.commit()
         return CharacterRecognitionResponse(
             analyzed_labels=len(labels),
-            assigned_labels=len(identities),
-            assignments=[_speaker_identity_read(session, item) for item in identities],
+            assigned_labels=len(result.identities),
+            assignments=[_speaker_identity_read(session, item) for item in result.identities],
+            face_model=result.face_model,
+            voice_profiles_used=result.voice_profiles_used,
         )
     except ProcessingBusyError as exc:
         session.rollback()
@@ -510,10 +550,49 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
     if episode is None:
         raise HTTPException(status_code=404, detail="Серия не найдена")
     try:
+        settings = effective_settings(session, get_settings())
         _ensure_episode_not_enqueued(session, episode.id)
+        identity_map = {
+            item.source_label: item.character_id
+            for item in session.scalars(
+                select(SpeakerIdentity).where(SpeakerIdentity.episode_id == episode.id)
+            ).all()
+        }
+        segments = session.scalars(
+            select(TranscriptSegment).where(
+                TranscriptSegment.episode_id == episode.id,
+                TranscriptSegment.end_time >= candidate.start_time,
+                TranscriptSegment.start_time <= candidate.end_time,
+            )
+        ).all()
+        speech_ranges = [
+            SpeechRange(
+                item.start_time,
+                item.end_time,
+                item.speaker_label,
+                identity_map.get(item.speaker_label) if item.speaker_label else None,
+            )
+            for item in segments
+        ]
+        characters = session.scalars(
+            select(Character).where(Character.season_id == episode.season_id)
+        ).all()
+        profiles = [
+            CharacterProfile(item.id, item.name, [Path(path) for path in item.photos_json or []])
+            for item in characters
+            if item.photos_json
+        ]
         session.commit()
         with processing_guard():
-            result = estimate_face_offset(Path(episode.file_path), candidate.start_time, candidate.end_time)
+            result = estimate_face_offset(
+                Path(episode.proxy_path or episode.file_path),
+                candidate.start_time,
+                candidate.end_time,
+                speech_ranges=speech_ranges,
+                character_profiles=profiles,
+                detector_model=settings.face_detector_model,
+                recognizer_model=settings.face_recognizer_model,
+            )
         candidate.crop_mode = "auto-follow"
         candidate.crop_offset_x = result.offset_x
         candidate.crop_keyframes_json = result.keyframes
@@ -524,6 +603,10 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
             faces_detected=result.faces_detected,
             frames_sampled=result.frames_sampled,
             keyframes=result.keyframes,
+            active_speaker_frames=result.active_speaker_frames,
+            identified_speaker_frames=result.identified_speaker_frames,
+            lip_motion_frames=result.lip_motion_frames,
+            face_model=result.face_model,
         )
     except ProcessingBusyError as exc:
         session.rollback()
@@ -736,6 +819,7 @@ def _character_read(character: Character) -> CharacterRead:
         color=character.color,
         photo_count=len(photos),
         photo_urls=[f"/api/characters/{character.id}/photos/{index}" for index in range(len(photos))],
+        voice_sample_count=int((character.voice_profile_json or {}).get("sample_count", 0)),
     )
 
 

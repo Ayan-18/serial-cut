@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     cache_dir: Path = Path("./data/cache")
     output_dir: Path = Path("./data/output")
     characters_dir: Path = Path("./data/characters")
+    face_detector_model: Path = Path("./data/models/face/face_detection_yunet_2026may.onnx")
+    face_recognizer_model: Path = Path("./data/models/face/face_recognition_sface_2021dec.onnx")
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     proxy_width: int = 640
