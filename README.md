@@ -71,6 +71,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
 Можно также дважды щёлкнуть `Start SerialCuts.cmd`. Скрипт `scripts/create_shortcut.ps1` создаёт
 ярлык `SerialCuts` на рабочем столе; на настроенном компьютере он уже создан.
 
+## Quality Benchmark
+
+Для проверки качества алгоритмов без тяжёлых видео есть лёгкие JSON-сценарии в `tests/quality`.
+Они прогоняют candidate scoring, boundary adjustment и dedupe на тестовых transcript/scenes и
+показывают метрики:
+
+```powershell
+.\scripts\quality_check.ps1
+```
+
+Отчёт включает `Overall`, `Candidate quality`, `Boundary quality`, coverage ожидаемых сцен,
+precision, duplicate rate и invalid clips. Это базовый измеритель перед изменениями логики выбора
+моментов.
+
 ## Работа Через Codex На Двух Компьютерах
 
 Общий контекст проекта хранится в GitHub, `AGENTS.md`, `WORKLOG.md` и документации. Перед работой на ноутбуке или компьютере делайте `git pull --ff-only`, после завершения - обновляйте `WORKLOG.md`, коммитьте и пушьте изменения. Подробная инструкция: `docs/CODEX_SYNC.md`.

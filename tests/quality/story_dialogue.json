@@ -1,0 +1,196 @@
+{
+  "name": "story_dialogue",
+  "min_clip_seconds": 25,
+  "max_clip_seconds": 59,
+  "transcript_segments": [
+    {
+      "start_time": 0.0,
+      "end_time": 5.0,
+      "text": "Ранее в сериале.",
+      "speaker_label": "Narrator"
+    },
+    {
+      "start_time": 10.0,
+      "end_time": 15.0,
+      "text": "Ты правда скрывал это от нас?",
+      "speaker_label": "Аня"
+    },
+    {
+      "start_time": 15.8,
+      "end_time": 22.0,
+      "text": "Я пытался защитить семью.",
+      "speaker_label": "Максим"
+    },
+    {
+      "start_time": 23.0,
+      "end_time": 32.0,
+      "text": "Защитить? Ты разрушил всё!",
+      "speaker_label": "Аня"
+    },
+    {
+      "start_time": 33.0,
+      "end_time": 48.0,
+      "text": "Тогда слушай: деньги всё ещё у меня.",
+      "speaker_label": "Максим"
+    },
+    {
+      "start_time": 70.0,
+      "end_time": 75.0,
+      "text": "Ну, мы пришли.",
+      "speaker_label": "Аня"
+    },
+    {
+      "start_time": 76.0,
+      "end_time": 80.0,
+      "text": "Да.",
+      "speaker_label": "Максим"
+    },
+    {
+      "start_time": 81.0,
+      "end_time": 85.0,
+      "text": "Пошли.",
+      "speaker_label": "Аня"
+    },
+    {
+      "start_time": 108.0,
+      "end_time": 113.0,
+      "text": "Подожди, ключ не от двери.",
+      "speaker_label": "Максим"
+    },
+    {
+      "start_time": 114.0,
+      "end_time": 120.0,
+      "text": "Тогда от чего?",
+      "speaker_label": "Аня"
+    },
+    {
+      "start_time": 121.0,
+      "end_time": 132.0,
+      "text": "От сейфа, где лежит письмо от отца.",
+      "speaker_label": "Максим"
+    },
+    {
+      "start_time": 133.0,
+      "end_time": 147.0,
+      "text": "Значит он всё это время был жив?",
+      "speaker_label": "Аня"
+    }
+  ],
+  "scenes": [
+    {
+      "start_time": 0.0,
+      "end_time": 6.0,
+      "label": "recap"
+    },
+    {
+      "start_time": 9.7,
+      "end_time": 49.0,
+      "label": "money_reveal"
+    },
+    {
+      "start_time": 68.0,
+      "end_time": 90.0,
+      "label": "walk"
+    },
+    {
+      "start_time": 107.8,
+      "end_time": 148.0,
+      "label": "letter_reveal"
+    }
+  ],
+  "candidates": [
+    {
+      "start_time": 10.2,
+      "end_time": 47.5,
+      "title": "Деньги у меня",
+      "description": "Конфликт заканчивается сильным признанием.",
+      "moment_type": "конфликт",
+      "characters": ["Аня", "Максим"],
+      "score": 88,
+      "scores": {
+        "hook": 88,
+        "standalone_context": 86,
+        "payoff": 92,
+        "emotion": 90,
+        "boundary_quality": 80,
+        "visual_potential": 78,
+        "audio_quality": 90
+      },
+      "standalone_reason": "Зрителю понятно, что герой скрывал деньги.",
+      "possible_problems": []
+    },
+    {
+      "start_time": 11.0,
+      "end_time": 47.0,
+      "title": "Повтор того же конфликта",
+      "description": "Почти тот же момент с худшими границами.",
+      "moment_type": "конфликт",
+      "characters": ["Аня", "Максим"],
+      "score": 72,
+      "scores": {
+        "hook": 72,
+        "standalone_context": 70,
+        "payoff": 74,
+        "emotion": 76,
+        "boundary_quality": 55,
+        "visual_potential": 70,
+        "audio_quality": 78
+      },
+      "standalone_reason": "Дублирует сильный конфликт.",
+      "possible_problems": ["Похоже на соседний кандидат"]
+    },
+    {
+      "start_time": 70.0,
+      "end_time": 82.0,
+      "title": "Мы пришли",
+      "description": "Короткий проход без самостоятельной драматургии.",
+      "moment_type": "другое",
+      "characters": ["Аня", "Максим"],
+      "score": 50,
+      "scores": {
+        "hook": 42,
+        "standalone_context": 45,
+        "payoff": 35,
+        "emotion": 30,
+        "boundary_quality": 70,
+        "visual_potential": 55,
+        "audio_quality": 80
+      },
+      "standalone_reason": "Контекст слабый.",
+      "possible_problems": ["Нет сильной концовки"]
+    },
+    {
+      "start_time": 109.0,
+      "end_time": 146.0,
+      "title": "Письмо от отца",
+      "description": "Сцена раскрывает, что отец может быть жив.",
+      "moment_type": "откровение",
+      "characters": ["Аня", "Максим"],
+      "score": 90,
+      "scores": {
+        "hook": 86,
+        "standalone_context": 88,
+        "payoff": 94,
+        "emotion": 86,
+        "boundary_quality": 82,
+        "visual_potential": 76,
+        "audio_quality": 90
+      },
+      "standalone_reason": "Секрет письма и финальный вопрос понятны без всей серии.",
+      "possible_problems": []
+    }
+  ],
+  "expected_good_ranges": [
+    {
+      "start_time": 10.0,
+      "end_time": 48.0,
+      "label": "money_reveal"
+    },
+    {
+      "start_time": 108.0,
+      "end_time": 147.0,
+      "label": "letter_reveal"
+    }
+  ]
+}
+

@@ -2,6 +2,22 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-31 - Quality Benchmark
+
+Added a lightweight repository-shared quality benchmark instead of changing the one-click launcher:
+
+- `app/analysis/benchmark.py` loads JSON quality cases, runs boundary adjustment, candidate
+  calibration and dedupe, then reports candidate quality, boundary quality, expected-scene coverage,
+  precision, duplicate rate and invalid clips.
+- `tests/quality/story_dialogue.json` provides a video-free fixture with transcript segments,
+  scenes, candidate proposals and expected good ranges.
+- `scripts/quality_check.ps1` runs the benchmark from PowerShell using the project venv when present.
+- `tests/test_quality_benchmark.py` covers the scoring gate, text report and JSON-serializable result.
+
+Decision: quality work should be measurable before changing the main candidate-generation algorithm.
+The benchmark must stay lightweight and commit-friendly: no original media, rendered clips, model
+files or cache artifacts in Git.
+
 ## 2026-08-31 - Multimodal Character Identity And Active-Speaker Crop
 
 Completed the five requested identity and framing features:
