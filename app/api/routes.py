@@ -50,6 +50,9 @@ from app.api.schemas import (
     SpeakerIdentityRead,
     SpeakerIdentityUpdate,
     SpeakerLabelsRead,
+    StoryArcCreateRequest,
+    StoryArcRead,
+    StoryArcSegmentRead,
     StoryContextRead,
     StoryContextUpdate,
 )
@@ -80,6 +83,14 @@ from app.application.settings import RuntimeSettings, effective_settings, get_ru
 from app.application.stage2 import run_stage2_media_analysis
 from app.application.stage3 import run_stage3_candidate_analysis
 from app.application.stage4 import render_candidate, render_candidate_preview
+from app.application.story_arcs import (
+    StoryArcPlanRequest,
+    create_story_arc_plan,
+    delete_story_arc,
+    get_story_arc,
+    list_story_arcs,
+    rebuild_story_arc_plan,
+)
 from app.application.system_check import report_as_dict, run_system_check
 from app.domain.enums import JobStatus
 from app.infrastructure.database import SessionLocal
@@ -97,6 +108,8 @@ from app.models.entities import (
     JobStage,
     Season,
     SpeakerIdentity,
+    StoryArc,
+    StoryArcSegment,
     TranscriptSegment,
 )
 from app.infrastructure.config import get_settings
@@ -215,6 +228,52 @@ def read_episode_outline(episode_id: int, session: Session = Depends(get_session
     if outline is None:
         raise HTTPException(status_code=404, detail="Сюжетная карта ещё не построена")
     return EpisodeOutlineRead(episode_id=episode_id, summary_json=outline.summary_json)
+
+
+@router.get("/story-arcs", response_model=list[StoryArcRead])
+def story_arcs(season_id: int | None = None, session: Session = Depends(get_session)):
+    return [_story_arc_read(session, item) for item in list_story_arcs(session, season_id)]
+
+
+@router.post("/story-arcs", response_model=StoryArcRead)
+def create_story_arc(payload: StoryArcCreateRequest, session: Session = Depends(get_session)):
+    try:
+        arc = create_story_arc_plan(session, StoryArcPlanRequest(**payload.model_dump()))
+        session.commit()
+        return _story_arc_read(session, arc)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/story-arcs/{story_arc_id}", response_model=StoryArcRead)
+def read_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
+    try:
+        return _story_arc_read(session, get_story_arc(session, story_arc_id))
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/story-arcs/{story_arc_id}/rebuild", response_model=StoryArcRead)
+def rebuild_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
+    try:
+        arc = rebuild_story_arc_plan(session, story_arc_id)
+        session.commit()
+        return _story_arc_read(session, arc)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/story-arcs/{story_arc_id}")
+def remove_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
+    try:
+        delete_story_arc(session, story_arc_id)
+        session.commit()
+        return {"deleted": True}
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/seasons/{season_id}/characters", response_model=list[CharacterRead])
@@ -976,6 +1035,45 @@ def _story_context_read(episode: Episode) -> StoryContextRead:
         excluded_events=list(episode.excluded_events_json or []),
         spoilers_allowed=episode.spoilers_allowed,
         candidate_mode=episode.candidate_mode,
+    )
+
+
+def _story_arc_read(session: Session, arc: StoryArc) -> StoryArcRead:
+    season = session.get(Season, arc.season_id)
+    character = session.get(Character, arc.target_character_id) if arc.target_character_id else None
+    return StoryArcRead(
+        id=arc.id,
+        season_id=arc.season_id,
+        season_title=season.title if season else "",
+        title=arc.title,
+        prompt=arc.prompt,
+        arc_type=arc.arc_type,
+        output_format=arc.output_format,
+        target_character_id=arc.target_character_id,
+        target_character_name=character.name if character else None,
+        status=arc.status,
+        total_duration_seconds=arc.total_duration_seconds,
+        plan_json=arc.plan_json,
+        segments=[_story_arc_segment_read(session, item) for item in arc.segments],
+    )
+
+
+def _story_arc_segment_read(session: Session, segment: StoryArcSegment) -> StoryArcSegmentRead:
+    episode = session.get(Episode, segment.episode_id)
+    candidate = session.get(ClipCandidate, segment.candidate_id) if segment.candidate_id else None
+    return StoryArcSegmentRead(
+        id=segment.id,
+        story_arc_id=segment.story_arc_id,
+        episode_id=segment.episode_id,
+        episode_file_name=episode.file_name if episode else "",
+        candidate_id=segment.candidate_id,
+        candidate_score=candidate.score if candidate else None,
+        sort_order=segment.sort_order,
+        start_time=segment.start_time,
+        end_time=segment.end_time,
+        title=segment.title,
+        note=segment.note,
+        role=segment.role,
     )
 
 

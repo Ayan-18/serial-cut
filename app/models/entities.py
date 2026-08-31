@@ -16,6 +16,7 @@ class Season(TimestampMixin, Base):
     story_context: Mapped[str] = mapped_column(Text, default="", nullable=False)
     episodes: Mapped[list["Episode"]] = relationship(back_populates="season", cascade="all, delete-orphan")
     characters: Mapped[list["Character"]] = relationship(back_populates="season", cascade="all, delete-orphan")
+    story_arcs: Mapped[list["StoryArc"]] = relationship(back_populates="season", cascade="all, delete-orphan")
 
 
 class Episode(TimestampMixin, Base):
@@ -163,6 +164,48 @@ class ClipCandidate(TimestampMixin, Base):
     story_order: Mapped[int | None] = mapped_column(Integer)
     story_role: Mapped[str | None] = mapped_column(String(64))
     continuity_note: Mapped[str | None] = mapped_column(Text)
+
+
+class StoryArc(TimestampMixin, Base):
+    __tablename__ = "story_arcs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    arc_type: Mapped[str] = mapped_column(String(64), default="custom", nullable=False)
+    output_format: Mapped[str] = mapped_column(String(64), default="shorts_series", nullable=False)
+    target_character_id: Mapped[int | None] = mapped_column(ForeignKey("characters.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    total_duration_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    plan_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    season: Mapped[Season] = relationship(back_populates="story_arcs")
+    target_character: Mapped["Character | None"] = relationship()
+    segments: Mapped[list["StoryArcSegment"]] = relationship(
+        back_populates="story_arc",
+        cascade="all, delete-orphan",
+        order_by="StoryArcSegment.sort_order",
+    )
+
+
+class StoryArcSegment(TimestampMixin, Base):
+    __tablename__ = "story_arc_segments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    story_arc_id: Mapped[int] = mapped_column(ForeignKey("story_arcs.id"), nullable=False, index=True)
+    episode_id: Mapped[int] = mapped_column(ForeignKey("episodes.id"), nullable=False, index=True)
+    candidate_id: Mapped[int | None] = mapped_column(ForeignKey("clip_candidates.id"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    start_time: Mapped[float] = mapped_column(Float, nullable=False)
+    end_time: Mapped[float] = mapped_column(Float, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    role: Mapped[str | None] = mapped_column(String(64))
+
+    story_arc: Mapped[StoryArc] = relationship(back_populates="segments")
+    episode: Mapped[Episode] = relationship()
+    candidate: Mapped[ClipCandidate | None] = relationship()
 
 
 class Character(TimestampMixin, Base):

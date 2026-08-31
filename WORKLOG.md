@@ -2,6 +2,27 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-31 - Season Story Arc Planning
+
+Added the first repository-backed layer for multi-episode and future long-form videos:
+
+- Added `StoryArc` and `StoryArcSegment` models plus Alembic revision `0007_story_arcs`.
+- Added `app/application/story_arcs.py`, a deterministic planner that builds an editable montage
+  plan from already-generated candidates across a whole season.
+- Story arc plans support `single_short`, `shorts_series`, `story_video` and `long_video` formats,
+  optional prompt matching, optional target character priority and max segment/duration limits.
+- Added API endpoints to list, create, read, rebuild and delete story arcs.
+- Added a React `Сюжетные видео` workspace with season/format/character/request controls and a
+  saved montage-plan list. Each segment can jump back to its original candidate for review.
+- Added focused tests for multi-episode planning and character-prioritized arc selection.
+
+Decision: this commit deliberately adds the planning layer before multi-source FFmpeg concatenation.
+The next safe step is render/export for a saved `StoryArc`, including per-segment subtitles,
+loudness normalization and optional separators/transitions.
+
+Verification on the laptop: focused backend tests passed (`23 passed`), Python compile passed for the
+changed modules, and the frontend production build passed.
+
 ## 2026-08-31 - Quality And Usability Pass
 
 Improved the existing quality-critical product functions without touching the one-click launcher:

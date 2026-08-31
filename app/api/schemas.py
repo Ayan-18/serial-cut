@@ -138,6 +138,48 @@ class StoryContextUpdate(BaseModel):
     candidate_mode: str = Field(default="highlights", pattern="^(highlights|story)$")
 
 
+class StoryArcCreateRequest(BaseModel):
+    season_id: int
+    title: str | None = Field(default=None, max_length=255)
+    prompt: str = Field(default="", max_length=2000)
+    arc_type: str = Field(default="custom", pattern="^(custom|character|story_arc)$")
+    output_format: str = Field(default="shorts_series", pattern="^(single_short|shorts_series|story_video|long_video)$")
+    target_character_id: int | None = None
+    max_segments: int = Field(default=8, ge=1, le=40)
+    max_duration_seconds: int = Field(default=420, ge=15, le=7200)
+
+
+class StoryArcSegmentRead(BaseModel):
+    id: int
+    story_arc_id: int
+    episode_id: int
+    episode_file_name: str
+    candidate_id: int | None
+    candidate_score: int | None
+    sort_order: int
+    start_time: float
+    end_time: float
+    title: str
+    note: str
+    role: str | None
+
+
+class StoryArcRead(BaseModel):
+    id: int
+    season_id: int
+    season_title: str
+    title: str
+    prompt: str
+    arc_type: str
+    output_format: str
+    target_character_id: int | None
+    target_character_name: str | None
+    status: str
+    total_duration_seconds: float
+    plan_json: dict
+    segments: list[StoryArcSegmentRead]
+
+
 class EpisodeOutlineRead(BaseModel):
     episode_id: int
     summary_json: dict
