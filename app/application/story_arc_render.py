@@ -11,9 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.application.candidate_editor import subtitle_cues_for_render
-from app.infrastructure.atomic import replace_atomically, temp_sibling
+from app.application.narration import synthesize_story_arc_narration
+from app.infrastructure.atomic import replace_atomically, temp_sibling, write_text_atomically
 from app.infrastructure.config import Settings
-from app.infrastructure.processes import ProcessResult, run_process
+from app.infrastructure.processes import ProcessCancelledError, ProcessResult, run_process
 from app.media.rendering import RENDER_PRESETS, detect_nvenc, render_clip
 from app.media.subtitles import render_ass
 from app.models.entities import ClipCandidate, Episode, Season, StoryArc, StoryArcExport
@@ -40,6 +41,9 @@ def render_story_arc(
     loudnorm_two_pass: bool | None = None,
     force_rerender: bool = False,
     transition_style: str = "cut",
+    include_narration: bool = True,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> StoryArcRenderResult:
     arc = _load_arc(session, story_arc_id)
@@ -48,7 +52,19 @@ def render_story_arc(
         .where(StoryArcExport.story_arc_id == story_arc_id)
         .order_by(StoryArcExport.created_at.desc())
     )
-    if existing is not None and not force_rerender:
+    narration_path = _narration_path(arc)
+    narration_requested = bool(include_narration and (arc.plan_json or {}).get("narration"))
+    reusable = (
+        existing is not None
+        and existing.status == "completed"
+        and existing.arc_revision == arc.edit_revision
+        and existing.include_subtitles == include_subtitles
+        and existing.preset_name == (preset_name or settings.render_preset)
+        and existing.transition_style == transition_style
+        and existing.narration_included == narration_requested
+        and Path(existing.output_path).exists()
+    )
+    if reusable and not force_rerender:
         return StoryArcRenderResult(
             arc.id,
             existing.id,
@@ -72,10 +88,13 @@ def render_story_arc(
     segment_dir.mkdir(parents=True, exist_ok=True)
     resolved_nvenc = detect_nvenc(settings.ffmpeg_path, runner) if use_nvenc is None else use_nvenc
     segment_paths: list[Path] = []
+    segment_durations: list[float] = []
     segment_metadata: list[dict] = []
     first_cover: Path | None = None
 
-    for segment in arc.segments:
+    total_steps = len(arc.segments) + 2 + (1 if narration_requested else 0)
+    for index, segment in enumerate(arc.segments, start=1):
+        _raise_if_cancelled(cancel_check)
         candidate = session.get(ClipCandidate, segment.candidate_id) if segment.candidate_id else None
         episode = session.get(Episode, segment.episode_id)
         if episode is None:
@@ -84,7 +103,17 @@ def render_story_arc(
         crop_offset_x = candidate.crop_offset_x if candidate else 0.0
         crop_scale = candidate.crop_scale if candidate else 1.0
         crop_keyframes = candidate.crop_keyframes_json if candidate else []
-        cues = subtitle_cues_for_render(session, candidate, settings.subtitle_show_speaker_names) if candidate else []
+        cues = (
+            subtitle_cues_for_render(
+                session,
+                candidate,
+                settings.subtitle_show_speaker_names,
+                start_time=segment.start_time,
+                end_time=segment.end_time,
+            )
+            if candidate
+            else []
+        )
         subtitle_text = (
             render_ass(
                 cues,
@@ -123,10 +152,10 @@ def render_story_arc(
             use_nvenc=resolved_nvenc,
             preset_name=preset.name,
             loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,
-            extra_video_filters=_transition_filters(transition_style, segment.end_time - segment.start_time),
             runner=runner,
         )
         segment_paths.append(artifacts.output_path)
+        segment_durations.append(segment.end_time - segment.start_time)
         if first_cover is None:
             first_cover = artifacts.cover_path
         segment_metadata.append(
@@ -142,9 +171,31 @@ def render_story_arc(
                 "output_path": str(artifacts.output_path),
             }
         )
+        if progress_callback is not None:
+            progress_callback(index, total_steps, f"Сегмент {index} из {len(arc.segments)}")
 
     output_path = output_dir / f"{output_slug}.mp4"
-    _concat_segments(settings.ffmpeg_path, segment_paths, output_path, runner)
+    _raise_if_cancelled(cancel_check)
+    _concat_segments(
+        settings.ffmpeg_path,
+        segment_paths,
+        output_path,
+        runner,
+        transition_style=transition_style,
+        durations=segment_durations,
+    )
+    if progress_callback is not None:
+        progress_callback(len(arc.segments) + 1, total_steps, "Сегменты склеены")
+
+    if narration_requested:
+        if narration_path is None or not narration_path.exists():
+            narration_audio = synthesize_story_arc_narration(session, arc.id, settings, runner=runner)
+            narration_path = Path(narration_audio.audio_path)
+        _raise_if_cancelled(cancel_check)
+        _mix_narration(settings.ffmpeg_path, output_path, narration_path, runner)
+        if progress_callback is not None:
+            progress_callback(len(arc.segments) + 2, total_steps, "Озвучка добавлена")
+    _raise_if_cancelled(cancel_check)
     metadata_path = output_dir / f"{output_slug}.json"
     metadata = {
         "story_arc_id": arc.id,
@@ -160,10 +211,13 @@ def render_story_arc(
         "segments": segment_metadata,
         "narration": (arc.plan_json or {}).get("narration", []),
     }
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    metadata["narration_included"] = bool(narration_requested and narration_path and narration_path.exists())
+    write_text_atomically(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
     cover_path = output_dir / f"{output_slug}.jpg"
     if first_cover is not None and first_cover.exists():
-        shutil.copyfile(first_cover, cover_path)
+        temp_cover = temp_sibling(cover_path).with_suffix(".jpg")
+        shutil.copyfile(first_cover, temp_cover)
+        replace_atomically(temp_cover, cover_path)
     else:
         cover_path = None
 
@@ -177,10 +231,15 @@ def render_story_arc(
     export.preset_name = preset.name
     export.segment_count = len(segment_paths)
     export.status = "completed"
+    export.arc_revision = arc.edit_revision
+    export.transition_style = transition_style
+    export.narration_included = bool(metadata["narration_included"])
     arc.status = "rendered"
     if existing is None:
         session.add(export)
     session.flush()
+    if progress_callback is not None:
+        progress_callback(total_steps, total_steps, "StoryArc готов")
     return StoryArcRenderResult(
         arc.id,
         export.id,
@@ -220,18 +279,130 @@ def _concat_segments(
     segment_paths: list[Path],
     output_path: Path,
     runner: Callable[[list[str], int], ProcessResult],
+    transition_style: str = "cut",
+    durations: list[float] | None = None,
 ) -> None:
     if not segment_paths:
         raise ValueError("Нет сегментов для склейки")
-    concat_list_path = output_path.with_suffix(".concat.txt")
-    concat_list_path.write_text(concat_list_text(segment_paths), encoding="utf-8")
     temp_output = temp_sibling(output_path).with_suffix(".mp4")
-    result = runner(build_concat_args(ffmpeg_path, concat_list_path, temp_output), 3600)
+    if transition_style == "fade" and len(segment_paths) > 1:
+        result = runner(
+            build_crossfade_args(ffmpeg_path, segment_paths, durations or [], temp_output),
+            3600,
+        )
+    else:
+        concat_list_path = output_path.with_suffix(".concat.txt")
+        write_text_atomically(concat_list_path, concat_list_text(segment_paths))
+        result = runner(build_concat_args(ffmpeg_path, concat_list_path, temp_output), 3600)
     if result.returncode != 0:
         temp_output.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or "FFmpeg не смог склеить StoryArc")
     if temp_output.exists():
         replace_atomically(temp_output, output_path)
+
+
+def build_crossfade_args(
+    ffmpeg_path: str,
+    paths: list[Path],
+    durations: list[float],
+    output_path: Path,
+    fade_seconds: float = 0.25,
+) -> list[str]:
+    if len(paths) < 2 or len(durations) != len(paths):
+        raise ValueError("Для плавной склейки нужны длительности всех сегментов")
+    args = [ffmpeg_path, "-hide_banner", "-y"]
+    for path in paths:
+        args.extend(["-i", str(path)])
+    filters: list[str] = []
+    video_label = "0:v"
+    audio_label = "0:a"
+    elapsed = durations[0]
+    for index in range(1, len(paths)):
+        fade = min(fade_seconds, max(0.08, durations[index - 1] / 4), max(0.08, durations[index] / 4))
+        video_out = f"v{index}"
+        audio_out = f"a{index}"
+        offset = max(0.0, elapsed - fade)
+        filters.append(
+            f"[{video_label}][{index}:v]xfade=transition=fade:duration={fade:.3f}:offset={offset:.3f}[{video_out}]"
+        )
+        filters.append(f"[{audio_label}][{index}:a]acrossfade=d={fade:.3f}:c1=tri:c2=tri[{audio_out}]")
+        video_label = video_out
+        audio_label = audio_out
+        elapsed += durations[index] - fade
+    args.extend(
+        [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            f"[{video_label}]",
+            "-map",
+            f"[{audio_label}]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "19",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    )
+    return args
+
+
+def _mix_narration(
+    ffmpeg_path: str,
+    video_path: Path,
+    narration_path: Path,
+    runner: Callable[[list[str], int], ProcessResult],
+) -> None:
+    temp_output = temp_sibling(video_path).with_suffix(".mp4")
+    args = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(narration_path),
+        "-filter_complex",
+        "[0:a]volume=0.32[base];[1:a]aresample=async=1:first_pts=0,volume=1.0[voice];"
+        "[base][voice]amix=inputs=2:duration=first:dropout_transition=2[a]",
+        "-map",
+        "0:v:0",
+        "-map",
+        "[a]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(temp_output),
+    ]
+    result = runner(args, 3600)
+    if result.returncode != 0:
+        temp_output.unlink(missing_ok=True)
+        raise RuntimeError(result.stderr.strip() or "FFmpeg не смог добавить озвучку")
+    if temp_output.exists():
+        replace_atomically(temp_output, video_path)
+
+
+def _narration_path(arc: StoryArc) -> Path | None:
+    value = (arc.plan_json or {}).get("narration_audio_path")
+    return Path(value) if isinstance(value, str) and value.strip() else None
+
+
+def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise ProcessCancelledError("Рендер StoryArc остановлен пользователем")
 
 
 def _load_arc(session: Session, story_arc_id: int) -> StoryArc:
@@ -247,14 +418,6 @@ def _load_arc(session: Session, story_arc_id: int) -> StoryArc:
 
 def _story_arc_slug(arc: StoryArc) -> str:
     return _safe_slug(f"story-arc-{arc.id}-{arc.title}")[:120].rstrip("-")
-
-
-def _transition_filters(style: str, duration: float) -> list[str]:
-    if style != "fade":
-        return []
-    fade = min(0.25, max(0.08, duration / 12))
-    out_start = max(0.0, duration - fade)
-    return [f"fade=t=in:st=0:d={fade:.3f}", f"fade=t=out:st={out_start:.3f}:d={fade:.3f}"]
 
 
 def _safe_slug(value: str) -> str:

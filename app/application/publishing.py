@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+import json
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.entities import PublishingPlan, Season, StoryArc, StoryArcExport
+from app.infrastructure.atomic import write_text_atomically
+
+
+PLATFORM_LIMITS = {
+    "youtube_shorts": {"title": 100, "description": 5000, "hashtags": 15},
+    "instagram_reels": {"title": 125, "description": 2200, "hashtags": 30},
+    "tiktok": {"title": 150, "description": 2200, "hashtags": 20},
+    "vk_clips": {"title": 128, "description": 4000, "hashtags": 20},
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +43,11 @@ def create_publishing_plan(session: Session, request: PublishingPlanRequest) -> 
         arc = session.get(StoryArc, export.story_arc_id)
     if export is not None and arc is not None and export.story_arc_id != arc.id:
         raise ValueError("Экспорт не относится к выбранной арке")
+    if arc is not None and arc.season_id != season.id:
+        raise ValueError("Экспорт относится к другому сезону")
+    _validate_schedule(request.scheduled_for)
+    if request.platform not in PLATFORM_LIMITS:
+        raise ValueError("Неизвестная платформа публикации")
     title = _title(season, arc)
     plan = PublishingPlan(
         season_id=season.id,
@@ -75,11 +91,48 @@ def update_publishing_plan(
     if hashtags is not None:
         plan.hashtags_json = [_normalize_hashtag(item) for item in hashtags if item.strip()]
     if scheduled_for is not None:
+        _validate_schedule(scheduled_for)
         plan.scheduled_for = scheduled_for
     if status is not None:
+        _validate_status_transition(plan, status)
         plan.status = status
+    _validate_platform_content(plan)
     session.flush()
     return plan
+
+
+def create_publishing_package(
+    session: Session,
+    plan_id: int,
+    output_dir: Path,
+) -> Path:
+    plan = session.get(PublishingPlan, plan_id)
+    if plan is None:
+        raise ValueError("План публикации не найден")
+    _validate_platform_content(plan)
+    export = session.get(StoryArcExport, plan.story_arc_export_id) if plan.story_arc_export_id else None
+    if export is None or export.status != "completed" or not Path(export.output_path).exists():
+        raise ValueError("Для пакета нужен актуальный готовый StoryArc MP4")
+    arc = session.get(StoryArc, export.story_arc_id)
+    if arc is None or export.arc_revision != arc.edit_revision:
+        raise ValueError("StoryArc изменён после рендера; сначала перерендерите его")
+    package_dir = output_dir / "publishing" / f"plan-{plan.id}"
+    package_path = package_dir / "publishing.json"
+    payload = {
+        "plan_id": plan.id,
+        "platform": plan.platform,
+        "video_path": export.output_path,
+        "cover_path": export.cover_path,
+        "title": plan.title,
+        "description": plan.description,
+        "hashtags": list(plan.hashtags_json or []),
+        "scheduled_for": plan.scheduled_for.isoformat() if plan.scheduled_for else None,
+        "privacy": "Upload is manual; original media remains local.",
+    }
+    write_text_atomically(package_path, json.dumps(payload, ensure_ascii=False, indent=2))
+    plan.status = "ready" if plan.status == "draft" else plan.status
+    session.flush()
+    return package_path
 
 
 def _title(season: Season, arc: StoryArc | None) -> str:
@@ -109,3 +162,39 @@ def _hashtags(season: Season, arc: StoryArc | None) -> list[str]:
 def _normalize_hashtag(value: str) -> str:
     compact = "".join(ch for ch in value if ch.isalnum() or ch in "_").strip("_")
     return f"#{compact.lower()}" if compact else "#"
+
+
+def _validate_schedule(value: datetime | None) -> None:
+    if value is None:
+        return
+    normalized = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if normalized <= datetime.now(timezone.utc):
+        raise ValueError("Время публикации должно быть в будущем")
+
+
+def _validate_status_transition(plan: PublishingPlan, status: str) -> None:
+    allowed = {
+        "draft": {"draft", "ready", "archived"},
+        "ready": {"ready", "scheduled", "draft", "archived"},
+        "scheduled": {"scheduled", "published", "ready", "archived"},
+        "published": {"published", "archived"},
+        "archived": {"archived", "draft"},
+    }
+    if status not in allowed.get(plan.status, {plan.status}):
+        raise ValueError(f"Нельзя изменить статус {plan.status} на {status}")
+    if status in {"ready", "scheduled", "published"} and plan.story_arc_export_id is None:
+        raise ValueError("Для этого статуса нужен готовый экспорт")
+    if status == "scheduled" and plan.scheduled_for is None:
+        raise ValueError("Для scheduled укажите дату публикации")
+
+
+def _validate_platform_content(plan: PublishingPlan) -> None:
+    limits = PLATFORM_LIMITS.get(plan.platform)
+    if limits is None:
+        raise ValueError("Неизвестная платформа публикации")
+    if len(plan.title) > limits["title"]:
+        raise ValueError(f"Заголовок длиннее лимита {limits['title']} символов")
+    if len(plan.description) > limits["description"]:
+        raise ValueError(f"Описание длиннее лимита {limits['description']} символов")
+    if len(plan.hashtags_json or []) > limits["hashtags"]:
+        raise ValueError(f"Слишком много хэштегов: максимум {limits['hashtags']}")

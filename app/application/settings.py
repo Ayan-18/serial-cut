@@ -11,6 +11,7 @@ from app.models.entities import AppSetting
 
 
 SETTINGS_KEY = "ui_settings"
+ENV_OWNED_FIELDS = {"asr_adapter", "llm_adapter", "llm_base_url"}
 
 
 class RuntimeSettings(BaseModel):
@@ -74,7 +75,15 @@ def get_runtime_settings(session: Session, env_settings: Settings) -> RuntimeSet
     stored = session.get(AppSetting, SETTINGS_KEY)
     if stored is None:
         return defaults
-    return defaults.model_copy(update=stored.value_json)
+    # Model/tool connection settings are deliberately owned by .env.  Older
+    # releases persisted them in SQLite, so ignore those stale values when
+    # rebuilding the effective UI settings.
+    overrides = {
+        key: value
+        for key, value in stored.value_json.items()
+        if key not in ENV_OWNED_FIELDS
+    }
+    return defaults.model_copy(update=overrides)
 
 
 def save_runtime_settings(session: Session, payload: RuntimeSettings) -> RuntimeSettings:
@@ -109,8 +118,5 @@ def effective_settings(session: Session, env_settings: Settings) -> Settings:
             "subtitle_safe_zone": runtime.subtitle_safe_zone,
             "subtitle_show_speaker_names": runtime.subtitle_show_speaker_names,
             "export_filename_template": runtime.export_filename_template,
-            "asr_adapter": runtime.asr_adapter,
-            "llm_adapter": runtime.llm_adapter,
-            "llm_base_url": runtime.llm_base_url,
         }
     )

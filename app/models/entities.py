@@ -167,6 +167,7 @@ class ClipCandidate(TimestampMixin, Base):
     story_order: Mapped[int | None] = mapped_column(Integer)
     story_role: Mapped[str | None] = mapped_column(String(64))
     continuity_note: Mapped[str | None] = mapped_column(Text)
+    edit_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class StoryArc(TimestampMixin, Base):
@@ -182,6 +183,7 @@ class StoryArc(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
     total_duration_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     plan_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    edit_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     season: Mapped[Season] = relationship(back_populates="story_arcs")
     target_character: Mapped["Character | None"] = relationship()
@@ -208,6 +210,8 @@ class StoryArcSegment(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     note: Mapped[str] = mapped_column(Text, default="", nullable=False)
     role: Mapped[str | None] = mapped_column(String(64))
+    candidate_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    manually_edited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     story_arc: Mapped[StoryArc] = relationship(back_populates="segments")
     episode: Mapped[Episode] = relationship()
@@ -228,6 +232,9 @@ class StoryArcExport(TimestampMixin, Base):
     preset_name: Mapped[str] = mapped_column(String(64), default="youtube_shorts", nullable=False)
     segment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="completed", nullable=False, index=True)
+    arc_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    transition_style: Mapped[str] = mapped_column(String(32), default="cut", nullable=False)
+    narration_included: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     story_arc: Mapped[StoryArc] = relationship(back_populates="exports")
 
@@ -342,6 +349,7 @@ class Export(TimestampMixin, Base):
     include_subtitles: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     preset_name: Mapped[str] = mapped_column(String(64), default="youtube_shorts", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="completed", nullable=False, index=True)
+    candidate_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class AppSetting(TimestampMixin, Base):

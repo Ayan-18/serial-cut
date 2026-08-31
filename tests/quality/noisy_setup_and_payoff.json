@@ -1,0 +1,27 @@
+{
+  "name": "noisy_setup_and_payoff",
+  "min_clip_seconds": 25,
+  "max_clip_seconds": 55,
+  "transcript_segments": [
+    {"start_time": 5.0, "end_time": 12.0, "text": "Слышишь этот сигнал? Он идёт из подвала.", "speaker_label": "Мира"},
+    {"start_time": 13.0, "end_time": 22.0, "text": "Там ничего нет, кроме старого генератора.", "speaker_label": "Антон"},
+    {"start_time": 24.0, "end_time": 35.0, "text": "Тогда почему на записи слышен голос пропавшего брата?", "speaker_label": "Мира"},
+    {"start_time": 36.0, "end_time": 46.0, "text": "Выключай свет. Кто-то поднимается к нам.", "speaker_label": "Антон"}
+  ],
+  "scenes": [{"start_time": 4.8, "end_time": 46.5, "label": "basement_signal"}],
+  "candidates": [
+    {
+      "start_time": 13.5,
+      "end_time": 44.0,
+      "title": "Голос из подвала",
+      "description": "Недостающий вопрос добавляется перед раскрытием и угрозой.",
+      "moment_type": "другое",
+      "characters": ["Мира", "Антон"],
+      "score": 89,
+      "scores": {"hook": 87, "standalone_context": 85, "payoff": 92, "emotion": 88, "boundary_quality": 79, "visual_potential": 90, "audio_quality": 72},
+      "standalone_reason": "Даже при шумном звуке понятны источник сигнала и опасность.",
+      "possible_problems": ["Фоновый шум"]
+    }
+  ],
+  "expected_good_ranges": [{"start_time": 5.0, "end_time": 46.0, "label": "basement_signal"}]
+}

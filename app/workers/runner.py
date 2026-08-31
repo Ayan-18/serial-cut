@@ -16,6 +16,8 @@ from app.application.stage4 import render_candidate
 from app.application.story_arc_render import render_story_arc
 from app.domain.enums import JobKind, JobStatus
 from app.infrastructure.config import Settings
+from app.infrastructure.database import SessionLocal
+from app.infrastructure.processes import ProcessCancelledError, run_process_cancellable
 from app.models.entities import Job, JobStage
 from app.workers.queue import next_queued_job
 
@@ -77,6 +79,11 @@ def _run_next_job_unlocked(
     session.commit()
     started = monotonic()
     try:
+        cancellable_runner = lambda args, timeout: run_process_cancellable(
+            args,
+            timeout,
+            lambda: _job_cancel_requested(job.id),
+        )
         if job.kind == JobKind.RENDER_CLIP.value:
             if resume_from_stage and resume_from_stage != "render_clip":
                 raise ValueError(f"Этап {resume_from_stage} нельзя запустить для рендера")
@@ -94,6 +101,7 @@ def _run_next_job_unlocked(
                     preset_name=payload.get("preset_name"),
                     loudnorm_two_pass=payload.get("loudnorm_two_pass"),
                     force_rerender=bool(payload.get("force_rerender", False)),
+                    runner=cancellable_runner,
                 ),
                 0.95,
             )
@@ -115,6 +123,12 @@ def _run_next_job_unlocked(
                     loudnorm_two_pass=payload.get("loudnorm_two_pass"),
                     force_rerender=bool(payload.get("force_rerender", False)),
                     transition_style=str(payload.get("transition_style") or "cut"),
+                    include_narration=bool(payload.get("include_narration", True)),
+                    progress_callback=lambda current, total, _message: _update_render_progress(
+                        session, job, current, total
+                    ),
+                    cancel_check=lambda: _job_cancel_requested(job.id),
+                    runner=cancellable_runner,
                 ),
                 0.95,
             )
@@ -210,6 +224,12 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
     session.commit()
     try:
         fn()
+    except ProcessCancelledError as exc:
+        stage.status = JobStatus.PAUSED.value
+        stage.finished_at = datetime.now(timezone.utc).isoformat()
+        stage.error_message = str(exc)
+        session.commit()
+        raise CancelledError(str(exc)) from exc
     except Exception as exc:
         stage.status = JobStatus.FAILED.value
         stage.finished_at = datetime.now(timezone.utc).isoformat()
@@ -237,4 +257,20 @@ def _raise_if_cancelled(session: Session, job: Job) -> None:
     session.refresh(job)
     if job.cancel_requested or job.status == JobStatus.CANCEL_REQUESTED.value:
         raise CancelledError("Задача остановлена по запросу пользователя")
+
+
+def _job_cancel_requested(job_id: int) -> bool:
+    with SessionLocal() as check_session:
+        current = check_session.get(Job, job_id)
+        return bool(
+            current is not None
+            and (current.cancel_requested or current.status == JobStatus.CANCEL_REQUESTED.value)
+        )
+
+
+def _update_render_progress(session: Session, job: Job, current: int, total: int) -> None:
+    if total <= 0:
+        return
+    job.progress = min(0.94, max(0.02, 0.02 + 0.92 * current / total))
+    session.commit()
 

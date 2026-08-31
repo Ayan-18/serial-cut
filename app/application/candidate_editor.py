@@ -57,22 +57,36 @@ def subtitles_for_candidate(session: Session, candidate_id: int) -> list[Editabl
 
 
 def generated_subtitles(session: Session, candidate: ClipCandidate) -> list[EditableSubtitle]:
-    identities = speaker_name_map(session, candidate.episode_id)
+    return generated_subtitles_for_range(session, candidate.episode_id, candidate.start_time, candidate.end_time)
+
+
+def generated_subtitles_for_range(
+    session: Session,
+    episode_id: int,
+    start_time: float,
+    end_time: float,
+) -> list[EditableSubtitle]:
+    identities = speaker_name_map(session, episode_id)
     segments = session.scalars(
         select(TranscriptSegment)
-        .where(TranscriptSegment.episode_id == candidate.episode_id)
+        .where(TranscriptSegment.episode_id == episode_id)
         .order_by(TranscriptSegment.start_time)
     ).all()
     words = session.scalars(
         select(WordTimestamp)
         .join(TranscriptSegment, WordTimestamp.segment_id == TranscriptSegment.id)
-        .where(TranscriptSegment.episode_id == candidate.episode_id)
+        .where(TranscriptSegment.episode_id == episode_id)
         .order_by(WordTimestamp.start_time)
     ).all()
     cues = (
-        cues_for_words(words, candidate.start_time, candidate.end_time)
+        cues_for_words(
+            words,
+            start_time,
+            end_time,
+            speaker_by_segment={item.id: item.speaker_label for item in segments},
+        )
         if words
-        else cues_for_range(segments, candidate.start_time, candidate.end_time)
+        else cues_for_range(segments, start_time, end_time)
     )
     return [
         EditableSubtitle(
@@ -80,7 +94,9 @@ def generated_subtitles(session: Session, candidate: ClipCandidate) -> list[Edit
             cue.start_time,
             cue.end_time,
             cue.text.replace("\\N", "\n"),
-            _resolved_speaker_for_cue(segments, candidate.start_time + cue.start_time, identities),
+            identities.get(cue.speaker_label, cue.speaker_label)
+            if cue.speaker_label
+            else _resolved_speaker_for_cue(segments, start_time + cue.start_time, identities),
         )
         for cue in cues
     ]
@@ -129,13 +145,13 @@ def subtitle_quality_report(session: Session, candidate_id: int) -> SubtitleQual
     for index, subtitle in enumerate(subtitles, start=1):
         text = subtitle.text.replace("\n", " ").strip()
         duration = max(0.1, subtitle.end_time - subtitle.start_time)
-        if len(text) > 76 or any(len(line) > 38 for line in subtitle.text.splitlines()):
+        if len(text) > 70 or any(len(line) > 34 for line in subtitle.text.splitlines()):
             long_rows += 1
             warnings.append(f"Строка {index}: длинный текст, лучше разбить")
         if subtitle.start_time < previous_end - 0.05:
             overlaps += 1
             warnings.append(f"Строка {index}: пересекается с предыдущей")
-        if len(text) / duration > 24:
+        if len(text) / duration > 20:
             too_fast_rows += 1
             warnings.append(f"Строка {index}: слишком быстро читается")
         previous_end = max(previous_end, subtitle.end_time)
@@ -173,7 +189,7 @@ def auto_split_candidate_subtitles(
                 EditableSubtitle(
                     None,
                     round(start, 3),
-                    round(max(start + 0.25, end), 3),
+                    round(max(start + 0.05, min(row.end_time, end)), 3),
                     page,
                     row.speaker_label,
                 )
@@ -192,14 +208,24 @@ def subtitle_cues_for_render(
     session: Session,
     candidate: ClipCandidate,
     show_speaker_names: bool = False,
+    start_time: float | None = None,
+    end_time: float | None = None,
 ) -> list[SubtitleCue]:
+    range_start = candidate.start_time if start_time is None else start_time
+    range_end = candidate.end_time if end_time is None else end_time
+    same_range = abs(range_start - candidate.start_time) <= 0.01 and abs(range_end - candidate.end_time) <= 0.01
+    subtitles = (
+        subtitles_for_candidate(session, candidate.id)
+        if same_range
+        else generated_subtitles_for_range(session, candidate.episode_id, range_start, range_end)
+    )
     return [
         SubtitleCue(
             item.start_time,
             item.end_time,
             _subtitle_render_text(item, show_speaker_names),
         )
-        for item in subtitles_for_candidate(session, candidate.id)
+        for item in subtitles
     ]
 
 

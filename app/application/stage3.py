@@ -18,6 +18,10 @@ from app.models.entities import (
     EpisodeOutline,
     ReviewDecision,
     Scene,
+    Export,
+    StoryArc,
+    StoryArcExport,
+    StoryArcSegment,
     TranscriptSegment,
     WordTimestamp,
 )
@@ -112,12 +116,35 @@ def run_stage3_candidate_analysis(
     session.add_all(new_rows)
     session.flush()
     if previous_candidate_ids:
+        linked_segments = session.scalars(
+            select(StoryArcSegment).where(StoryArcSegment.candidate_id.in_(previous_candidate_ids))
+        ).all()
+        affected_arc_ids: set[int] = set()
+        for segment in linked_segments:
+            affected_arc_ids.add(segment.story_arc_id)
+            segment.note = (segment.note + " · " if segment.note else "") + "Кандидат пересоздан; оставлен снимок границ"
+            segment.candidate_id = None
+            segment.candidate_revision = 0
+            segment.manually_edited = True
+        for arc_id in affected_arc_ids:
+            arc = session.get(StoryArc, arc_id)
+            if arc is not None:
+                arc.status = "draft"
+                arc.edit_revision += 1
+            for export in session.scalars(
+                select(StoryArcExport).where(StoryArcExport.story_arc_id == arc_id)
+            ).all():
+                export.status = "stale"
+        # Persist the candidate_id=NULL snapshots before deleting the replaced
+        # candidates. This ordering matters when SQLite foreign keys are on.
+        session.flush()
         session.execute(
             delete(CandidateSubtitle).where(CandidateSubtitle.candidate_id.in_(previous_candidate_ids))
         )
         session.execute(
             delete(ReviewDecision).where(ReviewDecision.candidate_id.in_(previous_candidate_ids))
         )
+        session.execute(delete(Export).where(Export.candidate_id.in_(previous_candidate_ids)))
         session.execute(delete(ClipCandidate).where(ClipCandidate.id.in_(previous_candidate_ids)))
     episode.stage = EpisodeStage.CANDIDATES_GENERATED.value
     session.commit()

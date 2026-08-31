@@ -1,0 +1,26 @@
+{
+  "name": "speaker_change_climax",
+  "min_clip_seconds": 20,
+  "max_clip_seconds": 50,
+  "transcript_segments": [
+    {"start_time": 10.0, "end_time": 17.0, "text": "Ты всё это время знал, где она?", "speaker_label": "Лена"},
+    {"start_time": 18.0, "end_time": 29.0, "text": "Знал, но если бы сказал, её нашли бы раньше нас.", "speaker_label": "Игорь"},
+    {"start_time": 30.0, "end_time": 41.0, "text": "Теперь поздно скрываться. Мы едем за ней вместе.", "speaker_label": "Лена"}
+  ],
+  "scenes": [{"start_time": 9.8, "end_time": 41.5, "label": "decision"}],
+  "candidates": [
+    {
+      "start_time": 12.0,
+      "end_time": 39.0,
+      "title": "Едем за ней вместе",
+      "description": "Вопрос, объяснение и совместное решение образуют цельную сцену.",
+      "moment_type": "конфликт",
+      "characters": ["Лена", "Игорь"],
+      "score": 91,
+      "scores": {"hook": 90, "standalone_context": 88, "payoff": 94, "emotion": 89, "boundary_quality": 82, "visual_potential": 82, "audio_quality": 90},
+      "standalone_reason": "Есть причина, конфликт и итог.",
+      "possible_problems": []
+    }
+  ],
+  "expected_good_ranges": [{"start_time": 10.0, "end_time": 41.0, "label": "decision"}]
+}

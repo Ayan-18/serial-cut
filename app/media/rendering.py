@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-from app.infrastructure.atomic import replace_atomically, temp_sibling
+from app.infrastructure.atomic import replace_atomically, temp_sibling, write_text_atomically
 from app.infrastructure.processes import ProcessResult, run_process
 
 
@@ -188,7 +188,7 @@ def render_clip(
     output_dir.mkdir(parents=True, exist_ok=True)
     subtitle_path = output_dir / f"{slug}.ass" if subtitle_text else None
     if subtitle_path is not None:
-        subtitle_path.write_text(subtitle_text, encoding="utf-8")
+        write_text_atomically(subtitle_path, subtitle_text)
     output_path = output_dir / f"{slug}.mp4"
     temp_output = temp_sibling(output_path).with_suffix(".mp4")
     preset = RENDER_PRESETS.get(preset_name, RENDER_PRESETS["youtube_shorts"])
@@ -228,12 +228,56 @@ def render_clip(
     if temp_output.exists():
         replace_atomically(temp_output, output_path)
     cover_path = output_dir / f"{slug}.jpg"
-    cover_result = runner(build_cover_args(ffmpeg_path, input_path, cover_path, start_time + 1.0), 300)
-    if cover_result.returncode != 0:
+    temp_cover = temp_sibling(cover_path).with_suffix(".jpg")
+    cover_at = select_cover_timestamp(input_path, start_time, end_time)
+    cover_result = runner(build_cover_args(ffmpeg_path, input_path, temp_cover, cover_at), 300)
+    if cover_result.returncode == 0 and temp_cover.exists():
+        replace_atomically(temp_cover, cover_path)
+    else:
+        temp_cover.unlink(missing_ok=True)
         cover_path = None
     metadata_path = output_dir / f"{slug}.json"
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text_atomically(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
     return RenderedArtifacts(output_path, metadata_path, subtitle_path, cover_path)
+
+
+def select_cover_timestamp(input_path: Path, start_time: float, end_time: float) -> float:
+    duration = max(0.1, end_time - start_time)
+    fallback = min(end_time - 0.05, start_time + min(1.0, duration / 2))
+    try:
+        import cv2
+
+        capture = cv2.VideoCapture(str(input_path))
+        if not capture.isOpened():
+            return fallback
+        cascade = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"))
+        best: tuple[float, float] | None = None
+        try:
+            for index in range(7):
+                timestamp = start_time + duration * (index + 1) / 8
+                capture.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000)
+                ok, frame = capture.read()
+                if not ok:
+                    continue
+                height, width = frame.shape[:2]
+                if width > 720:
+                    scale = 720 / width
+                    frame = cv2.resize(frame, (720, max(1, round(height * scale))))
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                brightness = float(gray.mean())
+                exposure = max(0.0, 1.0 - abs(brightness - 125.0) / 125.0)
+                faces = cascade.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(40, 40))
+                face_bonus = max((w * h for _, _, w, h in faces), default=0) / max(1, gray.size) * 5000
+                edge_penalty = min(index, 6 - index) * 2
+                score = sharpness + exposure * 35 + face_bonus + edge_penalty
+                if best is None or score > best[0]:
+                    best = (score, timestamp)
+        finally:
+            capture.release()
+        return best[1] if best is not None else fallback
+    except Exception:
+        return fallback
 
 
 def _crop_filter(

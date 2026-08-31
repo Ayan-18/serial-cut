@@ -36,6 +36,7 @@ def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA foreign_keys=ON")
         try:
             cursor.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:

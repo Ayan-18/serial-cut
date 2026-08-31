@@ -34,17 +34,21 @@ class FaceTrackingResult:
     identified_speaker_frames: int
     lip_motion_frames: int
     face_model: str
+    held_frames: int
+    largest_face_frames: int
+    average_confidence: float
 
 
 def estimate_face_offset(
     video_path: Path,
     start_time: float,
     end_time: float,
-    samples: int = 30,
+    samples: int | None = None,
     speech_ranges: list[SpeechRange] | None = None,
     character_profiles: list[CharacterProfile] | None = None,
     detector_model: Path | None = None,
     recognizer_model: Path | None = None,
+    audio_path: Path | None = None,
 ) -> FaceTrackingResult:
     import cv2
 
@@ -60,6 +64,12 @@ def estimate_face_offset(
     identified_speaker_frames = 0
     lip_motion_frames = 0
     duration = max(0.1, end_time - start_time)
+    samples = samples or min(96, max(24, round(duration * 0.9)))
+    audio = _load_audio(audio_path)
+    held_frames = 0
+    largest_face_frames = 0
+    last_center: float | None = None
+    last_offset: float | None = None
     try:
         for index in range(samples):
             timestamp = start_time + duration * (index + 0.5) / samples
@@ -71,6 +81,9 @@ def estimate_face_offset(
             current_faces = engine.detect(current)
             faces_detected += len(current_faces)
             if not current_faces:
+                if last_offset is not None:
+                    detections.append((timestamp - start_time, last_offset, 0.0, -1.0))
+                    held_frames += 1
                 continue
             active = _active_speech(timestamp, speech_ranges or [])
             selected: FaceObservation | None = None
@@ -89,20 +102,33 @@ def estimate_face_offset(
                 selected, lip_score = select_lip_active_face(
                     current, current_faces, previous, previous_faces, cv2
                 )
+                lip_score *= _audio_activity(audio, timestamp)
                 if selected is not None and lip_score >= 0.012:
                     lip_motion_frames += 1
                 else:
                     selected = None
             if selected is None:
-                selected = max(current_faces, key=lambda face: face.width * face.height)
+                nearby = (
+                    min(current_faces, key=lambda face: abs(face.center_x / current.shape[1] - last_center))
+                    if last_center is not None
+                    else None
+                )
+                if nearby is not None and abs(nearby.center_x / current.shape[1] - last_center) <= 0.22:
+                    selected = nearby
+                    held_frames += 1
+                else:
+                    selected = max(current_faces, key=lambda face: face.width * face.height)
+                    largest_face_frames += 1
             elif active is not None:
                 active_speaker_frames += 1
             width = current.shape[1]
             center = selected.center_x / max(1, width)
+            last_center = center
+            last_offset = max(-1.0, min(1.0, (center - 0.5) * 2))
             detections.append(
                 (
                     timestamp - start_time,
-                    max(-1.0, min(1.0, (center - 0.5) * 2)),
+                    last_offset,
                     max(0.0, min(2.0, lip_score)),
                     float(selected_character_id),
                 )
@@ -119,7 +145,36 @@ def estimate_face_offset(
         identified_speaker_frames=identified_speaker_frames,
         lip_motion_frames=lip_motion_frames,
         face_model=engine.model_name,
+        held_frames=held_frames,
+        largest_face_frames=largest_face_frames,
+        average_confidence=round(
+            sum(item[2] for item in detections) / len(detections) if detections else 0.0,
+            3,
+        ),
     )
+
+
+def _load_audio(audio_path: Path | None):
+    if audio_path is None or not audio_path.exists():
+        return None
+    try:
+        from app.media.speakers import _read_mono_pcm
+
+        return _read_mono_pcm(audio_path)
+    except Exception:
+        return None
+
+
+def _audio_activity(audio, timestamp: float) -> float:
+    if audio is None:
+        return 1.0
+    sample_rate, samples = audio
+    left = max(0, round((timestamp - 0.12) * sample_rate))
+    right = min(len(samples), round((timestamp + 0.12) * sample_rate))
+    if right <= left:
+        return 0.0
+    energy = float(np.sqrt(np.mean(samples[left:right] ** 2)))
+    return max(0.0, min(1.0, energy / 0.025))
 
 
 def _active_speech(timestamp: float, ranges: list[SpeechRange]) -> SpeechRange | None:

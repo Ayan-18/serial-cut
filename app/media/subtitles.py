@@ -18,6 +18,7 @@ class SubtitleCue:
     start_time: float
     end_time: float
     text: str
+    speaker_label: str | None = None
 
 
 def cues_for_range(segments: list[TranscriptSegment], start_time: float, end_time: float) -> list[SubtitleCue]:
@@ -45,6 +46,7 @@ def cues_for_words(
     end_time: float,
     max_chars_per_line: int = 30,
     max_seconds: float = 3.2,
+    speaker_by_segment: dict[int, str | None] | None = None,
 ) -> list[SubtitleCue]:
     selected = [
         word
@@ -60,11 +62,13 @@ def cues_for_words(
         text = _join_subtitle_words([word.word.strip() for word in current])
         pages = wrap_russian_subtitle(text, max_chars=max_chars_per_line)
         cue_text = pages[0] if pages else text
+        speaker = (speaker_by_segment or {}).get(current[0].segment_id)
         cues.append(
             SubtitleCue(
                 start_time=max(0.0, current[0].start_time - start_time),
                 end_time=max(0.2, min(end_time, current[-1].end_time) - start_time),
                 text=cue_text,
+                speaker_label=speaker,
             )
         )
         current.clear()
@@ -74,15 +78,39 @@ def cues_for_words(
         proposed_text = _join_subtitle_words(proposed_words)
         proposed_duration = word.end_time - (current[0].start_time if current else word.start_time)
         gap = word.start_time - current[-1].end_time if current else 0.0
+        speaker_changed = bool(
+            current
+            and speaker_by_segment
+            and speaker_by_segment.get(current[-1].segment_id) != speaker_by_segment.get(word.segment_id)
+        )
         if current and (
             len(wrap_russian_subtitle(proposed_text, max_chars=max_chars_per_line)) > 1
             or proposed_duration > max_seconds
             or gap > 0.8
+            or speaker_changed
         ):
             flush()
         current.append(word)
+        if word.word.rstrip().endswith((".", "!", "?", "…")) and len(current) >= 3:
+            flush()
     flush()
-    return cues
+    return improve_cue_timing(cues, max(0.0, end_time - start_time))
+
+
+def improve_cue_timing(
+    cues: list[SubtitleCue],
+    clip_duration: float,
+    target_chars_per_second: float = 18.0,
+) -> list[SubtitleCue]:
+    result: list[SubtitleCue] = []
+    for index, cue in enumerate(cues):
+        text_length = len(cue.text.replace("\\N", " ").strip())
+        desired = max(0.65, min(4.2, text_length / target_chars_per_second))
+        next_start = cues[index + 1].start_time if index + 1 < len(cues) else clip_duration
+        latest_end = max(cue.end_time, min(clip_duration, next_start - 0.04 if index + 1 < len(cues) else clip_duration))
+        end = min(latest_end, max(cue.end_time, cue.start_time + desired))
+        result.append(SubtitleCue(cue.start_time, max(cue.start_time + 0.2, end), cue.text, cue.speaker_label))
+    return result
 
 
 def _join_subtitle_words(words: list[str]) -> str:

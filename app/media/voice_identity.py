@@ -8,7 +8,7 @@ import numpy as np
 from app.media.speakers import _read_mono_pcm
 
 
-VOICE_PROFILE_VERSION = 1
+VOICE_PROFILE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class VoiceEmbedding:
     vector: np.ndarray
     sample_count: int
     seconds: float
+    prototypes: tuple[np.ndarray, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class VoiceProfile:
     character_name: str
     vector: np.ndarray
     sample_count: int
+    prototypes: tuple[np.ndarray, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ def extract_voice_embedding(
     if not vectors:
         return None
     vector = _normalized(np.mean(np.stack(vectors), axis=0))
-    return VoiceEmbedding(vector, len(vectors), round(total_seconds, 3))
+    return VoiceEmbedding(vector, len(vectors), round(total_seconds, 3), tuple(vectors))
 
 
 def voice_signature(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -103,13 +105,19 @@ def merge_voice_profile(existing: dict | None, embedding: VoiceEmbedding) -> dic
     previous_vector = None
     previous_count = 0
     previous_seconds = 0.0
-    if existing and existing.get("version") == VOICE_PROFILE_VERSION:
+    prototypes: list[np.ndarray] = []
+    if existing and existing.get("version") in {1, VOICE_PROFILE_VERSION}:
         try:
             candidate = np.asarray(existing["vector"], dtype=np.float32)
             if candidate.shape == embedding.vector.shape:
                 previous_vector = candidate
                 previous_count = max(0, int(existing.get("sample_count", 0)))
                 previous_seconds = max(0.0, float(existing.get("seconds", 0)))
+                prototypes.extend(
+                    _normalized(np.asarray(item, dtype=np.float32))
+                    for item in existing.get("prototypes", [])
+                    if np.asarray(item).shape == embedding.vector.shape
+                )
         except (KeyError, TypeError, ValueError):
             previous_vector = None
     if previous_vector is None or previous_count == 0:
@@ -120,16 +128,19 @@ def merge_voice_profile(existing: dict | None, embedding: VoiceEmbedding) -> dic
             previous_vector * previous_count + embedding.vector * embedding.sample_count
         )
         total_count = previous_count + embedding.sample_count
+    prototypes.extend(embedding.prototypes or (embedding.vector,))
+    prototypes = _diverse_prototypes(prototypes, limit=12)
     return {
         "version": VOICE_PROFILE_VERSION,
         "vector": [round(float(item), 7) for item in merged],
         "sample_count": total_count,
         "seconds": round(previous_seconds + embedding.seconds, 3),
+        "prototypes": [[round(float(item), 7) for item in vector] for vector in prototypes],
     }
 
 
 def voice_profile_from_json(character_id: int, name: str, payload: dict | None) -> VoiceProfile | None:
-    if not payload or payload.get("version") != VOICE_PROFILE_VERSION:
+    if not payload or payload.get("version") not in {1, VOICE_PROFILE_VERSION}:
         return None
     try:
         vector = _normalized(np.asarray(payload["vector"], dtype=np.float32))
@@ -138,7 +149,12 @@ def voice_profile_from_json(character_id: int, name: str, payload: dict | None) 
         return None
     if vector.shape != (76,) or sample_count <= 0:
         return None
-    return VoiceProfile(character_id, name, vector, sample_count)
+    prototypes = tuple(
+        _normalized(np.asarray(item, dtype=np.float32))
+        for item in payload.get("prototypes", [])
+        if np.asarray(item).shape == (76,)
+    )
+    return VoiceProfile(character_id, name, vector, sample_count, prototypes)
 
 
 def recognize_voice_clusters(
@@ -157,7 +173,7 @@ def recognize_voice_clusters(
         embeddings[source_label] = embedding
         scores = sorted(
             (
-                (profile, float(np.dot(embedding.vector, profile.vector)))
+                (profile, _profile_similarity(embedding, profile))
                 for profile in profiles
             ),
             key=lambda item: item[1],
@@ -177,6 +193,30 @@ def recognize_voice_clusters(
             )
         )
     return suggestions, embeddings
+
+
+def _profile_similarity(embedding: VoiceEmbedding, profile: VoiceProfile) -> float:
+    centroid = float(np.dot(embedding.vector, profile.vector))
+    references = profile.prototypes or (profile.vector,)
+    samples = embedding.prototypes or (embedding.vector,)
+    pair_scores = sorted(
+        (float(np.dot(sample, reference)) for sample in samples for reference in references),
+        reverse=True,
+    )
+    strongest = sum(pair_scores[: min(3, len(pair_scores))]) / min(3, len(pair_scores))
+    return centroid * 0.55 + strongest * 0.45
+
+
+def _diverse_prototypes(vectors: list[np.ndarray], limit: int) -> list[np.ndarray]:
+    selected: list[np.ndarray] = []
+    for vector in vectors:
+        normalized = _normalized(vector)
+        if not selected or max(float(np.dot(normalized, item)) for item in selected) < 0.985:
+            selected.append(normalized)
+    if len(selected) <= limit:
+        return selected
+    indices = np.linspace(0, len(selected) - 1, limit).round().astype(int)
+    return [selected[int(index)] for index in indices]
 
 
 def _mel_filter_bank(sample_rate: int, fft_size: int, filters: int) -> np.ndarray:

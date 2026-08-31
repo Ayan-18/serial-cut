@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from typing import Callable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
+from app.infrastructure.processes import ProcessResult, run_process
 from app.media.rendering import detect_nvenc, render_clip
 from app.application.candidate_editor import subtitle_cues_for_render
 from app.media.subtitles import render_ass
@@ -42,6 +44,7 @@ def render_candidate(
     preset_name: str | None = None,
     loudnorm_two_pass: bool | None = None,
     force_rerender: bool = False,
+    runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> RenderResult:
     candidate = session.get(ClipCandidate, candidate_id)
     if candidate is None:
@@ -49,8 +52,19 @@ def render_candidate(
     episode = session.get(Episode, candidate.episode_id)
     if episode is None:
         raise ValueError(f"Episode {candidate.episode_id} not found")
-    existing = session.scalar(select(Export).where(Export.candidate_id == candidate_id))
-    if existing is not None and not force_rerender:
+    resolved_preset = preset_name or settings.render_preset
+    existing = session.scalar(
+        select(Export).where(Export.candidate_id == candidate_id).order_by(Export.updated_at.desc(), Export.id.desc())
+    )
+    reusable = (
+        existing is not None
+        and existing.status == "completed"
+        and existing.candidate_revision == candidate.edit_revision
+        and existing.include_subtitles == include_subtitles
+        and existing.preset_name == resolved_preset
+        and Path(existing.output_path).exists()
+    )
+    if reusable and not force_rerender:
         return RenderResult(
             candidate_id,
             existing.id,
@@ -76,7 +90,7 @@ def render_candidate(
     )
     session.commit()
     slug = export_slug(settings.export_filename_template, episode, candidate)
-    resolved_nvenc = detect_nvenc(settings.ffmpeg_path) if use_nvenc is None else use_nvenc
+    resolved_nvenc = detect_nvenc(settings.ffmpeg_path, runner) if use_nvenc is None else use_nvenc
     artifacts = render_clip(
         settings.ffmpeg_path,
         Path(episode.file_path),
@@ -100,8 +114,9 @@ def render_candidate(
         crop_scale=candidate.crop_scale,
         crop_keyframes=candidate.crop_keyframes_json,
         use_nvenc=resolved_nvenc,
-        preset_name=preset_name or settings.render_preset,
+        preset_name=resolved_preset,
         loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,
+        runner=runner,
     )
     export = existing or Export(candidate_id=candidate.id, output_path=str(artifacts.output_path))
     export.output_path = str(artifacts.output_path)
@@ -109,8 +124,9 @@ def render_candidate(
     export.subtitle_path = str(artifacts.subtitle_path) if artifacts.subtitle_path else None
     export.cover_path = str(artifacts.cover_path) if artifacts.cover_path else None
     export.include_subtitles = include_subtitles
-    export.preset_name = preset_name or settings.render_preset
+    export.preset_name = resolved_preset
     export.status = "completed"
+    export.candidate_revision = candidate.edit_revision
     candidate.thumbnail_path = export.cover_path
     if existing is None:
         session.add(export)
@@ -125,6 +141,7 @@ def render_candidate_preview(
     candidate_id: int,
     settings: Settings,
     include_subtitles: bool = True,
+    runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> PreviewRenderResult:
     candidate = session.get(ClipCandidate, candidate_id)
     if candidate is None:
@@ -177,6 +194,7 @@ def render_candidate_preview(
         use_nvenc=False,
         preset_name="preview",
         loudnorm_two_pass=False,
+        runner=runner,
     )
     return PreviewRenderResult(
         candidate.id,

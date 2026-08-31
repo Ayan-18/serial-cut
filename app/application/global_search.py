@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.analysis.text_similarity import natural_key, semantic_similarity
 from app.models.entities import ClipCandidate, Episode, TranscriptSegment
 
 
@@ -44,10 +45,12 @@ def search_season(session: Session, season_id: int, query: str, limit: int = 30)
                 candidate.moment_type,
                 candidate.rationale,
                 candidate.continuity_note or "",
+                episodes[candidate.episode_id].story_summary,
             ]
         )
         matches = _match_count(haystack, terms)
-        if matches:
+        semantic = semantic_similarity(query, haystack)
+        if matches or semantic >= 0.10:
             episode = episodes[candidate.episode_id]
             results.append(
                 SearchResult(
@@ -59,7 +62,7 @@ def search_season(session: Session, season_id: int, query: str, limit: int = 30)
                     end_time=candidate.end_time,
                     title=candidate.title,
                     snippet=candidate.description,
-                    score=min(100, candidate.score + matches * 3),
+                    score=min(100, round(candidate.score * 0.72 + matches * 4 + semantic * 32)),
                 )
             )
 
@@ -70,7 +73,8 @@ def search_season(session: Session, season_id: int, query: str, limit: int = 30)
     ).all()
     for row in transcript_rows:
         matches = _match_count(row.text, terms)
-        if matches:
+        semantic = semantic_similarity(query, row.text)
+        if matches or semantic >= 0.16:
             episode = episodes[row.episode_id]
             results.append(
                 SearchResult(
@@ -82,10 +86,10 @@ def search_season(session: Session, season_id: int, query: str, limit: int = 30)
                     end_time=row.end_time,
                     title=row.speaker_label or "Реплика",
                     snippet=row.text,
-                    score=min(100, 55 + matches * 12),
+                    score=min(100, round(48 + matches * 12 + semantic * 40)),
                 )
             )
-    return sorted(results, key=lambda item: (-item.score, item.episode_file_name, item.start_time))[:limit]
+    return sorted(results, key=lambda item: (-item.score, natural_key(item.episode_file_name), item.start_time))[:limit]
 
 
 def _terms(query: str) -> list[str]:

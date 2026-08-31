@@ -176,6 +176,8 @@ class StoryArcExportRead(BaseModel):
     preset_name: str
     segment_count: int
     status: str
+    transition_style: str = "cut"
+    narration_included: bool = False
 
 
 class StoryArcRead(BaseModel):
@@ -202,6 +204,7 @@ class StoryArcRenderRequest(BaseModel):
     loudnorm_two_pass: bool | None = None
     force_rerender: bool = False
     transition_style: str = Field(default="cut", pattern="^(cut|fade)$")
+    include_narration: bool = True
 
 
 class StoryArcRenderResponse(BaseModel):
@@ -321,6 +324,11 @@ class PublishingPlanRead(BaseModel):
     hashtags: list[str]
     scheduled_for: datetime | None
     status: str
+
+
+class PublishingPackageRead(BaseModel):
+    plan_id: int
+    manifest_path: str
 
 
 class ProjectDiagnosticCheckRead(BaseModel):
@@ -463,6 +471,9 @@ class AutoCropResponse(BaseModel):
     identified_speaker_frames: int
     lip_motion_frames: int
     face_model: str
+    held_frames: int = 0
+    largest_face_frames: int = 0
+    average_confidence: float = 0.0
 
 
 class RenderResponse(BaseModel):

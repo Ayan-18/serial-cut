@@ -2,6 +2,42 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-09-01 - Reliability And Narrative Quality Pass
+
+Completed the full improvement list from the repository review:
+
+- Candidate and StoryArc edits now carry revisions. Boundary/crop changes invalidate old renders,
+  subtitles and linked plans instead of silently reusing an obsolete MP4. Manual StoryArc segment
+  edits survive rebuilds, duplicates are ignored and ranges snap to complete transcript lines.
+- StoryArc selection now combines deterministic ranking with local semantic matching and optional
+  Qwen ordering. Regenerating episode candidates preserves linked StoryArc ranges as snapshots.
+- StoryArc render now uses real video/audio crossfades, exact per-segment subtitles, optional local
+  narration mixed over ducked source audio, atomic output replacement, per-segment progress and
+  FFmpeg cancellation from the queue.
+- Subtitle grouping splits on speakers, punctuation, pauses, length and reading speed. Confirmed
+  character names flow into generated subtitles. Cover selection samples several frames and scores
+  sharpness, exposure and faces.
+- Auto-follow samples adaptively, holds a nearby face through short misses and gates lip motion with
+  local audio energy. Voice profiles retain diverse v2 prototypes while remaining compatible with
+  v1 profiles.
+- Added local semantic season search, local-Qwen script/narration generation with deterministic
+  fallback, platform limits/status validation and a privacy-preserving local `publishing.json`
+  package. No external upload was added.
+- Diagnostics now check Alembic revision, FFmpeg/ffprobe, free disk space, missing/stale exports and
+  failed jobs. SQLite enables foreign keys in addition to WAL and a 30-second busy timeout.
+- Split frontend API/types/utilities/settings components out of `main.tsx`, exposed narration,
+  transition, stale-render, publishing-package and auto-crop confidence states, and added Vitest
+  coverage.
+- Added Alembic revisions `0010_render_consistency` and `0011_job_stage_consistency`, generated-media FFmpeg/ffprobe smoke coverage,
+  two more narrative quality fixtures and focused regression tests.
+
+Verification: live database upgraded from `0006` through `0011_job_stage_consistency`; backend suite
+passed (`85 tests`); frontend production
+build passed; Vitest passed (`6 tests`); generated H.264/AAC vertical media smoke passed; quality
+benchmark averaged `85/100`; and all system checks passed with Python 3.11.9, FFmpeg 9.0.1,
+ffprobe, GTX 1660 SUPER and 136 GB free. Existing diagnostics still report one failed historical job,
+one unavailable source path and two missing legacy export files; no original media was modified.
+
 ## 2026-08-31 - Season Workflow Tools
 
 Implemented the requested 10-point product pass without changing the launcher:

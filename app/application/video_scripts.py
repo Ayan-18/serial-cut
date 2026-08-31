@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.analysis.local_text import generate_local_text
+from app.infrastructure.config import Settings
 from app.models.entities import Season, StoryArc, VideoScript
 
 
@@ -17,7 +19,11 @@ class VideoScriptRequest:
     style: str = "chronological"
 
 
-def create_video_script(session: Session, request: VideoScriptRequest) -> VideoScript:
+def create_video_script(
+    session: Session,
+    request: VideoScriptRequest,
+    settings: Settings | None = None,
+) -> VideoScript:
     season = session.get(Season, request.season_id)
     if season is None:
         raise ValueError("Сезон не найден")
@@ -26,13 +32,15 @@ def create_video_script(session: Session, request: VideoScriptRequest) -> VideoS
         raise ValueError("Арка не относится к выбранному сезону")
     title = (request.title or "").strip() or (f"Сценарий: {arc.title}" if arc else f"Сценарий: {season.title}")
     structure = _structure_for_arc(arc, request.prompt, request.style) if arc else _structure_for_season(season, request.prompt, request.style)
+    template_text = _script_text(title, structure)
+    generated_text = generate_local_text(settings, _script_prompt(season, arc, structure), 2200) if settings else None
     script = VideoScript(
         season_id=season.id,
         story_arc_id=arc.id if arc else None,
         title=title,
         prompt=request.prompt.strip(),
         style=request.style,
-        script_text=_script_text(title, structure),
+        script_text=generated_text or template_text,
         structure_json=structure,
         status="draft",
     )
@@ -129,3 +137,20 @@ def _voiceover_line(role: str, title: str) -> str:
     if role == "кульминация":
         return f"Напряжение выходит на максимум в моменте: {title}."
     return f"Дальше история двигается через момент: {title}."
+
+
+def _script_prompt(season: Season, arc: StoryArc | None, structure: dict) -> str:
+    beats = "\n".join(
+        f"{item.get('order')}. {item.get('episode', '')} — {item.get('title', '')} "
+        f"[{item.get('role', '')}]"
+        for item in structure.get("beats", [])
+    )
+    return (
+        "Составь готовый сценарий монтажа по структуре ниже. Добавь сильный хук, короткие "
+        "связки между частями и финал. Не пересказывай факты, которых нет в названиях частей. "
+        "Отдельно пометь строки ЗАКАДРОВЫЙ ТЕКСТ и МОНТАЖ.\n\n"
+        f"Сезон: {season.title}\nКонтекст сезона: {season.story_context or 'не задан'}\n"
+        f"Арка: {arc.title if arc else 'весь сезон'}\n"
+        f"Пожелание: {structure.get('prompt') or 'хронологично и понятно'}\n"
+        f"Части:\n{beats}"
+    )

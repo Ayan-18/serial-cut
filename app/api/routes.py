@@ -33,6 +33,7 @@ from app.api.schemas import (
     NarrationRead,
     ProjectDiagnosticsRead,
     PublishingPlanCreateRequest,
+    PublishingPackageRead,
     PublishingPlanRead,
     PublishingPlanUpdateRequest,
     CandidateQualityRead,
@@ -96,6 +97,7 @@ from app.application.narration import story_arc_narration, synthesize_story_arc_
 from app.application.processing_guard import ProcessingBusyError, processing_guard
 from app.application.project_diagnostics import run_project_diagnostics
 from app.application.publishing import (
+    create_publishing_package,
     PublishingPlanRequest,
     create_publishing_plan,
     list_publishing_plans,
@@ -165,6 +167,13 @@ from app.workers.queue import (
 from app.workers.runner import estimate_eta_seconds, run_next_job
 
 router = APIRouter(prefix="/api")
+
+
+def run_stage2_media_analysis(session: Session, episode_id: int, settings):
+    """Lazy import seam kept patchable for API tests and light diagnostics."""
+    from app.application.stage2 import run_stage2_media_analysis as run_stage2
+
+    return run_stage2(session, episode_id, settings)
 
 
 def get_session():
@@ -277,7 +286,11 @@ def story_arcs(season_id: int | None = None, session: Session = Depends(get_sess
 @router.post("/story-arcs", response_model=StoryArcRead)
 def create_story_arc(payload: StoryArcCreateRequest, session: Session = Depends(get_session)):
     try:
-        arc = create_story_arc_plan(session, StoryArcPlanRequest(**payload.model_dump()))
+        arc = create_story_arc_plan(
+            session,
+            StoryArcPlanRequest(**payload.model_dump()),
+            effective_settings(session, get_settings()),
+        )
         session.commit()
         return _story_arc_read(session, arc)
     except Exception as exc:
@@ -311,7 +324,7 @@ def patch_story_arc(
 @router.post("/story-arcs/{story_arc_id}/rebuild", response_model=StoryArcRead)
 def rebuild_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
     try:
-        arc = rebuild_story_arc_plan(session, story_arc_id)
+        arc = rebuild_story_arc_plan(session, story_arc_id, effective_settings(session, get_settings()))
         session.commit()
         return _story_arc_read(session, arc)
     except Exception as exc:
@@ -390,6 +403,7 @@ def render_story_arc_endpoint(
                 loudnorm_two_pass=payload.loudnorm_two_pass,
                 force_rerender=payload.force_rerender,
                 transition_style=payload.transition_style,
+                include_narration=payload.include_narration,
             )
         session.commit()
         return result
@@ -486,7 +500,11 @@ def video_scripts(season_id: int | None = None, session: Session = Depends(get_s
 @router.post("/video-scripts", response_model=VideoScriptRead)
 def create_script(payload: VideoScriptCreateRequest, session: Session = Depends(get_session)):
     try:
-        script = create_video_script(session, VideoScriptRequest(**payload.model_dump()))
+        script = create_video_script(
+            session,
+            VideoScriptRequest(**payload.model_dump()),
+            effective_settings(session, get_settings()),
+        )
         session.commit()
         return _video_script_read(script)
     except Exception as exc:
@@ -541,6 +559,18 @@ def patch_publication(plan_id: int, payload: PublishingPlanUpdateRequest, sessio
         )
         session.commit()
         return _publishing_plan_read(plan)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/publishing-plans/{plan_id}/package", response_model=PublishingPackageRead)
+def package_publication(plan_id: int, session: Session = Depends(get_session)):
+    try:
+        settings = effective_settings(session, get_settings())
+        path = create_publishing_package(session, plan_id, settings.output_dir)
+        session.commit()
+        return PublishingPackageRead(plan_id=plan_id, manifest_path=str(path))
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -798,8 +828,6 @@ def enqueue_season(season_id: int, payload: EnqueueSeasonRequest, session: Sessi
 @router.post("/episodes/{episode_id}/stage2", response_model=Stage2RunResponse)
 def run_stage2_episode(episode_id: int, session: Session = Depends(get_session)):
     try:
-        from app.application.stage2 import run_stage2_media_analysis
-
         settings = effective_settings(session, get_settings())
         _ensure_episode_not_enqueued(session, episode_id)
         session.commit()
@@ -1007,9 +1035,15 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
                 character_profiles=profiles,
                 detector_model=settings.face_detector_model,
                 recognizer_model=settings.face_recognizer_model,
+                audio_path=Path(episode.audio_path) if episode.audio_path else None,
             )
-        candidate.crop_mode = "auto-follow"
-        candidate.crop_offset_x = result.offset_x
+        save_candidate_edits(
+            session,
+            candidate.id,
+            crop_mode="auto-follow",
+            crop_offset_x=result.offset_x,
+        )
+        candidate = session.get(ClipCandidate, candidate.id)
         candidate.crop_keyframes_json = smooth_crop_keyframes(result.keyframes)
         session.commit()
         return AutoCropResponse(
@@ -1022,6 +1056,9 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
             identified_speaker_frames=result.identified_speaker_frames,
             lip_motion_frames=result.lip_motion_frames,
             face_model=result.face_model,
+            held_frames=result.held_frames,
+            largest_face_frames=result.largest_face_frames,
+            average_confidence=result.average_confidence,
         )
     except ProcessingBusyError as exc:
         session.rollback()
@@ -1380,6 +1417,8 @@ def _story_arc_export_read(export: StoryArcExport) -> StoryArcExportRead:
         preset_name=export.preset_name,
         segment_count=export.segment_count,
         status=export.status,
+        transition_style=export.transition_style,
+        narration_included=export.narration_included,
     )
 
 

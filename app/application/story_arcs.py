@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.analysis.text_similarity import natural_key, semantic_similarity
+from app.analysis.local_text import generate_local_text
+from app.analysis.schemas import extract_json_object
+from app.infrastructure.config import Settings
 from app.models.entities import Character, ClipCandidate, Episode, Season, SpeakerIdentity, StoryArc, StoryArcSegment, TranscriptSegment
 
 
@@ -47,7 +52,11 @@ class StoryArcSegmentUpdate:
     role: str | None = None
 
 
-def create_story_arc_plan(session: Session, request: StoryArcPlanRequest) -> StoryArc:
+def create_story_arc_plan(
+    session: Session,
+    request: StoryArcPlanRequest,
+    settings: Settings | None = None,
+) -> StoryArc:
     season = session.get(Season, request.season_id)
     if season is None:
         raise ValueError("Сезон не найден")
@@ -61,6 +70,8 @@ def create_story_arc_plan(session: Session, request: StoryArcPlanRequest) -> Sto
         max_segments=max(1, request.max_segments),
         max_duration_seconds=max(15, request.max_duration_seconds),
     )
+    if settings is not None and settings.llm_adapter != "stub":
+        selected = _llm_story_order(settings, season, request, candidates, selected)
     if not selected:
         raise ValueError("Не удалось собрать арку в заданную длительность")
 
@@ -104,19 +115,29 @@ def delete_story_arc(session: Session, story_arc_id: int) -> None:
 
 def update_story_arc(session: Session, story_arc_id: int, patch: StoryArcUpdate) -> StoryArc:
     arc = _load_arc(session, story_arc_id)
+    changed = False
     if patch.title is not None and patch.title.strip():
-        arc.title = patch.title.strip()
+        value = patch.title.strip()
+        changed = changed or value != arc.title
+        arc.title = value
     if patch.prompt is not None:
-        arc.prompt = patch.prompt.strip()
+        value = patch.prompt.strip()
+        changed = changed or value != arc.prompt
+        arc.prompt = value
     if patch.output_format is not None:
+        changed = changed or patch.output_format != arc.output_format
         arc.output_format = patch.output_format
     if patch.status is not None:
         arc.status = patch.status
     if patch.narration is not None:
         plan = dict(arc.plan_json or {})
         plan["narration"] = patch.narration
+        plan["narration_custom"] = True
         arc.plan_json = plan
-    _refresh_arc_plan_from_segments(session, arc)
+        changed = True
+    refresh_story_arc_plan(session, arc)
+    if changed:
+        _touch_arc(session, arc)
     session.flush()
     return _load_arc(session, arc.id)
 
@@ -136,19 +157,24 @@ def update_story_arc_segment(
         segment.start_time = max(0.0, patch.start_time)
     if patch.end_time is not None:
         segment.end_time = patch.end_time
-    if segment.end_time <= segment.start_time:
-        raise ValueError("Конец сегмента должен быть позже начала")
+    segment.start_time, segment.end_time = _validated_segment_range(
+        session, segment.episode_id, segment.start_time, segment.end_time
+    )
     if patch.title is not None and patch.title.strip():
         segment.title = patch.title.strip()
     if patch.note is not None:
         segment.note = patch.note.strip()
     if patch.role is not None:
         segment.role = patch.role.strip() or None
+    segment.manually_edited = True
+    if segment.candidate is not None:
+        segment.candidate_revision = segment.candidate.edit_revision
     if target_order is not None:
         _move_segment(arc, segment, target_order)
     else:
         _normalize_segment_order(arc)
-    _refresh_arc_plan_from_segments(session, arc)
+    refresh_story_arc_plan(session, arc)
+    _touch_arc(session, arc)
     session.flush()
     return _load_arc(session, arc.id)
 
@@ -162,7 +188,8 @@ def remove_story_arc_segment(session: Session, story_arc_id: int, segment_id: in
     session.flush()
     arc = _load_arc(session, story_arc_id)
     _normalize_segment_order(arc)
-    _refresh_arc_plan_from_segments(session, arc)
+    refresh_story_arc_plan(session, arc)
+    _touch_arc(session, arc)
     session.flush()
     return _load_arc(session, arc.id)
 
@@ -175,6 +202,8 @@ def add_candidate_to_story_arc(session: Session, story_arc_id: int, candidate_id
     episode = session.get(Episode, candidate.episode_id)
     if episode is None or episode.season_id != arc.season_id:
         raise ValueError("Кандидат должен быть из того же сезона")
+    if any(item.candidate_id == candidate.id for item in arc.segments):
+        return arc
     next_order = max((segment.sort_order for segment in arc.segments), default=0) + 1
     segment = StoryArcSegment(
         story_arc_id=arc.id,
@@ -186,16 +215,23 @@ def add_candidate_to_story_arc(session: Session, story_arc_id: int, candidate_id
         title=candidate.title,
         note="Добавлено вручную из поиска",
         role=candidate.story_role or _default_arc_role(next_order, next_order),
+        candidate_revision=candidate.edit_revision,
+        manually_edited=True,
     )
     session.add(segment)
     session.flush()
     arc = _load_arc(session, arc.id)
-    _refresh_arc_plan_from_segments(session, arc)
+    refresh_story_arc_plan(session, arc)
+    _touch_arc(session, arc)
     session.flush()
     return _load_arc(session, arc.id)
 
 
-def rebuild_story_arc_plan(session: Session, story_arc_id: int) -> StoryArc:
+def rebuild_story_arc_plan(
+    session: Session,
+    story_arc_id: int,
+    settings: Settings | None = None,
+) -> StoryArc:
     arc = _load_arc(session, story_arc_id)
     request = StoryArcPlanRequest(
         season_id=arc.season_id,
@@ -209,12 +245,29 @@ def rebuild_story_arc_plan(session: Session, story_arc_id: int) -> StoryArc:
     )
     character = _target_character(session, request.target_character_id, arc.season_id)
     candidates = _rank_candidates(session, arc.season_id, request.prompt, character)
-    selected = _select_arc_items(candidates, request.max_segments, request.max_duration_seconds)
-    if not selected:
+    preserved = [item for item in arc.segments if item.manually_edited]
+    preserved_candidate_ids = {item.candidate_id for item in preserved if item.candidate_id is not None}
+    preserved_duration = sum(item.end_time - item.start_time for item in preserved)
+    remaining_candidates = [item for item in candidates if item.candidate.id not in preserved_candidate_ids]
+    remaining_request = replace(
+        request,
+        max_segments=max(0, request.max_segments - len(preserved)),
+        max_duration_seconds=max(0, request.max_duration_seconds - round(preserved_duration)),
+    )
+    selected = _select_arc_items(
+        remaining_candidates,
+        remaining_request.max_segments,
+        remaining_request.max_duration_seconds,
+    )
+    if settings is not None and settings.llm_adapter != "stub":
+        selected = _llm_story_order(settings, season, remaining_request, remaining_candidates, selected)
+    if not selected and not preserved:
         raise ValueError("Не удалось пересобрать арку")
-    _replace_segments(session, arc, selected)
-    arc.total_duration_seconds = round(sum(item.candidate.end_time - item.candidate.start_time for item in selected), 3)
-    arc.plan_json = _plan_json(arc, arc.season, character, selected)
+    _replace_segments(session, arc, selected, preserved=preserved)
+    session.expire(arc, ["segments"])
+    _normalize_segment_order(arc)
+    refresh_story_arc_plan(session, arc, regenerate_narration=True)
+    _touch_arc(session, arc)
     session.flush()
     return _load_arc(session, arc.id)
 
@@ -229,6 +282,7 @@ def _rank_candidates(
         select(ClipCandidate, Episode)
         .join(Episode, Episode.id == ClipCandidate.episode_id)
         .where(Episode.season_id == season_id)
+        .where(ClipCandidate.status != "rejected")
         .order_by(Episode.file_name, ClipCandidate.start_time)
     ).all()
     speaker_labels = _character_speaker_labels(session, season_id, character.id) if character else {}
@@ -252,9 +306,13 @@ def _rank_candidates(
             reasons.append("есть роль в сюжетном режиме")
         if prompt_terms:
             matches = sum(1 for term in prompt_terms if term in text.lower())
+            semantic = semantic_similarity(prompt, text)
             if matches:
                 score += min(20, matches * 5)
                 reasons.append(f"совпадений с запросом: {matches}")
+            if semantic >= 0.18:
+                score += min(18, round(semantic * 30))
+                reasons.append(f"смысловая близость: {round(semantic * 100)}%")
         labels = speaker_labels.get(episode.id, set())
         if labels and _candidate_has_speaker(session, candidate, labels):
             score += 18
@@ -266,6 +324,9 @@ def _rank_candidates(
         if candidate.problems_json:
             score -= min(12, len(candidate.problems_json) * 3)
             reasons.append("есть замечания к кандидату")
+        if candidate.status in {"approved", "rendered"}:
+            score += 5
+            reasons.append("подтверждено пользователем")
         items.append(StoryArcBuildItem(candidate, episode, score, ", ".join(reasons)))
     return sorted(items, key=lambda item: item.score, reverse=True)
 
@@ -275,6 +336,8 @@ def _select_arc_items(
     max_segments: int,
     max_duration_seconds: int,
 ) -> list[StoryArcBuildItem]:
+    if max_segments <= 0 or max_duration_seconds <= 0:
+        return []
     selected: list[StoryArcBuildItem] = []
     per_episode: dict[int, int] = {}
     total = 0.0
@@ -286,15 +349,83 @@ def _select_arc_items(
             continue
         if per_episode.get(item.episode.id, 0) >= 2 and len(selected) < min(max_segments, 4):
             continue
+        if any(
+            item.episode.id == kept.episode.id
+            and _candidate_similarity(item.candidate, kept.candidate) >= 0.82
+            for kept in selected
+        ):
+            continue
         selected.append(item)
         per_episode[item.episode.id] = per_episode.get(item.episode.id, 0) + 1
         total += duration
-    return sorted(selected, key=lambda item: (item.episode.file_name, item.candidate.start_time))
+    return sorted(selected, key=lambda item: (natural_key(item.episode.file_name), item.candidate.start_time))
 
 
-def _replace_segments(session: Session, arc: StoryArc, items: list[StoryArcBuildItem]) -> None:
-    session.execute(delete(StoryArcSegment).where(StoryArcSegment.story_arc_id == arc.id))
-    for index, item in enumerate(items, start=1):
+def _llm_story_order(
+    settings: Settings,
+    season: Season,
+    request: StoryArcPlanRequest,
+    candidates: list[StoryArcBuildItem],
+    fallback: list[StoryArcBuildItem],
+) -> list[StoryArcBuildItem]:
+    pool = candidates[: min(len(candidates), max(request.max_segments * 3, request.max_segments))]
+    rows = "\n".join(
+        f"id={item.candidate.id}; серия={item.episode.file_name}; время={item.candidate.start_time:.1f}; "
+        f"название={item.candidate.title}; описание={item.candidate.description}; "
+        f"роль={item.candidate.story_role or 'не задана'}; связность={item.candidate.continuity_note or ''}"
+        for item in pool
+    )
+    prompt = (
+        "Выбери и упорядочи фрагменты в цельную причинно-следственную историю. Удали смысловые "
+        "повторы, не ставь следствие раньше причины и закончи понятным итогом. Верни только JSON "
+        "вида {\"candidate_ids\":[1,2]}. Используй только перечисленные id.\n\n"
+        f"Сезон: {season.title}\nКонтекст: {season.story_context or 'не задан'}\n"
+        f"Задача: {request.prompt or request.arc_type}\nКандидаты:\n{rows}"
+    )
+    raw = generate_local_text(settings, prompt, max_tokens=600)
+    if not raw:
+        return fallback
+    try:
+        ids = json.loads(extract_json_object(raw)).get("candidate_ids", [])
+        ids = [int(item) for item in ids]
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        return fallback
+    by_id = {item.candidate.id: item for item in pool}
+    selected: list[StoryArcBuildItem] = []
+    duration = 0.0
+    for candidate_id in ids:
+        item = by_id.get(candidate_id)
+        if item is None or item in selected or len(selected) >= request.max_segments:
+            continue
+        item_duration = item.candidate.end_time - item.candidate.start_time
+        if duration + item_duration > request.max_duration_seconds and selected:
+            continue
+        if any(
+            item.episode.id == prior.episode.id
+            and _candidate_similarity(item.candidate, prior.candidate) >= 0.82
+            for prior in selected
+        ):
+            continue
+        selected.append(item)
+        duration += item_duration
+    return selected or fallback
+
+
+def _replace_segments(
+    session: Session,
+    arc: StoryArc,
+    items: list[StoryArcBuildItem],
+    preserved: list[StoryArcSegment] | None = None,
+) -> None:
+    preserved = preserved or []
+    preserved_ids = [item.id for item in preserved]
+    query = delete(StoryArcSegment).where(StoryArcSegment.story_arc_id == arc.id)
+    if preserved_ids:
+        query = query.where(StoryArcSegment.id.not_in(preserved_ids))
+    session.execute(query)
+    next_order = max((item.sort_order for item in preserved), default=0)
+    total_count = len(preserved) + len(items)
+    for index, item in enumerate(items, start=next_order + 1):
         candidate = item.candidate
         session.add(
             StoryArcSegment(
@@ -306,7 +437,8 @@ def _replace_segments(session: Session, arc: StoryArc, items: list[StoryArcBuild
                 end_time=candidate.end_time,
                 title=candidate.title,
                 note=item.reason,
-                role=candidate.story_role or _default_arc_role(index, len(items)),
+                role=candidate.story_role or _default_arc_role(index, total_count),
+                candidate_revision=candidate.edit_revision,
             )
         )
     session.flush()
@@ -344,7 +476,11 @@ def _plan_json(
     }
 
 
-def _refresh_arc_plan_from_segments(session: Session, arc: StoryArc) -> None:
+def refresh_story_arc_plan(
+    session: Session,
+    arc: StoryArc,
+    regenerate_narration: bool = False,
+) -> None:
     season = session.get(Season, arc.season_id)
     character = _target_character(session, arc.target_character_id, arc.season_id) if arc.target_character_id else None
     chapters: list[dict] = []
@@ -365,6 +501,7 @@ def _refresh_arc_plan_from_segments(session: Session, arc: StoryArc) -> None:
             }
         )
     existing_plan = dict(arc.plan_json or {})
+    narration_custom = bool(existing_plan.get("narration_custom"))
     narration = existing_plan.get("narration")
     arc.total_duration_seconds = round(sum(item["duration"] for item in chapters), 3)
     arc.plan_json = {
@@ -375,8 +512,24 @@ def _refresh_arc_plan_from_segments(session: Session, arc: StoryArc) -> None:
         "format": arc.output_format,
         "total_duration_seconds": arc.total_duration_seconds,
         "chapters": chapters,
-        "narration": narration if narration is not None else _narration_plan(character, chapters),
+        "narration": (
+            narration
+            if narration_custom and not regenerate_narration
+            else _narration_plan(character, chapters)
+        ),
+        "narration_custom": narration_custom and not regenerate_narration,
     }
+
+
+def _touch_arc(session: Session, arc: StoryArc) -> None:
+    arc.edit_revision += 1
+    arc.status = "draft"
+    plan = dict(arc.plan_json or {})
+    plan.pop("narration_audio_path", None)
+    plan.pop("narration_script_path", None)
+    arc.plan_json = plan
+    for export in arc.exports:
+        export.status = "stale"
 
 
 def _normalize_segment_order(arc: StoryArc) -> None:
@@ -431,6 +584,46 @@ def _terms(prompt: str) -> list[str]:
     return [item for item in terms if len(item) >= 4][:12]
 
 
+def _validated_segment_range(
+    session: Session,
+    episode_id: int,
+    start: float,
+    end: float,
+) -> tuple[float, float]:
+    episode = session.get(Episode, episode_id)
+    if episode is None:
+        raise ValueError("Серия сегмента не найдена")
+    crossing_start = session.scalar(
+        select(TranscriptSegment)
+        .where(TranscriptSegment.episode_id == episode_id)
+        .where(TranscriptSegment.start_time + 0.05 < start)
+        .where(TranscriptSegment.end_time - 0.05 > start)
+        .order_by(TranscriptSegment.start_time)
+    )
+    crossing_end = session.scalar(
+        select(TranscriptSegment)
+        .where(TranscriptSegment.episode_id == episode_id)
+        .where(TranscriptSegment.start_time + 0.05 < end)
+        .where(TranscriptSegment.end_time - 0.05 > end)
+        .order_by(TranscriptSegment.start_time)
+    )
+    if crossing_start is not None:
+        start = crossing_start.start_time
+    if crossing_end is not None:
+        end = crossing_end.end_time
+    if start < 0 or end <= start:
+        raise ValueError("Конец сегмента должен быть позже начала")
+    if episode.duration_seconds is not None and end > episode.duration_seconds + 0.05:
+        raise ValueError("Конец сегмента выходит за длительность серии")
+    return round(start, 3), round(end, 3)
+
+
+def _candidate_similarity(left: ClipCandidate, right: ClipCandidate) -> float:
+    left_text = " ".join([left.title, left.description, left.continuity_note or ""])
+    right_text = " ".join([right.title, right.description, right.continuity_note or ""])
+    return semantic_similarity(left_text, right_text)
+
+
 def _arc_title(request: StoryArcPlanRequest, season: Season, character: Character | None) -> str:
     if request.title and request.title.strip():
         return request.title.strip()
@@ -474,7 +667,7 @@ def _narration_plan(character: Character | None, chapters: list[dict]) -> list[d
 def _load_arc(session: Session, story_arc_id: int) -> StoryArc:
     arc = session.scalar(
         select(StoryArc)
-        .options(selectinload(StoryArc.segments))
+        .options(selectinload(StoryArc.segments), selectinload(StoryArc.exports))
         .where(StoryArc.id == story_arc_id)
     )
     if arc is None:
