@@ -410,6 +410,57 @@ button:disabled {
   margin: 0;
 }
 
+.arc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.arc-actions button {
+  gap: 7px;
+}
+
+.arc-export {
+  background: #f8fafc;
+  border: 1px solid #e7e9ee;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.arc-export video {
+  aspect-ratio: 9 / 16;
+  background: #111827;
+  border-radius: 6px;
+  max-height: 360px;
+  width: min(100%, 220px);
+}
+
+.arc-export small {
+  color: #667085;
+  overflow-wrap: anywhere;
+}
+
+.arc-narration {
+  background: #fffaf0;
+  border: 1px solid #fedf89;
+  border-radius: 7px;
+  color: #344054;
+  padding: 10px;
+}
+
+.arc-narration summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.arc-narration p {
+  color: #475467;
+  margin-top: 8px;
+}
+
 .arc-segments {
   display: grid;
   gap: 7px;

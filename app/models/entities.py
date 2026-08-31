@@ -187,6 +187,7 @@ class StoryArc(TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="StoryArcSegment.sort_order",
     )
+    exports: Mapped[list["StoryArcExport"]] = relationship(back_populates="story_arc", cascade="all, delete-orphan")
 
 
 class StoryArcSegment(TimestampMixin, Base):
@@ -206,6 +207,24 @@ class StoryArcSegment(TimestampMixin, Base):
     story_arc: Mapped[StoryArc] = relationship(back_populates="segments")
     episode: Mapped[Episode] = relationship()
     candidate: Mapped[ClipCandidate | None] = relationship()
+
+
+class StoryArcExport(TimestampMixin, Base):
+    __tablename__ = "story_arc_exports"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    story_arc_id: Mapped[int] = mapped_column(ForeignKey("story_arcs.id"), nullable=False, index=True)
+    output_path: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_path: Mapped[str | None] = mapped_column(Text)
+    cover_path: Mapped[str | None] = mapped_column(Text)
+    width: Mapped[int] = mapped_column(Integer, default=1080, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, default=1920, nullable=False)
+    include_subtitles: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    preset_name: Mapped[str] = mapped_column(String(64), default="youtube_shorts", nullable=False)
+    segment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="completed", nullable=False, index=True)
+
+    story_arc: Mapped[StoryArc] = relationship(back_populates="exports")
 
 
 class Character(TimestampMixin, Base):

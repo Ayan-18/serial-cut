@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.application.importer import import_season
+from app.application.story_arc_render import concat_list_text, render_story_arc
 from app.application.story_arcs import StoryArcPlanRequest, create_story_arc_plan, list_story_arcs
+from app.infrastructure.config import Settings
+from app.infrastructure.processes import ProcessResult
 from app.models.entities import Character, ClipCandidate, SpeakerIdentity, TranscriptSegment
 
 
@@ -78,3 +83,59 @@ def test_story_arc_plan_can_prioritize_target_character(session, tmp_path):
     assert arc.target_character_id == character.id
     assert arc.segments[0].title == "Персонаж открывает силу"
     assert "реплики персонажа" in arc.segments[0].note
+
+
+def test_story_arc_render_builds_segments_and_concat_export(session, tmp_path, monkeypatch):
+    season_dir = tmp_path / "season"
+    season_dir.mkdir()
+    for index in range(1, 3):
+        (season_dir / f"s01e{index:02}.mkv").write_bytes(f"video-{index}".encode("utf-8"))
+    imported = import_season(session, season_dir)
+    for index, episode_id in enumerate(imported.episode_ids, start=1):
+        session.add(_candidate(episode_id, 10, 40, f"Часть {index}", 80 + index))
+    session.flush()
+    arc = create_story_arc_plan(
+        session,
+        StoryArcPlanRequest(season_id=imported.season.id, max_segments=2, max_duration_seconds=90),
+    )
+    rendered_segments: list[Path] = []
+
+    def fake_render_clip(*args, **kwargs):
+        output_dir = Path(args[2])
+        slug = args[3]
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{slug}.mp4"
+        metadata_path = output_dir / f"{slug}.json"
+        cover_path = output_dir / f"{slug}.jpg"
+        output_path.write_bytes(b"segment")
+        metadata_path.write_text("{}", encoding="utf-8")
+        cover_path.write_bytes(b"cover")
+        rendered_segments.append(output_path)
+        return type(
+            "Artifacts",
+            (),
+            {"output_path": output_path, "metadata_path": metadata_path, "subtitle_path": None, "cover_path": cover_path},
+        )()
+
+    def fake_runner(args: list[str], timeout: int) -> ProcessResult:
+        output = Path(args[-1])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"concat")
+        return ProcessResult(args, 0, "", "")
+
+    monkeypatch.setattr("app.application.story_arc_render.render_clip", fake_render_clip)
+    monkeypatch.setattr("app.application.story_arc_render.detect_nvenc", lambda *args, **kwargs: False)
+
+    result = render_story_arc(
+        session,
+        arc.id,
+        Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
+        runner=fake_runner,
+        force_rerender=True,
+    )
+
+    assert result.segment_count == 2
+    assert Path(result.output_path).read_bytes() == b"concat"
+    assert Path(result.metadata_path or "").read_text(encoding="utf-8")
+    assert len(rendered_segments) == 2
+    assert "file '" in concat_list_text(rendered_segments)

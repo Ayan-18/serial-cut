@@ -227,6 +227,7 @@ def _plan_json(
         "format": arc.output_format,
         "total_duration_seconds": round(sum(item["duration"] for item in chapters), 3),
         "chapters": chapters,
+        "narration": _narration_plan(character, chapters),
         "next_step": "Проверьте порядок и границы, затем можно добавлять multi-source render.",
     }
 
@@ -292,6 +293,23 @@ def _default_arc_role(index: int, count: int) -> str:
     if ratio < 0.75:
         return "поворот"
     return "кульминация"
+
+
+def _narration_plan(character: Character | None, chapters: list[dict]) -> list[dict]:
+    if character is None:
+        return []
+    lines: list[dict] = []
+    for chapter in chapters:
+        role = chapter["role"]
+        title = chapter["title"]
+        if role == "завязка":
+            text = f"Сначала я столкнулся с моментом: {title}."
+        elif role == "итог":
+            text = f"Именно так закончилась эта часть моей истории: {title}."
+        else:
+            text = f"После этого для меня стало важным: {title}."
+        lines.append({"order": chapter["order"], "voice": character.name, "text": text})
+    return lines
 
 
 def _load_arc(session: Session, story_arc_id: int) -> StoryArc:

@@ -48,11 +48,15 @@ type StoryArcSegment = {
   id: number; story_arc_id: number; episode_id: number; episode_file_name: string; candidate_id: number | null;
   candidate_score: number | null; sort_order: number; start_time: number; end_time: number; title: string; note: string; role: string | null;
 };
+type StoryArcExport = {
+  id: number; story_arc_id: number; output_path: string; metadata_path: string | null; cover_path: string | null;
+  width: number; height: number; include_subtitles: boolean; preset_name: string; segment_count: number; status: string;
+};
 type StoryArc = {
   id: number; season_id: number; season_title: string; title: string; prompt: string; arc_type: "custom" | "character" | "story_arc";
   output_format: "single_short" | "shorts_series" | "story_video" | "long_video"; target_character_id: number | null;
   target_character_name: string | null; status: string; total_duration_seconds: number; plan_json: Record<string, unknown>;
-  segments: StoryArcSegment[];
+  segments: StoryArcSegment[]; exports: StoryArcExport[];
 };
 type Character = { id: number; season_id: number; name: string; description: string; aliases: string[]; color: string; photo_count: number; photo_urls: string[]; voice_sample_count: number };
 type SpeakerIdentity = { source_label: string; character_id: number; character_name: string; confidence: number | null; method: string };
@@ -98,6 +102,8 @@ function App() {
   const [arcCharacterId, setArcCharacterId] = useState<number | null>(null);
   const [arcMaxSegments, setArcMaxSegments] = useState(8);
   const [arcMaxDuration, setArcMaxDuration] = useState(420);
+  const [arcRenderBusy, setArcRenderBusy] = useState<number | null>(null);
+  const [availableArcCharacters, setAvailableArcCharacters] = useState<Character[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [speakerLabels, setSpeakerLabels] = useState<string[]>([]);
   const [speakerIdentities, setSpeakerIdentities] = useState<SpeakerIdentity[]>([]);
@@ -409,6 +415,25 @@ function App() {
     setMessage("Монтажный план удалён");
   }
 
+  async function renderStoryArc(arc: StoryArc, includeSubtitles: boolean) {
+    setArcRenderBusy(arc.id);
+    setMessage(`Рендерим монтажный план «${arc.title}» из ${arc.segments.length} частей…`);
+    try {
+      const result = await api<{ export_id: number; segment_count: number; duration_seconds: number }>(`/api/story-arcs/${arc.id}/render`, {
+        method: "POST", headers: jsonHeaders, body: JSON.stringify({
+          include_subtitles: includeSubtitles,
+          use_nvenc: settings?.render_use_nvenc ?? null,
+          preset_name: settings?.render_preset ?? null,
+          loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null,
+          force_rerender: true,
+        }),
+      });
+      setMessage(`StoryArc MP4 готов: ${result.segment_count} частей, ${formatElapsed(Math.round(result.duration_seconds))}`);
+      setStoryArcs(await api<StoryArc[]>("/api/story-arcs"));
+    } catch (error) { setMessage(`StoryArc не отрендерен: ${errorMessage(error)}`); }
+    finally { setArcRenderBusy(null); }
+  }
+
   async function openArcSegment(segment: StoryArcSegment) {
     const data = await api<Candidate[]>(`/api/episodes/${segment.episode_id}/candidates`);
     setCandidates((current) => ({ ...current, [segment.episode_id]: data }));
@@ -457,6 +482,13 @@ function App() {
   useEffect(() => { refresh().catch((error) => setMessage(errorMessage(error))); runSystemCheck().catch((error) => setMessage(errorMessage(error))); }, []);
   useEffect(() => { const timer = window.setInterval(() => refreshActivity().catch(() => undefined), 2500); return () => window.clearInterval(timer); }, [selectedEpisodeId]);
   useEffect(() => { if (!blockingProgress) return; const update = () => setElapsedSeconds(Math.floor((Date.now() - blockingProgress.startedAt) / 1000)); update(); const timer = window.setInterval(update, 1000); return () => window.clearInterval(timer); }, [blockingProgress]);
+  useEffect(() => {
+    const seasonId = selectedArcSeasonId();
+    if (!seasonId) { setAvailableArcCharacters([]); return; }
+    api<Character[]>(`/api/seasons/${seasonId}/characters`)
+      .then(setAvailableArcCharacters)
+      .catch(() => setAvailableArcCharacters([]));
+  }, [arcSeasonId, storyContext?.season_id, seasons.length]);
 
   const visibleCandidates = useMemo(() => {
     const items = [...(selectedEpisodeId ? candidates[selectedEpisodeId] ?? [] : [])];
@@ -475,7 +507,7 @@ function App() {
   const activeSubtitle = selectedCandidate ? subtitles.find((item) => { const relative = videoTime - Number((edits[selectedCandidate.id] ?? editFromCandidate(selectedCandidate)).start); return relative >= item.start_time && relative <= item.end_time; }) : undefined;
   const selectedEdit = selectedCandidate ? edits[selectedCandidate.id] ?? editFromCandidate(selectedCandidate) : null;
   const arcSeason = seasons.find((season) => season.id === selectedArcSeasonId());
-  const arcCharacters = characters.filter((character) => character.season_id === arcSeason?.id);
+  const arcCharacters = availableArcCharacters.length ? availableArcCharacters : characters.filter((character) => character.season_id === arcSeason?.id);
   const visibleStoryArcs = storyArcs.filter((arc) => !arcSeason || arc.season_id === arcSeason.id);
 
   return <main className="app-shell">
@@ -498,7 +530,7 @@ function App() {
 
     <section className="story-arc-workspace section-gap">
       <div className="panel"><div className="panel-title"><BookOpen size={19} /><h2>Сюжетные видео</h2><span className="badge">{visibleStoryArcs.length}</span></div><div className="arc-form"><label><span>Сезон</span><select value={arcSeason?.id ?? ""} onChange={(event) => setArcSeasonId(Number(event.target.value) || null)}>{seasons.map((season) => <option key={season.id} value={season.id}>{season.title}</option>)}</select></label><label><span>Формат</span><select value={arcFormat} onChange={(event) => setArcFormat(event.target.value as StoryArc["output_format"])}><option value="single_short">Один Shorts</option><option value="shorts_series">Серия Shorts</option><option value="story_video">Видео 2–10 мин</option><option value="long_video">Длинное видео</option></select></label><label><span>Персонаж</span><select value={arcCharacterId ?? ""} onChange={(event) => setArcCharacterId(Number(event.target.value) || null)}><option value="">Без персонажа</option>{arcCharacters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select></label><SettingNumber title="Частей" hint="Сколько фрагментов попадёт в план." value={arcMaxSegments} min={1} max={40} onChange={setArcMaxSegments} /><SettingNumber title="Лимит, сек." hint="Суммарная длительность монтажного плана." value={arcMaxDuration} min={15} max={7200} onChange={setArcMaxDuration} /><SettingText title="Название" hint="Можно оставить пустым." value={arcTitle} onChange={setArcTitle} /><label className="setting-field setting-field-wide"><span>Запрос к арке</span><textarea rows={3} value={arcPrompt} onChange={(event) => setArcPrompt(event.target.value)} placeholder="Например: как герой узнал правду об отце, развитие отношений, вся линия конфликта…" /><small>План строится из уже найденных кандидатов сезона.</small></label><button disabled={!arcSeason} onClick={createStoryArc}><Sparkles size={16} /> Создать план</button></div></div>
-      <div className="panel"><div className="panel-title"><Clapperboard size={19} /><h2>Монтажные планы</h2></div><div className="arc-list">{visibleStoryArcs.map((arc) => <article className="arc-card" key={arc.id}><div className="arc-head"><div><strong>{arc.title}</strong><small>{formatArcFormat(arc.output_format)} · {formatElapsed(Math.round(arc.total_duration_seconds))}{arc.target_character_name ? ` · ${arc.target_character_name}` : ""}</small></div><div><button className="text-button" onClick={() => rebuildStoryArc(arc.id)}>Пересобрать</button><button className="text-button danger" onClick={() => deleteStoryArc(arc.id)}>Удалить</button></div></div>{arc.prompt && <p>{arc.prompt}</p>}<ol className="arc-segments">{arc.segments.map((segment) => <li key={segment.id}><button onClick={() => openArcSegment(segment)}><span>{segment.sort_order}</span><strong>{segment.title}</strong><small>{segment.episode_file_name} · {formatRange(segment.start_time, segment.end_time)} · {segment.role ?? "часть"}{segment.candidate_score != null ? ` · score ${segment.candidate_score}` : ""}</small></button></li>)}</ol></article>)}{!visibleStoryArcs.length && <p className="empty">Когда в сезоне появятся кандидаты, здесь можно собрать арку из нескольких серий.</p>}</div></div>
+      <div className="panel"><div className="panel-title"><Clapperboard size={19} /><h2>Монтажные планы</h2></div><div className="arc-list">{visibleStoryArcs.map((arc) => { const latestExport = arc.exports[0]; const narration = arcNarration(arc); return <article className="arc-card" key={arc.id}><div className="arc-head"><div><strong>{arc.title}</strong><small>{formatArcFormat(arc.output_format)} · {formatElapsed(Math.round(arc.total_duration_seconds))}{arc.target_character_name ? ` · ${arc.target_character_name}` : ""}</small></div><div><button className="text-button" onClick={() => rebuildStoryArc(arc.id)}>Пересобрать</button><button className="text-button danger" onClick={() => deleteStoryArc(arc.id)}>Удалить</button></div></div>{arc.prompt && <p>{arc.prompt}</p>}<div className="arc-actions"><button disabled={arcRenderBusy === arc.id || !arc.segments.length} onClick={() => renderStoryArc(arc, true)}>{arcRenderBusy === arc.id ? <LoaderCircle className="spinner" size={16} /> : <Clapperboard size={16} />} Рендер плана</button><button className="secondary" disabled={arcRenderBusy === arc.id || !arc.segments.length} onClick={() => renderStoryArc(arc, false)}>Без субтитров</button></div>{latestExport && <div className="arc-export"><video controls preload="none" src={`/api/story-arc-exports/${latestExport.id}/file`} /><small title={latestExport.output_path}>{latestExport.segment_count} частей · {latestExport.preset_name} · {latestExport.output_path}</small></div>}{narration.length > 0 && <details className="arc-narration"><summary>Текст озвучки от лица героя</summary>{narration.map((line) => <p key={line.order}><strong>{line.order}.</strong> {line.text}</p>)}</details>}<ol className="arc-segments">{arc.segments.map((segment) => <li key={segment.id}><button onClick={() => openArcSegment(segment)}><span>{segment.sort_order}</span><strong>{segment.title}</strong><small>{segment.episode_file_name} · {formatRange(segment.start_time, segment.end_time)} · {segment.role ?? "часть"}{segment.candidate_score != null ? ` · score ${segment.candidate_score}` : ""}</small></button></li>)}</ol></article>; })}{!visibleStoryArcs.length && <p className="empty">Когда в сезоне появятся кандидаты, здесь можно собрать арку из нескольких серий.</p>}</div></div>
     </section>
 
     {selectedEpisodeId && storyContext && <section className="story-dashboard section-gap">
@@ -577,6 +609,14 @@ function formatRange(start: number, end: number) { return `${formatClock(start)}
 function formatClock(value: number) { const minutes = Math.floor(value / 60); const seconds = Math.floor(value % 60); return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`; }
 function stageLabel(stage: string | null) { const labels: Record<string, string> = { discovered: "найдена", probed: "метаданные готовы", proxied: "proxy готов", transcribed: "речь распознана", scenes_detected: "сцены найдены", outlined: "сюжет разобран", candidates_generated: "кандидаты готовы", awaiting_review: "ждёт проверки", rendered: "ролик готов", stage2_media: "медиа и речь", stage3_candidates: "поиск кандидатов", auto_export: "автоэкспорт", render_clip: "рендер клипа", completed: "завершено" }; return stage ? labels[stage] ?? stage : "ожидание"; }
 function formatArcFormat(format: string) { const labels: Record<string, string> = { single_short: "Один Shorts", shorts_series: "Серия Shorts", story_video: "Видео 2–10 мин", long_video: "Длинное видео" }; return labels[format] ?? format; }
+function arcNarration(arc: StoryArc) {
+  const narration = arc.plan_json.narration;
+  if (!Array.isArray(narration)) return [];
+  return narration
+    .map((item) => typeof item === "object" && item !== null ? item as { order?: unknown; text?: unknown } : null)
+    .filter((item): item is { order?: unknown; text?: unknown } => !!item && typeof item.text === "string")
+    .map((item, index) => ({ order: Number(item.order) || index + 1, text: String(item.text) }));
+}
 function statusLabel(status: string) { const labels: Record<string, string> = { queued: "в очереди", running: "выполняется", paused: "пауза", cancel_requested: "останавливается", failed: "ошибка", completed: "готово", new: "новый", approved: "принят", rejected: "отклонён", rendered: "готов" }; return labels[status] ?? status; }
 function jobLabel(kind: string) { return kind === "render_clip" ? "рендер" : kind === "analyze_episode" ? "анализ серии" : kind; }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : "Неизвестная ошибка"; }

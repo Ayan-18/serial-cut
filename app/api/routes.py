@@ -51,7 +51,10 @@ from app.api.schemas import (
     SpeakerIdentityUpdate,
     SpeakerLabelsRead,
     StoryArcCreateRequest,
+    StoryArcExportRead,
     StoryArcRead,
+    StoryArcRenderRequest,
+    StoryArcRenderResponse,
     StoryArcSegmentRead,
     StoryContextRead,
     StoryContextUpdate,
@@ -91,6 +94,7 @@ from app.application.story_arcs import (
     list_story_arcs,
     rebuild_story_arc_plan,
 )
+from app.application.story_arc_render import render_story_arc
 from app.application.system_check import report_as_dict, run_system_check
 from app.domain.enums import JobStatus
 from app.infrastructure.database import SessionLocal
@@ -109,6 +113,7 @@ from app.models.entities import (
     Season,
     SpeakerIdentity,
     StoryArc,
+    StoryArcExport,
     StoryArcSegment,
     TranscriptSegment,
 )
@@ -263,6 +268,56 @@ def rebuild_story_arc(story_arc_id: int, session: Session = Depends(get_session)
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/story-arcs/{story_arc_id}/render", response_model=StoryArcRenderResponse)
+def render_story_arc_endpoint(
+    story_arc_id: int,
+    payload: StoryArcRenderRequest,
+    session: Session = Depends(get_session),
+):
+    try:
+        settings = effective_settings(session, get_settings())
+        session.commit()
+        with processing_guard():
+            result = render_story_arc(
+                session,
+                story_arc_id,
+                settings,
+                include_subtitles=payload.include_subtitles,
+                use_nvenc=payload.use_nvenc,
+                preset_name=payload.preset_name,
+                loudnorm_two_pass=payload.loudnorm_two_pass,
+                force_rerender=payload.force_rerender,
+            )
+        session.commit()
+        return result
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/story-arc-exports/{export_id}/file")
+def story_arc_export_file(export_id: int, session: Session = Depends(get_session)):
+    export = _get_story_arc_export(session, export_id)
+    path = Path(export.output_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Файл StoryArc экспорта не найден")
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
+
+
+@router.get("/story-arc-exports/{export_id}/cover")
+def story_arc_export_cover(export_id: int, session: Session = Depends(get_session)):
+    export = _get_story_arc_export(session, export_id)
+    if not export.cover_path:
+        raise HTTPException(status_code=404, detail="Обложка StoryArc не создана")
+    path = Path(export.cover_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Файл обложки StoryArc не найден")
+    return FileResponse(path, media_type="image/jpeg", filename=path.name)
 
 
 @router.delete("/story-arcs/{story_arc_id}")
@@ -1018,6 +1073,13 @@ def _get_export(session: Session, export_id: int) -> Export:
     return export
 
 
+def _get_story_arc_export(session: Session, export_id: int) -> StoryArcExport:
+    export = session.get(StoryArcExport, export_id)
+    if export is None:
+        raise HTTPException(status_code=404, detail="StoryArc export не найден")
+    return export
+
+
 def _get_episode(session: Session, episode_id: int) -> Episode:
     episode = session.get(Episode, episode_id)
     if episode is None:
@@ -1055,6 +1117,7 @@ def _story_arc_read(session: Session, arc: StoryArc) -> StoryArcRead:
         total_duration_seconds=arc.total_duration_seconds,
         plan_json=arc.plan_json,
         segments=[_story_arc_segment_read(session, item) for item in arc.segments],
+        exports=[_story_arc_export_read(item) for item in sorted(arc.exports, key=lambda export: export.id, reverse=True)],
     )
 
 
@@ -1074,6 +1137,22 @@ def _story_arc_segment_read(session: Session, segment: StoryArcSegment) -> Story
         title=segment.title,
         note=segment.note,
         role=segment.role,
+    )
+
+
+def _story_arc_export_read(export: StoryArcExport) -> StoryArcExportRead:
+    return StoryArcExportRead(
+        id=export.id,
+        story_arc_id=export.story_arc_id,
+        output_path=export.output_path,
+        metadata_path=export.metadata_path,
+        cover_path=export.cover_path,
+        width=export.width,
+        height=export.height,
+        include_subtitles=export.include_subtitles,
+        preset_name=export.preset_name,
+        segment_count=export.segment_count,
+        status=export.status,
     )
 
 

@@ -164,6 +164,20 @@ class StoryArcSegmentRead(BaseModel):
     role: str | None
 
 
+class StoryArcExportRead(BaseModel):
+    id: int
+    story_arc_id: int
+    output_path: str
+    metadata_path: str | None
+    cover_path: str | None
+    width: int
+    height: int
+    include_subtitles: bool
+    preset_name: str
+    segment_count: int
+    status: str
+
+
 class StoryArcRead(BaseModel):
     id: int
     season_id: int
@@ -178,6 +192,25 @@ class StoryArcRead(BaseModel):
     total_duration_seconds: float
     plan_json: dict
     segments: list[StoryArcSegmentRead]
+    exports: list[StoryArcExportRead]
+
+
+class StoryArcRenderRequest(BaseModel):
+    include_subtitles: bool = True
+    use_nvenc: bool | None = None
+    preset_name: str | None = Field(default=None, pattern="^(youtube_shorts|instagram_reels)$")
+    loudnorm_two_pass: bool | None = None
+    force_rerender: bool = False
+
+
+class StoryArcRenderResponse(BaseModel):
+    story_arc_id: int
+    export_id: int
+    output_path: str
+    metadata_path: str | None
+    cover_path: str | None
+    segment_count: int
+    duration_seconds: float
 
 
 class EpisodeOutlineRead(BaseModel):

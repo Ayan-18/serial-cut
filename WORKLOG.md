@@ -2,6 +2,32 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-08-31 - StoryArc Multi-Source Render
+
+Implemented the first render/export path for saved multi-episode story arcs:
+
+- Added `StoryArcExport` model plus Alembic revision `0008_story_arc_exports`.
+- Added `app/application/story_arc_render.py`.
+- `render_story_arc` renders each `StoryArcSegment` through the existing vertical `render_clip`
+  pipeline, then uses FFmpeg concat demuxer to produce one MP4 from different episode files.
+- StoryArc exports write metadata with source episodes, candidate ids, ranges, roles and the
+  generated narration/script lines.
+- Added API endpoints:
+  - `POST /api/story-arcs/{id}/render`
+  - `GET /api/story-arc-exports/{id}/file`
+  - `GET /api/story-arc-exports/{id}/cover`
+- The React `Сюжетные видео` section can render a plan with or without subtitles and shows the
+  latest StoryArc MP4 inline.
+- Character-based story arcs now include a draft first-person narration plan in `plan_json.narration`
+  and display it in the UI. This is script text only; local TTS voiceover is not implemented yet.
+
+Decision: StoryArc render is synchronous for now to keep the first implementation small and
+testable. Moving it into the background queue is the next ergonomic improvement before rendering
+large long-form videos.
+
+Verification on the laptop: focused StoryArc/render tests passed (`20 passed`), Alembic upgraded to
+`0008_story_arc_exports`, and the frontend production build passed.
+
 ## 2026-08-31 - Season Story Arc Planning
 
 Added the first repository-backed layer for multi-episode and future long-form videos:
