@@ -66,12 +66,16 @@ YouTube, Instagram, TikTok или VK выполняется пользовате
 PowerShell-команды ниже используют разовый обход Execution Policy и не меняют системную политику.
 
 ```powershell
-Copy-Item .env.example .env
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 winget install --exact --id ggml.llamacpp
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_models.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 ```
+
+`scripts\bootstrap.ps1` проверяет Python 3.11, FFmpeg/ffprobe, Node и `llama-server` с понятными
+сообщениями, создаёт `.env` и `.venv`, ставит зависимости, применяет миграции и собирает
+frontend. `Start SerialCuts.cmd` запускает его автоматически при первом старте. Прежний
+`scripts\setup.ps1` тоже работает.
 
 Если Whisper и Qwen уже установлены, отдельно поставить небольшие модели лиц можно командой:
 
@@ -153,6 +157,35 @@ precision, duplicate rate и invalid clips. Это базовый измерит
 - `GET /api/jobs/{id}/stages`
 - `POST /api/characters/{id}/merge`
 
+## Операционные Возможности
+
+Последний срез добавляет удобство эксплуатации без изменения launcher:
+
+- `GET /api/health` возвращает версию, короткий git-commit, `boot_id` процесса, отпечаток
+  локального токена, аптайм, ревизию БД и состояние очереди; фронтенд отслеживает `boot_id` и
+  предлагает перезагрузить страницу после перезапуска бэкенда. Есть `GET /api/version`.
+- `GET /api/logs` отдаёт хвост ротируемого журнала с фильтром по уровню и тексту; в панели есть
+  просмотр журнала с автообновлением.
+- `GET /api/model-catalog` показывает локальные модели (ASR, Qwen, лица): размер, папку, статус
+  установки и точную команду. Небольшие модели лиц можно скачать прямо из панели после
+  подтверждения (`POST /api/model-catalog/{key}/install`, проверка SHA-256); Whisper и Qwen
+  по-прежнему ставятся скриптом.
+- Правки кандидата версионируются как снимки: `GET /api/candidates/{id}/history` и
+  `POST /api/candidates/{id}/history/{snapshot_id}/restore` откатывают границы, кадр и субтитры;
+  сам откат тоже сохраняется.
+- Пакетные действия: `POST /api/episodes/{id}/candidates/batch-review` и
+  `POST /api/candidates/batch-render-job` принимают/отклоняют/ставят в рендер сразу несколько
+  кандидатов и сообщают причину пропуска для каждого.
+- `GET /api/candidates/{id}/keyframes` собирает полосу миниатюр по кандидату одним проходом
+  FFmpeg (кэш по ревизии правок); в редакторе кадра клик по миниатюре перематывает превью.
+- Импорт сезона возвращает число просканированных файлов и список нечитаемых (заблокированных
+  антивирусом/проводником) — импорт не прерывается на одном файле.
+- `GET /api/system-check` добавил необязательные проверки Node, `llama-server`, запуска вне
+  `.venv` и поддержки длинных путей Windows.
+
+Полный список эндпоинтов генерируется из приложения: `docs/API.md` и `docs/openapi.json`
+(`.\.venv\Scripts\python.exe scripts\dump_openapi.py`).
+
 ## Работа Через Codex На Двух Компьютерах
 
 Общий контекст проекта хранится в GitHub, `AGENTS.md`, `WORKLOG.md` и документации. Перед работой на ноутбуке или компьютере делайте `git pull --ff-only`, после завершения - обновляйте `WORKLOG.md`, коммитьте и пушьте изменения. Подробная инструкция: `docs/CODEX_SYNC.md`.
@@ -163,12 +196,17 @@ precision, duplicate rate и invalid clips. Это базовый измерит
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy app
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe scripts\dump_openapi.py   # обновить docs/API.md после новых эндпоинтов
 Push-Location frontend
 npm run build
 npm test
 Pop-Location
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 ```
+
+Тесты `tests/test_media_smoke.py`, `tests/test_e2e_pipeline.py` и `tests/test_keyframes.py`
+требуют FFmpeg в `PATH` и пропускаются без него. CI ставит FFmpeg и прогоняет их, а также делает
+`alembic downgrade base` / `upgrade head` для проверки миграций.
 
 GitHub Actions CI повторяет backend `ruff`, `mypy` и `pytest`, а также frontend `npm run build`
 и `npm run test` на Linux runner. CI использует stub-адаптеры и не скачивает реальные Whisper/Qwen

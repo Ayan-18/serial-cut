@@ -23,6 +23,8 @@ The product promise is privacy-first local processing:
   - Stage 4: review, SRT/ASS subtitles, render/export.
   - Stage 5: Telegram long polling adapter with whitelist and idempotent callbacks.
 - Product features already added: auto mode, persisted UI settings, season enqueue, queue controls, ETA, render presets, NVENC detection, export with/without subtitles, optional two-pass loudnorm.
+- Operability: `/api/health` + `/api/version` + `/api/logs`, in-UI log viewer, `/api/model-catalog` with in-app face-model install, candidate edit history/undo (`CandidateEditSnapshot`, migration 0014), batch candidate review/render, keyframe-thumbnail crop strip, generated `docs/API.md` (`scripts/dump_openapi.py`), `resolve_within` path guard on file endpoints, `scripts/bootstrap.ps1`.
+- After adding or changing an endpoint, run `scripts/dump_openapi.py` and commit `docs/`.
 
 ## Important Files
 

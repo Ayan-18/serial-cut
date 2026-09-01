@@ -14,10 +14,13 @@
 
 - `app/api` - HTTP API для панели. Доменные routers разделены по файлам:
   `settings_and_diagnostics_routes.py`, `seasons_routes.py`, `episodes_routes.py`,
-  `candidates_routes.py`, `story_arcs_routes.py`, `characters_routes.py`,
+  `candidates_routes.py`, `candidate_history_routes.py`, `candidate_batch_routes.py`,
+  `candidate_media_routes.py`, `story_arcs_routes.py`, `characters_routes.py`,
   `publishing_routes.py`, `exports_routes.py`, плюс отдельные `queue_routes.py` и
-  `search_routes.py`. Общие HTTP helper-функции лежат в `app/api/_shared.py`,
-  а `app/api/routes.py` оставлен тонким compatibility shim.
+  `search_routes.py`. Общие HTTP helper-функции лежат в `app/api/_shared.py`, отдача
+  генерированных файлов проходит через `app/api/media_files.py` (`resolve_within` не
+  выпускает путь за пределы output/cache), а `app/api/routes.py` оставлен тонким
+  compatibility shim. Каждый route-модуль ≤ 300 строк (проверяется тестом).
 - `app/application` - сценарии приложения: импорт сезона, system-check.
 - `app/domain` - статусы, константы, работа с путями.
 - `app/infrastructure` - конфиг, БД, процессы, fingerprint.
@@ -101,3 +104,21 @@ Audio/proxy не пересоздаются, если уже существую�
 - `application/publishing.py` валидирует лимиты/статусы платформ и создаёт локальный manifest; внешняя публикация не входит в privacy-first MVP.
 - `application/project_diagnostics.py` проверяет миграцию, инструменты, свободное место, потерянные и устаревшие производные файлы.
 - UI показывает вертикальный preview, subtitle/crop editor, фильтры, живую очередь, историю экспортов, диагностику моделей и подтверждённую очистку только cache.
+- `application/runtime_info.py` собирает `/api/health` (версия, git-commit, `boot_id` процесса,
+  отпечаток токена, аптайм, ревизия БД, очередь); `application/log_reader.py` парсит хвост
+  ротируемого журнала (`current_log_path()` из `logging_config`) с фильтрами по уровню/тексту.
+- `application/edit_history.py` + модель `CandidateEditSnapshot` (миграция `0014`) хранят снимки
+  геометрии и субтитров кандидата перед каждой правкой и откатывают к выбранному снимку;
+  `_apply_candidate_edits` и `save_candidate_subtitles` вызывают `record_candidate_snapshot`.
+- `application/batch_ops.py` применяет approve/reject и постановку рендера к списку кандидатов,
+  возвращая причину пропуска для каждого; `application/candidate_keyframes.py` +
+  `media/thumbnails.py` собирают полосу миниатюр одним проходом FFmpeg с кэшем по
+  `candidate.edit_revision`.
+- `application/model_install.py` описывает каталог моделей (размер, папка, статус, команда) и
+  качает небольшие модели лиц по подтверждению с проверкой SHA-256; `scripts/download_identity_models.py`
+  использует его же.
+- `importer.py` принимает progress callback, пропускает заблокированные файлы в `errors` и не
+  прерывает импорт; `system_check.py` добавляет необязательные проверки (Node, `llama-server`,
+  запуск вне `.venv`, длинные пути Windows) через набор `OPTIONAL_CHECKS`.
+- `scripts/dump_openapi.py` генерирует `docs/openapi.json` и `docs/API.md` из живого приложения;
+  тест падает при расхождении. `scripts/bootstrap.ps1` — проверка окружения и установка.

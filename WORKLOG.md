@@ -1,5 +1,55 @@
 # SerialCuts Worklog
 
+## 2026-09-02 - Workflow Feature Batch (health, history, batch ops, keyframes, models, docs)
+
+Implemented the outstanding feature/gap list from the project review, in eight commits:
+
+1. **Health / version / logs + path-safety.** `resolve_within()` (`app/domain/paths.py`) guards
+   every generated-file endpoint (exports, story-arc exports, character photos) so a stale or
+   hand-edited DB row cannot stream an arbitrary file; helper lives in `app/api/media_files.py`.
+   `/api/health` now returns version, git commit, per-process `boot_id`, token fingerprint, uptime,
+   db revision and queue state; new `/api/version` and `/api/logs` (rotating-log tail with
+   level/text filters, `app/application/log_reader.py`). New `api_client` pytest fixture runs the
+   app on an isolated in-memory schema.
+2. **Adapter failure handling.** `LlamaCppHttpAnalyzer` retries a chunk once with a stricter prompt
+   on invalid JSON. `LocalFaceRecognizer` and the cover picker no longer crash on OpenCV 5 headless
+   (which drops `cv2.CascadeClassifier`); without YuNet/SFace the recognizer degrades to voice-only
+   and `model-diagnostics` says so. Tests in `tests/test_adapter_failures.py`.
+3. **End-to-end pipeline smoke** (`tests/test_e2e_pipeline.py`): generates a tiny MP4 and walks
+   import -> probe -> stage2 (stub ASR/scene) -> stage3 (stub LLM) -> review -> render, verified
+   with ffprobe. CI now installs ffmpeg so this and `test_media_smoke.py` actually run, plus a
+   migration `downgrade base` / `upgrade head` round-trip.
+4. **Candidate edit history** (migration `0014`). Every boundary/crop/subtitle change snapshots the
+   previous state (pruned to 25). `GET /api/candidates/{id}/history`,
+   `POST /api/candidates/{id}/history/{snapshot_id}/restore` (restore is itself snapshotted).
+5. **Batch candidate operations.** `POST /api/episodes/{id}/candidates/batch-review` and
+   `POST /api/candidates/batch-render-job` with per-candidate skip reasons.
+6. **Keyframe strip.** `GET /api/candidates/{id}/keyframes[?count=]` extracts evenly-spaced JPEGs
+   in one ffmpeg pass, cached by candidate id + edit revision; `/keyframes/{index}` serves one.
+7. **Model install assistant + import progress + Windows diagnostics.** `GET /api/model-catalog`
+   lists ASR/LLM/face models with size, target dir, install state and the exact command;
+   `POST /api/model-catalog/{key}/install` downloads the small face models in-app behind a
+   `confirm` flag with SHA-256 verification. `import_season` takes a progress callback, survives a
+   file locked by antivirus/Explorer, and reports scanned count + per-file errors. `system-check`
+   adds advisory node / llama-server / virtualenv / Windows long-path checks.
+8. **API docs + bootstrap.** `scripts/dump_openapi.py` writes `docs/openapi.json` + `docs/API.md`
+   from the live app (a test fails on drift). `scripts/bootstrap.ps1` checks prerequisites with
+   actionable messages then sets up the environment; `Start SerialCuts.cmd` runs it on first launch.
+
+Frontend: `BackendStatusBanner` (reload prompt on `boot_id` change / offline), `LogViewerPanel`,
+`ModelCatalogPanel`, `KeyframeStrip`, `CandidateHistory`, `BatchActionBar` + per-card checkboxes,
+richer import message. Wired into `AppView` as self-contained panels to avoid growing the
+controller.
+
+Verification: `ruff check .`, `mypy app` (98 files) clean; `pytest` 144 passed / 0 skipped with
+ffmpeg on PATH; `npm run build` + `npm run test` (10) pass; `alembic upgrade head` /
+`downgrade base` round-trip clean; manual smoke of `/api/health`, `/api/model-catalog`,
+`/api/logs` and the new panels in a browser.
+
+Environment note: the local `.venv` on this machine is still Python 3.10.4 and was missing
+`numpy`, `opencv-python-headless`, `ruff`, `mypy`, `uvicorn`; installed them ad hoc to run checks.
+Recreate the venv with Python 3.11 (`scripts/bootstrap.ps1`) for a clean state.
+
 ## 2026-09-01 - Backend CI Database Preparation
 
 Follow-up after the first GitHub Actions run for the prompt work:
@@ -569,14 +619,21 @@ Implemented:
 - Stage 4 review/render/export: approve/reject, edited boundaries/crop, Russian SRT/ASS, FFmpeg 1080x1920 render, cover and metadata export.
 - Stage 5 Telegram: long polling, whitelist, idempotent approve/reject/export callbacks.
 - Product features: auto mode, persisted settings UI, season enqueue, YouTube Shorts / Instagram Reels render presets, NVENC detection, export with or without subtitles, optional two-pass loudnorm.
+- Operability: `/api/health` (version, boot_id, queue), `/api/version`, `/api/logs` tail + in-UI log
+  viewer, `/api/model-catalog` + in-app face-model install, candidate edit history/undo, batch
+  candidate review/render, keyframe-thumbnail crop strip, generated `docs/API.md`, path-traversal
+  guard on all file endpoints, `scripts/bootstrap.ps1`.
 
 ## Verification Snapshot
 
-Last known checks from this project state:
+Last known checks from this project state (2026-09-02):
 
-- `.\.venv\Scripts\python.exe -m pytest`: passed, 32 tests.
-- `npm run build`: passed.
-- `.\scripts\check_system.ps1`: script works, but on the previous Codex environment it reported Python 3.10.4 and missing `ffmpeg` / `ffprobe`. Target machines should use Python 3.11+ and FFmpeg/ffprobe in `PATH`.
+- `.\.venv\Scripts\python.exe -m pytest`: 144 passed, 0 skipped (with FFmpeg on PATH).
+- `python -m ruff check .` and `python -m mypy app`: clean.
+- `npm run build` and `npm run test`: passed (10 frontend tests).
+- `alembic upgrade head` then `downgrade base` then `upgrade head`: clean.
+- `.\scripts\check_system.ps1` / `.\scripts\bootstrap.ps1`: work; target machines need Python 3.11+
+  and FFmpeg/ffprobe in `PATH`.
 
 ## Key Decisions
 
@@ -590,13 +647,19 @@ Last known checks from this project state:
 
 ## Near-Term Next Steps
 
-- Add a model installation assistant that shows model size and asks for confirmation before downloads.
-- Add a persistent background queue loop option, while keeping `run-next` for testability.
-- Improve crop UX with visual preview and keyframe thumbnails.
-- Add candidate search/filtering in UI by score, status, episode, and reason.
-- Add a safe cache cleanup screen that only deletes derived artifacts.
-- Add import progress and richer diagnostics for common Windows setup problems.
-- Add end-to-end smoke fixtures for a tiny local media sample.
+Done in the 2026-09-02 batch: model installation assistant, keyframe-thumbnail crop UX, import
+progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo, batch
+candidate operations, in-UI log viewer, generated API docs, bootstrap script.
+
+Still open:
+
+- Recreate the local `.venv` on Python 3.11 and re-pin dev extras that are only in `dependencies`.
+- Split `useSerialCutsController.ts` (750+ lines) into per-domain hooks.
+- Add eslint + `tsc --noEmit` to frontend CI.
+- Tighten the ruff/mypy ignore lists now that the router split has settled.
+- `Host`-header allowlist in `LoopbackOnlyMiddleware` (DNS-rebind hardening).
+- Persistent background queue loop option, while keeping `run-next` for testability.
+- Progress streaming (SSE) for long model downloads and season imports.
 
 ## Useful Commands
 
