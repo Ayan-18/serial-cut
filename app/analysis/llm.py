@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Callable, Protocol
 
@@ -16,6 +17,9 @@ from app.analysis.schemas import (
 )
 from app.models.entities import Scene
 from app.infrastructure.processes import ProcessCancelledError
+
+
+logger = logging.getLogger(__name__)
 
 
 class EpisodeAnalyzer(Protocol):
@@ -147,6 +151,12 @@ class LlamaCppHttpAnalyzer:
         chunks = self._candidate_chunks(transcript, count=5 if context.candidate_mode == "story" else 3)
         all_candidates = []
         first_error: Exception | None = None
+        logger.info(
+            "Starting LLM candidate analysis: chunks=%s mode=%s scenes=%s",
+            len(chunks),
+            context.candidate_mode,
+            len(scenes),
+        )
         for chunk_index, chunk in enumerate(chunks, start=1):
             self._raise_if_cancelled()
             self._report(
@@ -187,6 +197,7 @@ class LlamaCppHttpAnalyzer:
                     self._complete_json(prompt, CandidateListPayload.model_json_schema(), max_tokens=1600)
                 )
             except ValueError as exc:
+                logger.warning("LLM candidate JSON validation failed: chunk=%s error=%s", chunk_index, exc)
                 first_error = first_error or exc
                 continue
             all_candidates.extend(parsed.candidates[:1] if context.candidate_mode == "story" else parsed.candidates[:2])
@@ -196,6 +207,7 @@ class LlamaCppHttpAnalyzer:
             )
         if not all_candidates and first_error is not None:
             raise first_error
+        logger.info("LLM candidate analysis completed: candidates=%s", len(all_candidates))
         return CandidateListPayload(candidates=sorted(all_candidates, key=lambda item: item.start_time)[:8])
 
     @staticmethod
@@ -213,6 +225,7 @@ class LlamaCppHttpAnalyzer:
 
     def _complete_json(self, prompt: str, schema: dict, max_tokens: int) -> str:
         self._raise_if_cancelled()
+        logger.info("Sending request to local llama.cpp: base_url=%s max_tokens=%s", self.base_url, max_tokens)
         try:
             response = httpx.post(
                 f"{self.base_url}/v1/chat/completions",
@@ -237,13 +250,20 @@ class LlamaCppHttpAnalyzer:
             )
             response.raise_for_status()
         except httpx.ConnectError as exc:
+            logger.warning("Local llama.cpp connection failed: base_url=%s", self.base_url)
             raise RuntimeError(
                 "Локальная Qwen недоступна. Перезапустите приложение через scripts\\run.ps1 "
                 "или scripts\\run_local.ps1."
             ) from exc
         except httpx.TimeoutException as exc:
+            logger.warning("Local llama.cpp timed out: base_url=%s timeout=%s", self.base_url, self.timeout_seconds)
             raise RuntimeError("Локальная Qwen не ответила вовремя. Попробуйте запустить поиск ещё раз.") from exc
         except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Local llama.cpp rejected request: base_url=%s status=%s",
+                self.base_url,
+                exc.response.status_code,
+            )
             raise RuntimeError(f"Локальная Qwen отклонила запрос: HTTP {exc.response.status_code}") from exc
         payload = response.json()
         self._raise_if_cancelled()

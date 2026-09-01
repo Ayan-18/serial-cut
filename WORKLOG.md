@@ -1,5 +1,22 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - Runtime Logging Pass
+
+Completed prompt point 2:
+
+- Added `app/infrastructure/logging_config.py` with centralized console logging and rotating
+  `data/logs/serialcuts.log` output.
+- Added `SERIALCUTS_LOG_LEVEL` with validation in settings and `.env.example`.
+- Wired logging into FastAPI startup before database migration checks.
+- Added lifecycle and failure logs around the background queue, job stages, FFmpeg/ffprobe,
+  faster-whisper, local llama.cpp requests, render fallback and cover generation.
+- Kept existing CLI `print(...)` output in benchmark and system-check commands only.
+- Added `tests/test_logging_config.py` for UTF-8 file output and idempotent handler setup.
+
+Verification: `.\.venv\Scripts\python.exe -m pytest tests\test_logging_config.py
+tests\test_api_errors.py tests\test_queue.py` passed (`9 passed`, one upstream Starlette
+deprecation warning). `git diff --check` passed with line-ending warnings only.
+
 ## 2026-09-01 - API Error Boundary Pass
 
 Completed prompt point 1:

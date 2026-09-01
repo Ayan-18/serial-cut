@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -9,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.processes import ProcessCancelledError
 from app.models.entities import TranscriptSegment, WordTimestamp
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -81,13 +85,33 @@ class FasterWhisperTranscriber:
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         last_error: RuntimeError | None = None
         for device, compute_type in self._attempts():
+            logger.info(
+                "Starting faster-whisper transcription: model=%s device=%s compute_type=%s audio=%s",
+                self.model_name,
+                device,
+                compute_type,
+                audio_path,
+            )
             try:
-                return self._transcribe_with(device, compute_type, audio_path)
+                result = self._transcribe_with(device, compute_type, audio_path)
+                logger.info(
+                    "faster-whisper transcription completed: language=%s segments=%s",
+                    result.language,
+                    len(result.segments),
+                )
+                return result
             except ProcessCancelledError:
                 # Cancellation is not a model/device failure: never restart the
                 # full transcription on the next CUDA/CPU fallback.
+                logger.info("faster-whisper transcription cancelled: audio=%s", audio_path)
                 raise
             except RuntimeError as exc:
+                logger.warning(
+                    "faster-whisper attempt failed: device=%s compute_type=%s error=%s",
+                    device,
+                    compute_type,
+                    exc,
+                )
                 last_error = exc
         raise RuntimeError("Не удалось запустить faster-whisper на CUDA или CPU") from last_error
 

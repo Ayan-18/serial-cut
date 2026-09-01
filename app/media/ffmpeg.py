@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Callable
 
 from app.infrastructure.atomic import replace_atomically, temp_sibling
 from app.infrastructure.processes import ProcessResult, run_process
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_extract_audio_args(
@@ -67,6 +71,7 @@ def extract_audio(
     timeout_seconds: int = 1800,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> Path:
+    logger.info("Extracting episode audio to WAV: media=%s output=%s stream=%s", media_path, output_path, audio_stream_index)
     temp_path = temp_sibling(output_path).with_suffix(".wav")
     temp_path.parent.mkdir(parents=True, exist_ok=True)
     result = runner(
@@ -75,8 +80,10 @@ def extract_audio(
     )
     if result.returncode != 0:
         temp_path.unlink(missing_ok=True)
+        logger.warning("FFmpeg audio extraction failed: returncode=%s media=%s", result.returncode, media_path)
         raise RuntimeError(result.stderr.strip() or "FFmpeg не смог извлечь аудио")
     replace_atomically(temp_path, output_path)
+    logger.info("Audio extraction completed: output=%s", output_path)
     return output_path
 
 
@@ -90,6 +97,7 @@ def create_proxy(
     timeout_seconds: int = 1800,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> Path:
+    logger.info("Creating proxy video: media=%s output=%s width=%s crf=%s", media_path, output_path, width, crf)
     temp_path = temp_sibling(output_path).with_suffix(".mp4")
     temp_path.parent.mkdir(parents=True, exist_ok=True)
     result = runner(
@@ -98,6 +106,8 @@ def create_proxy(
     )
     if result.returncode != 0:
         temp_path.unlink(missing_ok=True)
+        logger.warning("FFmpeg proxy creation failed: returncode=%s media=%s", result.returncode, media_path)
         raise RuntimeError(result.stderr.strip() or "FFmpeg не смог создать proxy")
     replace_atomically(temp_path, output_path)
+    logger.info("Proxy video created: output=%s", output_path)
     return output_path

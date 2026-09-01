@@ -98,7 +98,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
 ```
 
 Откройте `http://127.0.0.1:8090`. Модель Qwen запускается скрыто только на `127.0.0.1` и
-останавливается вместе с приложением. Логи находятся в `data/logs`. Вариант без моделей для
+останавливается вместе с приложением. Логи пишутся в `data/logs/serialcuts.log` с ротацией;
+уровень управляется через `SERIALCUTS_LOG_LEVEL`. Вариант без моделей для
 быстрой проверки интерфейса остаётся доступен через адаптеры `stub` и `scripts/run.ps1`.
 
 Можно также дважды щёлкнуть `Start SerialCuts.cmd`. Скрипт `scripts/create_shortcut.ps1` создаёт

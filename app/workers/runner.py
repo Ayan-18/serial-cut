@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 import os
 import socket
 from time import monotonic
@@ -22,6 +23,9 @@ from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessCancelledError, run_process_cancellable
 from app.models.entities import Job, JobStage
 from app.workers.queue import claim_next_queued_job, heartbeat_job_lease, recover_interrupted_jobs
+
+
+logger = logging.getLogger(__name__)
 
 
 Stage2Func = Callable[..., object]
@@ -47,12 +51,14 @@ def run_next_job(
     stage3_func: Stage3Func | None = None,
 ) -> WorkerRunResult:
     if not _RUNNER_LOCK.acquire(blocking=False):
+        logger.info("Worker run skipped: another job is already running")
         return WorkerRunResult(False, None, "busy", "Обработчик уже выполняет другую задачу")
     try:
         try:
             with processing_guard():
                 return _run_next_job_unlocked(session, settings, stage2_func, stage3_func)
         except ProcessingBusyError as exc:
+            logger.info("Worker run skipped by processing guard: %s", exc)
             return WorkerRunResult(False, None, "busy", str(exc))
     finally:
         _RUNNER_LOCK.release()
@@ -65,12 +71,15 @@ def _run_next_job_unlocked(
     stage3_func: Stage3Func | None,
 ) -> WorkerRunResult:
     if get_queue_state(session) == "paused":
+        logger.info("Worker run skipped: queue is paused")
         return WorkerRunResult(False, None, "paused", "Очередь на паузе")
     recover_interrupted_jobs(session)
     session.commit()
     job = claim_next_queued_job(session, _WORKER_ID)
     if job is None:
+        logger.debug("Worker run skipped: no queued jobs")
         return WorkerRunResult(False, None, "idle", "Нет задач в очереди")
+    logger.info("Claimed job: id=%s kind=%s episode_id=%s", job.id, job.kind, job.episode_id)
     heartbeat = _LeaseHeartbeat(session.get_bind(), job.id, _WORKER_ID)
     heartbeat.start()
     if job.episode_id is None and job.kind != JobKind.RENDER_STORY_ARC.value:
@@ -226,7 +235,9 @@ def _run_next_job_unlocked(
         )
         elapsed = monotonic() - started
         if not completed:
+            logger.warning("Worker lost job lease before completion: id=%s", job.id)
             return WorkerRunResult(False, job.id, "lost_lease", "Lease задачи уже перешёл другому worker")
+        logger.info("Job completed: id=%s kind=%s elapsed=%.1fs", job.id, job.kind, elapsed)
         return WorkerRunResult(True, job.id, job.status, f"Задача завершена за {elapsed:.1f} сек")
     except CancelledError as exc:
         heartbeat.stop()
@@ -237,6 +248,7 @@ def _run_next_job_unlocked(
             str(exc),
             "Задача остановлена",
         )
+        logger.info("Job paused after cancellation: id=%s error=%s", job.id, exc)
         return WorkerRunResult(True, job.id, JobStatus.PAUSED.value, str(exc))
     except Exception as exc:
         heartbeat.stop()
@@ -247,6 +259,7 @@ def _run_next_job_unlocked(
             str(exc),
             "Ошибка выполнения",
         )
+        logger.exception("Job failed: id=%s kind=%s", job.id, job.kind)
         return WorkerRunResult(True, job.id, JobStatus.FAILED.value, str(exc))
     finally:
         heartbeat.stop()
@@ -302,13 +315,16 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
     job.current_stage = name
     job.progress_message = _stage_start_message(name)
     session.commit()
+    logger.info("Stage started: job_id=%s stage=%s", job_id, name)
     try:
         fn()
     except ProcessCancelledError as exc:
         _record_stage_terminal(session, job_id, name, JobStatus.PAUSED.value, str(exc))
+        logger.info("Stage paused after cancellation: job_id=%s stage=%s error=%s", job_id, name, exc)
         raise CancelledError(str(exc)) from exc
     except Exception as exc:
         _record_stage_terminal(session, job_id, name, JobStatus.FAILED.value, str(exc))
+        logger.exception("Stage failed: job_id=%s stage=%s", job_id, name)
         raise
     else:
         stage.status = JobStatus.COMPLETED.value
@@ -317,6 +333,7 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
         job.progress = progress
         job.progress_message = _stage_complete_message(name)
         session.commit()
+        logger.info("Stage completed: job_id=%s stage=%s", job_id, name)
 
 
 def _get_or_create_stage(session: Session, job: Job, name: str) -> JobStage:
@@ -366,8 +383,10 @@ class _LeaseHeartbeat:
             with self._factory() as lease_session:
                 try:
                     if not heartbeat_job_lease(lease_session, self._job_id, self._worker_id):
+                        logger.warning("Job heartbeat lost lease: job_id=%s", self._job_id)
                         return
                 except Exception:
+                    logger.exception("Job heartbeat failed: job_id=%s", self._job_id)
                     lease_session.rollback()
 
 

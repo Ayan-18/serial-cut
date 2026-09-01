@@ -11,7 +11,9 @@ from app.api.loopback import LoopbackOnlyMiddleware
 from app.api.routes import router
 from app.api.queue_routes import router as queue_router
 from app.api.search_routes import router as search_router
+from app.infrastructure.config import get_settings
 from app.infrastructure.database import engine, require_migrated_database
+from app.infrastructure.logging_config import configure_logging
 from app.workers.background import background_queue
 
 
@@ -25,6 +27,7 @@ async def lifespan(_: FastAPI):
 
 
 def create_app() -> FastAPI:
+    configure_logging(get_settings())
     require_migrated_database(engine)
     app = FastAPI(title="SerialCuts", version="0.1.0", lifespan=lifespan)
     register_exception_handlers(app)

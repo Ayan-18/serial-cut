@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
 from app.infrastructure.atomic import replace_atomically, temp_sibling, write_text_atomically
 from app.infrastructure.processes import ProcessResult, run_process
+
+
+logger = logging.getLogger(__name__)
 
 
 CropMode = Literal["auto-follow", "center-crop", "blurred-background"]
@@ -194,6 +198,16 @@ def render_clip(
     runner: Callable[[list[str], int], ProcessResult] = run_process,
     audio_stream_index: int | None = None,
 ) -> RenderedArtifacts:
+    logger.info(
+        "Rendering clip: input=%s slug=%s start=%.3f end=%.3f preset=%s nvenc=%s subtitles=%s",
+        input_path,
+        slug,
+        start_time,
+        end_time,
+        preset_name,
+        use_nvenc,
+        subtitle_text is not None,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     subtitle_path = output_dir / f"{slug}.ass" if subtitle_text else None
     if subtitle_path is not None:
@@ -203,6 +217,7 @@ def render_clip(
     preset = RENDER_PRESETS.get(preset_name, RENDER_PRESETS["youtube_shorts"])
     loudnorm_filter = "loudnorm=I=-16:TP=-1.5:LRA=11"
     if loudnorm_two_pass:
+        logger.info("Running loudnorm analysis pass: slug=%s", slug)
         analysis = runner(
             build_loudnorm_analysis_args(
                 ffmpeg_path,
@@ -215,6 +230,8 @@ def render_clip(
         )
         if analysis.returncode == 0:
             loudnorm_filter = loudnorm_second_pass_filter(parse_loudnorm_stats(analysis.stderr))
+        else:
+            logger.warning("loudnorm analysis failed, using single-pass loudnorm: slug=%s", slug)
     def run_video_render(enable_nvenc: bool) -> ProcessResult:
         return runner(
             build_render_args(
@@ -240,9 +257,11 @@ def render_clip(
     result = run_video_render(use_nvenc)
     if result.returncode != 0 and use_nvenc:
         temp_output.unlink(missing_ok=True)
+        logger.warning("NVENC render failed, retrying with libx264: slug=%s returncode=%s", slug, result.returncode)
         result = run_video_render(False)
     if result.returncode != 0:
         temp_output.unlink(missing_ok=True)
+        logger.warning("FFmpeg render failed: slug=%s returncode=%s", slug, result.returncode)
         raise RuntimeError(result.stderr.strip() or "FFmpeg не смог отрендерить клип")
     if temp_output.exists():
         replace_atomically(temp_output, output_path)
@@ -254,9 +273,11 @@ def render_clip(
         replace_atomically(temp_cover, cover_path)
     else:
         temp_cover.unlink(missing_ok=True)
+        logger.warning("Cover generation failed: slug=%s returncode=%s", slug, cover_result.returncode)
         cover_path = None
     metadata_path = output_dir / f"{slug}.json"
     write_text_atomically(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
+    logger.info("Clip rendered: output=%s metadata=%s cover=%s", output_path, metadata_path, cover_path)
     return RenderedArtifacts(output_path, metadata_path, subtitle_path, cover_path)
 
 
@@ -296,6 +317,7 @@ def select_cover_timestamp(input_path: Path, start_time: float, end_time: float)
             capture.release()
         return best[1] if best is not None else fallback
     except Exception:
+        logger.debug("Cover timestamp face/sharpness selection failed, using fallback", exc_info=True)
         return fallback
 
 
@@ -387,5 +409,8 @@ def detect_nvenc(ffmpeg_path: str, runner: Callable[[list[str], int], ProcessRes
     try:
         result = runner([ffmpeg_path, "-hide_banner", "-encoders"], 30)
     except Exception:
+        logger.debug("NVENC detection failed", exc_info=True)
         return False
-    return result.returncode == 0 and "h264_nvenc" in (result.stdout + result.stderr)
+    available = result.returncode == 0 and "h264_nvenc" in (result.stdout + result.stderr)
+    logger.info("NVENC detection completed: available=%s", available)
+    return available

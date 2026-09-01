@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Callable
 from app.domain.enums import EpisodeStage, TrackKind
 from app.infrastructure.processes import ProcessResult, run_process
 from app.models.entities import Episode, MediaTrack
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,11 +43,18 @@ def probe_media(
     timeout_seconds: int = 60,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> ProbeSummary:
+    logger.info("Probing media with ffprobe: media=%s", media_path)
     result = runner(build_ffprobe_args(ffprobe_path, media_path), timeout_seconds)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "ffprobe завершился с ошибкой"
+        logger.warning("ffprobe failed: returncode=%s media=%s", result.returncode, media_path)
         raise RuntimeError(detail)
-    raw = json.loads(result.stdout)
+    try:
+        raw = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        logger.exception("ffprobe returned invalid JSON: media=%s", media_path)
+        raise
+    logger.info("ffprobe completed: media=%s", media_path)
     return summarize_probe(raw)
 
 

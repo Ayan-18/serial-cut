@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     app_host: str = "127.0.0.1"
     app_port: int = 8090
+    log_level: str = "INFO"
     database_url: str = "sqlite:///./data/serialcuts.db"
     cache_dir: Path = Path("./data/cache")
     output_dir: Path = Path("./data/output")
@@ -79,6 +80,14 @@ class Settings(BaseSettings):
     @classmethod
     def validate_app_host(cls, value: str) -> str:
         return validate_loopback_host(value)
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("log_level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return normalized
 
 
 def validate_loopback_http_url(value: str) -> str:
