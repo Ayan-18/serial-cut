@@ -1548,3 +1548,7 @@ button.danger {
 .batch-bar-actions button { min-height: 32px; }
 .candidate-pick { display: flex; padding: 4px 0 0 4px; }
 .candidate.batch-selected { outline: 2px solid #215f9a; outline-offset: -2px; }
+
+.character-voice { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+.character-voice span { color: #667085; font-size: 11px; }
+.character-voice select { padding: 6px 8px; }

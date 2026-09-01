@@ -107,3 +107,7 @@ Write-Host ""
 Write-Host "Готово. Дальше:" -ForegroundColor Cyan
 Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1"
 Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1"
+Write-Host ""
+Write-Host "Живой голос озвучки StoryArc (Silero, опционально):" -ForegroundColor Cyan
+Write-Host "  .\.venv\Scripts\python.exe -m pip install -e `".[tts]`""
+Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_tts_model.ps1"

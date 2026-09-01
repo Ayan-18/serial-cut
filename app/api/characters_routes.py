@@ -1,8 +1,39 @@
 from __future__ import annotations
 
 from app.api._shared import *  # noqa: F403
+from app.media.tts import SILERO_VOICE_IDS, voice_catalog
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/tts/voices", response_model=TtsVoiceCatalogRead)
+def list_tts_voices(session: Session = Depends(get_session)):
+    settings = effective_settings(session, get_settings())
+    return TtsVoiceCatalogRead(
+        adapter=settings.tts_adapter,
+        voices=[
+            {"id": voice.id, "label": voice.label, "gender": voice.gender}
+            for voice in voice_catalog(settings.tts_adapter)
+        ],
+    )
+
+
+@router.put("/characters/{character_id}/narration-voice", response_model=CharacterRead)
+def set_character_narration_voice(
+    character_id: int,
+    payload: NarrationVoiceUpdate,
+    session: Session = Depends(get_session),
+):
+    character = session.get(Character, character_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    voice = (payload.narration_voice or "").strip() or None
+    if voice is not None and voice not in SILERO_VOICE_IDS:
+        raise HTTPException(status_code=400, detail="Неизвестный голос озвучки")
+    character.narration_voice = voice
+    session.commit()
+    session.refresh(character)
+    return _character_read(character)
 
 @router.get("/seasons/{season_id}/characters", response_model=list[CharacterRead])
 def list_characters(season_id: int, session: Session = Depends(get_session)):

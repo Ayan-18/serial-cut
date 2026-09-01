@@ -295,6 +295,8 @@ class Character(TimestampMixin, Base):
     photos_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     voice_profile_json: Mapped[dict | None] = mapped_column(JSON)
     color: Mapped[str] = mapped_column(String(16), default="#b9ddff", nullable=False)
+    # Silero speaker id for first-person StoryArc narration; NULL = auto by gender.
+    narration_voice: Mapped[str | None] = mapped_column(String(32))
 
     season: Mapped[Season] = relationship(back_populates="characters")
 

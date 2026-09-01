@@ -26,6 +26,12 @@ class ModelDiagnostics:
     llm_url: str
     llm_model_hint: str
     llm_latency_ms: int | None
+    tts_adapter: str
+    tts_ready: bool
+    tts_model_path: str
+    tts_model_exists: bool
+    tts_torch_installed: bool
+    tts_narrator_voice: str
     face_ready: bool
     face_model: str
     face_detector_path: str
@@ -67,6 +73,30 @@ def check_models(settings: Settings) -> ModelDiagnostics:
         if not llm_ready:
             recommendations.append("Запустите llama.cpp server на адресе из настроек LLM")
 
+    tts_torch_installed = find_spec("torch") is not None
+    tts_model_path = Path(settings.tts_model_path)
+    tts_model_exists = tts_model_path.exists()
+    if settings.tts_adapter == "windows-sapi":
+        tts_ready = True
+        details.append("Озвучка StoryArc: голос Windows (SAPI)")
+    elif settings.tts_adapter == "stub":
+        tts_ready = True
+        details.append("Озвучка StoryArc: тестовый режим")
+    else:
+        tts_ready = tts_torch_installed and tts_model_exists
+        if tts_ready:
+            details.append(f"Озвучка StoryArc: Silero готов ({settings.tts_narrator_voice})")
+        else:
+            details.append("Озвучка StoryArc: Silero не готов")
+            if not tts_torch_installed:
+                recommendations.append(
+                    "Установите torch для Silero: .\\.venv\\Scripts\\python.exe -m pip install -e \".[tts]\""
+                )
+            if not tts_model_exists:
+                recommendations.append(
+                    "Скачайте модель Silero в разделе «Локальные модели» или scripts\\install_tts_model.ps1"
+                )
+
     face_detector_exists = settings.face_detector_model.exists()
     face_recognizer_exists = settings.face_recognizer_model.exists()
     face_ready = face_detector_exists and face_recognizer_exists
@@ -93,6 +123,12 @@ def check_models(settings: Settings) -> ModelDiagnostics:
         llm_url=settings.llm_base_url,
         llm_model_hint=settings.llm_model_hint,
         llm_latency_ms=llm_latency_ms,
+        tts_adapter=settings.tts_adapter,
+        tts_ready=tts_ready,
+        tts_model_path=str(tts_model_path),
+        tts_model_exists=tts_model_exists,
+        tts_torch_installed=tts_torch_installed,
+        tts_narrator_voice=settings.tts_narrator_voice,
         face_ready=face_ready,
         face_model="YuNet + SFace" if face_ready else "Haar + DCT",
         face_detector_path=str(settings.face_detector_model),

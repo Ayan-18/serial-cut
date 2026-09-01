@@ -200,6 +200,8 @@ def _publishing_plan_read(plan: PublishingPlan) -> PublishingPlanRead:
 
 
 def _character_read(character: Character) -> CharacterRead:
+    from app.application.narration_voice import auto_voice_for_character
+
     photos = list(character.photos_json or [])
     return CharacterRead(
         id=character.id,
@@ -211,6 +213,8 @@ def _character_read(character: Character) -> CharacterRead:
         photo_count=len(photos),
         photo_urls=[f"/api/characters/{character.id}/photos/{index}" for index in range(len(photos))],
         voice_sample_count=int((character.voice_profile_json or {}).get("sample_count", 0)),
+        narration_voice=character.narration_voice,
+        narration_voice_auto=auto_voice_for_character(character, get_settings().tts_narrator_voice),
     )
 
 

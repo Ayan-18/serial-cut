@@ -51,6 +51,8 @@ class RuntimeSettingsRead(BaseModel):
     subtitle_safe_zone: str
     subtitle_show_speaker_names: bool
     export_filename_template: str
+    tts_adapter: str
+    tts_narrator_voice: str
     asr_adapter: str
     llm_adapter: str
     llm_base_url: str
@@ -506,6 +508,23 @@ class CharacterRead(BaseModel):
     photo_count: int
     photo_urls: list[str]
     voice_sample_count: int
+    narration_voice: str | None = None
+    narration_voice_auto: str | None = None
+
+
+class NarrationVoiceUpdate(BaseModel):
+    narration_voice: str | None = Field(default=None, max_length=32)
+
+
+class TtsVoiceRead(BaseModel):
+    id: str
+    label: str
+    gender: str
+
+
+class TtsVoiceCatalogRead(BaseModel):
+    adapter: str
+    voices: list[TtsVoiceRead]
 
 
 class SpeakerIdentityUpdate(BaseModel):
@@ -653,6 +672,12 @@ class ModelDiagnosticsRead(BaseModel):
     llm_url: str
     llm_model_hint: str
     llm_latency_ms: int | None
+    tts_adapter: str
+    tts_ready: bool
+    tts_model_path: str
+    tts_model_exists: bool
+    tts_torch_installed: bool
+    tts_narrator_voice: str
     face_ready: bool
     face_model: str
     face_detector_path: str

@@ -32,9 +32,20 @@ class RuntimeSettings(BaseModel):
     subtitle_safe_zone: Literal["standard", "shorts", "reels", "high"]
     subtitle_show_speaker_names: bool
     export_filename_template: str = Field(min_length=1, max_length=160)
+    tts_adapter: Literal["windows-sapi", "silero", "stub"]
+    tts_narrator_voice: str = Field(min_length=1, max_length=32)
     asr_adapter: Literal["stub", "faster-whisper"]
     llm_adapter: Literal["stub", "llama-cpp-http"]
     llm_base_url: str
+
+    @field_validator("tts_narrator_voice")
+    @classmethod
+    def known_narrator_voice(cls, value: str) -> str:
+        from app.media.tts import SILERO_VOICE_IDS
+
+        if value not in SILERO_VOICE_IDS:
+            raise ValueError(f"tts_narrator_voice must be one of {sorted(SILERO_VOICE_IDS)}")
+        return value
 
     @field_validator("max_clip_seconds")
     @classmethod
@@ -69,6 +80,8 @@ def runtime_settings_from_env(settings: Settings) -> RuntimeSettings:
         subtitle_safe_zone=settings.subtitle_safe_zone,
         subtitle_show_speaker_names=settings.subtitle_show_speaker_names,
         export_filename_template=settings.export_filename_template,
+        tts_adapter=settings.tts_adapter,
+        tts_narrator_voice=settings.tts_narrator_voice,
         asr_adapter=settings.asr_adapter,
         llm_adapter=settings.llm_adapter,
         llm_base_url=settings.llm_base_url,
@@ -123,5 +136,7 @@ def effective_settings(session: Session, env_settings: Settings) -> Settings:
             "subtitle_safe_zone": runtime.subtitle_safe_zone,
             "subtitle_show_speaker_names": runtime.subtitle_show_speaker_names,
             "export_filename_template": runtime.export_filename_template,
+            "tts_adapter": runtime.tts_adapter,
+            "tts_narrator_voice": runtime.tts_narrator_voice,
         }
     )

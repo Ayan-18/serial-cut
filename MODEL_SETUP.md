@@ -95,6 +95,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
 Для диагностики LLM отдельно используйте `scripts/run_llm.ps1`. После первого скачивания интернет
 для распознавания, анализа и рендера не нужен.
 
+## TTS (озвучка StoryArc)
+
+По умолчанию `SERIALCUTS_TTS_ADAPTER=silero` — нейросетевой русский голос Silero v4_ru, работает на
+CPU и не занимает VRAM. Нужен опциональный пакет `torch` и модель ~60 МБ:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[tts]"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_tts_model.ps1
+```
+
+Модель качается из `https://models.silero.ai/models/tts/ru/v4_ru.pt` в `data/models/tts/` и
+проверяется попыткой загрузки через `torch.package`. Голоса: `eugene`, `aidar` (муж.), `baya`,
+`kseniya`, `xenia` (жен.). Голос диктора задаётся `SERIALCUTS_TTS_NARRATOR_VOICE`, голос конкретного
+героя — в карточке персонажа (или авто по полу). Альтернативы: `windows-sapi` (голос Windows, нужен
+русский голос в системе) и `stub`. Это синтетический голос, не клонирование актёра.
+
 ## VLM
 
 Опционально:

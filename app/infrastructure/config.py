@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     llm_adapter: Literal["stub", "llama-cpp-http"] = "stub"
     llm_base_url: str = "http://127.0.0.1:8081"
     llm_model_hint: str = "Qwen3-8B-Instruct-GGUF-Q4"
+    tts_adapter: Literal["windows-sapi", "silero", "stub"] = "silero"
+    tts_model_path: str = "./data/models/tts/v4_ru.pt"
+    tts_sample_rate: int = 48000
+    tts_narrator_voice: str = "eugene"
     quality_profile: Literal["fast", "balanced", "quality"] = "balanced"
     min_clip_seconds: int = 35
     max_clip_seconds: int = 59

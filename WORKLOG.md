@@ -1,5 +1,36 @@
 # SerialCuts Worklog
 
+## 2026-09-02 - Neural StoryArc Narration (Silero)
+
+Replaced the flat Windows SAPI narration with a pluggable TTS layer so the hero's voiceover can
+sound alive. Chosen after review of the main computer's specs (Ryzen 9 3950X, 64 GB, GTX 1660
+Super — CPU-strong, 6 GB VRAM): a CPU neural engine, not GPU cloning.
+
+- `app/media/tts.py` — `TtsSynthesizer` protocol with `SileroSynthesizer` (Silero v4_ru, CPU,
+  model cached per class), `WindowsSapiSynthesizer` (the old System.Speech path), `StubTtsSynthesizer`
+  (silent WAV for tests). `build_synthesizer(settings)` picks by `tts_adapter`.
+- `app/application/narration_voice.py` — `resolve_narration_voice()`: explicit `Character.narration_voice`
+  → auto by gender (name endings + description hints) → configured narrator voice. Migration `0015`
+  adds `characters.narration_voice`.
+- `narration.py` refactored to synthesize each line through the injected synthesizer and record the
+  chosen `voice_id` in `plan_json`; `story_arc_render.py` is unchanged (reads the WAV path).
+- Config: `tts_adapter` (`silero` default | `windows-sapi` | `stub`), `tts_model_path`,
+  `tts_sample_rate`, `tts_narrator_voice`; the first two are UI-editable via `RuntimeSettings`.
+- `torch` is an opt-in extra (`pip install -e ".[tts]"`, `torch>=2.2,<3` — pin the resolved
+  version after first install). Silero adapter raises a clear error when torch or the model is
+  absent; `windows-sapi` and `stub` need nothing.
+- API: `GET /api/tts/voices`, `PUT /api/characters/{id}/narration-voice`; `model-catalog` gains a
+  `tts` entry (in-app download of `v4_ru.pt` ~60 MB from models.silero.ai, verified by torch.package
+  load); `model-diagnostics` reports torch/model/voice; `scripts/install_tts_model.ps1`.
+- Frontend: Settings → "Озвучка StoryArc" (engine + narrator voice); character card → "Голос
+  озвучки" select (auto shows the guessed voice); SystemPanel shows the TTS row.
+
+Verification: `ruff` + `mypy` (100 files) clean; `pytest` 158 passed / 0 skipped (with FFmpeg);
+`npm run build` + `npm run test` (10) pass; `alembic` round-trip clean; manual smoke of
+`/api/tts/voices`, `/api/model-diagnostics`, the settings section and model catalog in a browser.
+The Silero model itself was NOT downloaded on this laptop (dev machine) — install it on the main
+computer with the extra + `scripts/install_tts_model.ps1`.
+
 ## 2026-09-02 - Workflow Feature Batch (health, history, batch ops, keyframes, models, docs)
 
 Implemented the outstanding feature/gap list from the project review, in eight commits:
@@ -653,6 +684,9 @@ candidate operations, in-UI log viewer, generated API docs, bootstrap script.
 
 Still open:
 
+- Install Silero on the main computer: `pip install -e ".[tts]"` + `scripts/install_tts_model.ps1`;
+  pin the resolved `torch` version in `pyproject.toml`.
+- Optional: number-to-words normalization for Russian digits before TTS.
 - Recreate the local `.venv` on Python 3.11 and re-pin dev extras that are only in `dependencies`.
 - Split `useSerialCutsController.ts` (750+ lines) into per-domain hooks.
 - Add eslint + `tsc --noEmit` to frontend CI.

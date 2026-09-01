@@ -266,6 +266,15 @@ export function useSerialCutsController() {
     await api<Character>(`/api/characters/${characterId}/photos/${photoIndex}`, { method: "DELETE" });
     await loadEpisodeDetails(storyContext.episode_id); setMessage("Локальная копия фотографии удалена");
   }
+
+  async function setCharacterNarrationVoice(characterId: number, voice: string | null) {
+    if (!storyContext) return;
+    await api<Character>(`/api/characters/${characterId}/narration-voice`, {
+      method: "PUT", headers: jsonHeaders, body: JSON.stringify({ narration_voice: voice }),
+    });
+    await loadEpisodeDetails(storyContext.episode_id);
+    setMessage(voice ? "Голос озвучки персонажа закреплён" : "Голос озвучки — авто по полу персонажа");
+  }
   
   async function assignSpeaker(sourceLabel: string, characterId: number) {
     if (!selectedEpisodeId || !characterId) return;
@@ -741,6 +750,7 @@ export function useSerialCutsController() {
     readCharacterPhotos,
     addCharacterPhotos,
     deleteCharacterPhoto,
+    setCharacterNarrationVoice,
     identifyCharacters,
     openCandidate,
     reviewCandidate,

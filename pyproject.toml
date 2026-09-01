@@ -33,6 +33,11 @@ dev = [
   "pytest==9.0.3",
   "pytest-cov==6.2.1",
 ]
+# Local neural narration voice (Silero v4_ru). CPU-only is enough.
+# Pin the exact resolved torch version after first install on the target machine.
+tts = [
+  "torch>=2.2,<3",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

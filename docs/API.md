@@ -39,6 +39,7 @@
 | --- | --- | --- |
 | `DELETE` | `/api/characters/{character_id}` | Delete Character |
 | `POST` | `/api/characters/{character_id}/merge` | Merge Character Endpoint |
+| `PUT` | `/api/characters/{character_id}/narration-voice` | Set Character Narration Voice |
 | `POST` | `/api/characters/{character_id}/photos` | Add Character Reference Photo |
 | `GET` | `/api/characters/{character_id}/photos/{photo_index}` | Character Photo |
 | `DELETE` | `/api/characters/{character_id}/photos/{photo_index}` | Delete Character Photo |
@@ -186,6 +187,12 @@
 | Метод | Путь | Описание |
 | --- | --- | --- |
 | `GET` | `/api/system-check` | System Check |
+
+## tts
+
+| Метод | Путь | Описание |
+| --- | --- | --- |
+| `GET` | `/api/tts/voices` | List Tts Voices |
 
 ## version
 

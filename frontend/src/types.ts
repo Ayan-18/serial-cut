@@ -9,8 +9,11 @@ export type RuntimeSettings = {
   auto_score_threshold: number; max_clips_per_episode: number; render_preset: "youtube_shorts" | "instagram_reels";
   render_use_nvenc: boolean; render_loudnorm_two_pass: boolean; subtitle_font_name: string; subtitle_font_size: number;
   subtitle_safe_zone: "standard" | "shorts" | "reels" | "high"; subtitle_show_speaker_names: boolean; export_filename_template: string;
+  tts_adapter: "windows-sapi" | "silero" | "stub"; tts_narrator_voice: string;
   asr_adapter: "stub" | "faster-whisper"; llm_adapter: "stub" | "llama-cpp-http"; llm_base_url: string;
 };
+export type TtsVoice = { id: string; label: string; gender: string };
+export type TtsVoiceCatalog = { adapter: string; voices: TtsVoice[] };
 export type Candidate = {
   id: number; episode_id: number; start_time: number; end_time: number; title: string; description: string;
   moment_type: string; score: number; scores_json: Record<string, number>; rationale: string; problems_json: string[];
@@ -21,7 +24,7 @@ export type Candidate = {
 export type CandidateEdit = { start: string; end: string; crop: Candidate["crop_mode"]; offset: number; scale: number };
 export type Subtitle = { id?: number | null; start_time: number; end_time: number; text: string; speaker_label?: string | null };
 export type ExportItem = { id: number; candidate_id: number; output_path: string; cover_path: string | null; include_subtitles: boolean; preset_name: string; status: string; version: number; render_fingerprint: string | null };
-export type ModelDiagnostics = { asr_adapter: string; asr_ready: boolean; asr_model: string; asr_device: string; asr_compute_type: string; asr_package_installed: boolean; asr_local_model_path: string | null; asr_local_model_exists: boolean; llm_adapter: string; llm_ready: boolean; llm_url: string; llm_model_hint: string; llm_latency_ms: number | null; face_ready: boolean; face_model: string; face_detector_path: string; face_recognizer_path: string; face_detector_exists: boolean; face_recognizer_exists: boolean; details: string[]; recommendations: string[] };
+export type ModelDiagnostics = { asr_adapter: string; asr_ready: boolean; asr_model: string; asr_device: string; asr_compute_type: string; asr_package_installed: boolean; asr_local_model_path: string | null; asr_local_model_exists: boolean; llm_adapter: string; llm_ready: boolean; llm_url: string; llm_model_hint: string; llm_latency_ms: number | null; tts_adapter: string; tts_ready: boolean; tts_model_path: string; tts_model_exists: boolean; tts_torch_installed: boolean; tts_narrator_voice: string; face_ready: boolean; face_model: string; face_detector_path: string; face_recognizer_path: string; face_detector_exists: boolean; face_recognizer_exists: boolean; details: string[]; recommendations: string[] };
 export type CacheInfo = { cache_dir: string; files: number; bytes: number };
 export type CandidateQuality = { candidate_id: number; duration_seconds: number; final_score: number; boundary_score: number; standalone_score: number; payoff_score: number; audio_score: number; visual_score: number; problems: string[]; recommendations: string[] };
 export type EpisodeQuality = { episode_id: number; stage: string; transcript_segments: number; words: number; scenes: number; candidates: number; approved: number; rejected: number; rendered: number; average_score: number; problem_candidates: number; top_problems: string[] };
@@ -37,7 +40,7 @@ export type SearchResult = { kind: string; episode_id: number; episode_file_name
 export type VideoScript = { id: number; season_id: number; story_arc_id: number | null; title: string; prompt: string; style: string; script_text: string; structure_json: Record<string, unknown>; status: string };
 export type PublishingPlan = { id: number; season_id: number; story_arc_id: number | null; story_arc_export_id: number | null; platform: string; title: string; description: string; hashtags: string[]; scheduled_for: string | null; status: string };
 export type ProjectDiagnostics = { checks: CheckItem[]; recommendations: string[]; counts: Record<string, number> };
-export type Character = { id: number; season_id: number; name: string; description: string; aliases: string[]; color: string; photo_count: number; photo_urls: string[]; voice_sample_count: number };
+export type Character = { id: number; season_id: number; name: string; description: string; aliases: string[]; color: string; photo_count: number; photo_urls: string[]; voice_sample_count: number; narration_voice: string | null; narration_voice_auto: string | null };
 export type SpeakerIdentity = { source_label: string; character_id: number; character_name: string; confidence: number | null; method: string };
 export type EpisodeOutline = { summary: string; main_events: string[]; conflicts: string[]; time_ranges: { start_time: number; end_time: number; summary: string }[] };
 export type Health = { ok: boolean; service: string; version: string; commit: string | null; boot_id: string; token_fingerprint: string; started_at: string; uptime_seconds: number; db_revision: string | null; queue: { state: string; queued: number; running: number; failed: number } };

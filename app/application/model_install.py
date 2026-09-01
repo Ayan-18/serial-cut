@@ -21,6 +21,13 @@ FACE_MODELS = (
     ),
 )
 
+# Silero has no stable per-file SHA publication, so this is verified by attempting
+# a torch.package load after download instead of a pinned hash.
+TTS_MODEL_URL = "https://models.silero.ai/models/tts/ru/v4_ru.pt"
+TTS_MODEL_NAME = "v4_ru.pt"
+TTS_MODEL_MIN_BYTES = 20 * 1024 * 1024
+TTS_MODEL_MAX_BYTES = 400 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ModelCatalogEntry:
@@ -96,8 +103,29 @@ def _llm_entry() -> ModelCatalogEntry:
     )
 
 
+def _tts_dir() -> Path:
+    return MODELS_DIR / "tts"
+
+
+def _tts_entry() -> ModelCatalogEntry:
+    model_path = _tts_dir() / TTS_MODEL_NAME
+    installed = model_path.exists()
+    return ModelCatalogEntry(
+        key="tts",
+        title="Silero v4_ru (озвучка StoryArc)",
+        purpose="Живой русский голос диктора для закадрового текста арок (не имитация актёра).",
+        approx_size_mb=60,
+        target_dir=str(_tts_dir()),
+        installed=installed,
+        files_present=[TTS_MODEL_NAME] if installed else [],
+        files_missing=[] if installed else [TTS_MODEL_NAME],
+        installable_in_app=True,
+        install_command="powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\install_tts_model.ps1",
+    )
+
+
 def model_catalog() -> list[ModelCatalogEntry]:
-    return [_asr_entry(), _llm_entry(), _face_entry()]
+    return [_asr_entry(), _llm_entry(), _face_entry(), _tts_entry()]
 
 
 def get_catalog_entry(key: str) -> ModelCatalogEntry:
@@ -136,6 +164,41 @@ def _download_verified(url: str, destination: Path, expected_hash: str, opener=u
         temporary.unlink(missing_ok=True)
 
 
+def _verify_silero_model(path: Path) -> None:
+    size = path.stat().st_size if path.exists() else 0
+    if not TTS_MODEL_MIN_BYTES <= size <= TTS_MODEL_MAX_BYTES:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"Скачанный файл Silero имеет неожиданный размер ({size} байт)")
+    try:
+        import torch
+    except ImportError:
+        return  # torch not installed yet; size check is the best we can do
+    try:
+        torch.package.PackageImporter(str(path)).load_pickle("tts_models", "model")
+    except Exception as exc:  # noqa: BLE001 - any load failure means a bad file
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"Скачанная модель Silero не загружается: {exc}") from exc
+
+
+def _download_silero(*, opener=urlopen) -> None:
+    destination = _tts_dir() / TTS_MODEL_NAME
+    if destination.exists():
+        _verify_silero_model(destination)
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".part")
+    temporary.unlink(missing_ok=True)
+    request = Request(TTS_MODEL_URL, headers={"User-Agent": "SerialCuts local model installer"})
+    try:
+        with opener(request, timeout=300) as response, temporary.open("wb") as output:
+            while chunk := response.read(1024 * 1024):
+                output.write(chunk)
+        _verify_silero_model(temporary)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def install_model(key: str, *, confirm: bool, opener=urlopen) -> ModelCatalogEntry:
     entry = get_catalog_entry(key)
     if not entry.installable_in_app:
@@ -148,6 +211,9 @@ def install_model(key: str, *, confirm: bool, opener=urlopen) -> ModelCatalogEnt
         )
     if entry.installed:
         return entry
+    if key == "tts":
+        _download_silero(opener=opener)
+        return get_catalog_entry(key)
     face_dir = _face_dir()
     for name, url, expected_hash in FACE_MODELS:
         _download_verified(url, face_dir / name, expected_hash, opener=opener)

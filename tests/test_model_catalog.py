@@ -7,14 +7,16 @@ import pytest
 from app.application import model_install
 
 
-def test_model_catalog_lists_asr_llm_and_face_entries():
+def test_model_catalog_lists_asr_llm_face_and_tts_entries():
     entries = {entry.key: entry for entry in model_install.model_catalog()}
 
-    assert set(entries) == {"asr", "llm", "face"}
+    assert set(entries) == {"asr", "llm", "face", "tts"}
     assert entries["llm"].approx_size_mb > entries["face"].approx_size_mb
     assert entries["asr"].installable_in_app is False
     assert entries["face"].installable_in_app is True
+    assert entries["tts"].installable_in_app is True
     assert "install_identity_models" in entries["face"].install_command
+    assert "install_tts_model" in entries["tts"].install_command
 
 
 def test_install_requires_confirmation():

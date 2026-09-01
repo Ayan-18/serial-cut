@@ -1,5 +1,14 @@
 import type { Candidate, CandidateEdit, StoryArc } from "./types";
 
+export const SILERO_VOICES = [
+  { id: "eugene", label: "Евгений (муж.)" },
+  { id: "aidar", label: "Айдар (муж.)" },
+  { id: "baya", label: "Байя (жен.)" },
+  { id: "kseniya", label: "Ксения (жен.)" },
+  { id: "xenia", label: "Ксения мягкая (жен.)" },
+] as const;
+export function voiceLabel(id: string | null | undefined) { return SILERO_VOICES.find((v) => v.id === id)?.label ?? id ?? "—"; }
+
 export function splitLines(value: string) { return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); }
 export function fileDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Пустой файл")); reader.onerror = () => reject(reader.error ?? new Error("Ошибка чтения")); reader.readAsDataURL(file); }); }
 export function identityMethodLabel(method: string) { const labels: Record<string, string> = { manual: "подтверждено вручную", face: "лицо", "face+lip": "лицо + губы", voice: "голос", "face+lip+voice": "лицо + губы + голос" }; return labels[method] ?? method; }

@@ -9,9 +9,11 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from app.analysis.local_text import generate_local_text
+from app.application.narration_voice import resolve_narration_voice
 from app.infrastructure.config import Settings
 from app.infrastructure.atomic import replace_atomically, temp_sibling, write_text_atomically
 from app.infrastructure.processes import ProcessResult, run_process
+from app.media.tts import DEFAULT_NARRATOR_VOICE, TtsSynthesizer, build_synthesizer
 from app.models.entities import StoryArc
 
 
@@ -51,6 +53,7 @@ def synthesize_story_arc_narration(
     runner: Callable[[list[str], int], ProcessResult] = run_process,
     target_duration_seconds: float | None = None,
     narration_mode: str = "first_person",
+    synthesizer: TtsSynthesizer | None = None,
 ) -> NarrationAudio:
     arc = session.get(StoryArc, story_arc_id)
     if arc is None:
@@ -85,40 +88,31 @@ def synthesize_story_arc_narration(
     slug = _safe_slug(arc.title)[:80] or f"story-arc-{arc.id}"
     script_path = output_dir / f"{slug}.txt"
     audio_path = output_dir / f"{slug}.wav"
-    ps1_path = output_dir / "synthesize.ps1"
     temp_audio_path = temp_sibling(audio_path).with_suffix(".wav")
     parts_dir = output_dir / "parts"
     parts_dir.mkdir(parents=True, exist_ok=True)
     write_text_atomically(script_path, narration.text)
-    write_text_atomically(ps1_path, _powershell_tts_script())
+    synthesizer = synthesizer or build_synthesizer(settings, output_dir, runner=runner)
+    voice_id = resolve_narration_voice(
+        session, arc, mode, getattr(settings, "tts_narrator_voice", DEFAULT_NARRATOR_VOICE)
+    )
     part_paths: list[Path] = []
     part_durations: list[float] = []
     for index, line in enumerate(timed_lines, start=1):
-        part_text = parts_dir / f"line-{index:02}.txt"
         part_audio = parts_dir / f"line-{index:02}.wav"
         temp_part = temp_sibling(part_audio).with_suffix(".wav")
-        write_text_atomically(part_text, str(line["text"]))
-        result = runner(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(ps1_path),
-                str(part_text),
-                str(temp_part),
-            ],
-            600,
-        )
-        if result.returncode != 0:
+        line_voice = str(line.get("voice_id") or voice_id)
+        try:
+            synthesizer.synthesize(str(line["text"]), temp_part, line_voice)
+        except RuntimeError:
             temp_part.unlink(missing_ok=True)
-            raise RuntimeError(result.stderr.strip() or f"Windows TTS не смог озвучить строку {index}")
+            raise
         if not temp_part.exists():
-            raise RuntimeError(f"Windows TTS завершился без WAV-файла для строки {index}")
+            raise RuntimeError(f"Синтез озвучки не создал WAV для строки {index}")
         replace_atomically(temp_part, part_audio)
         duration = _wav_duration_seconds(part_audio)
         line["audio_duration_seconds"] = round(duration, 3)
+        line["voice_id"] = line_voice
         part_paths.append(part_audio)
         part_durations.append(duration)
     timeline_result = runner(
@@ -143,6 +137,7 @@ def synthesize_story_arc_narration(
     plan["narration_timeline_version"] = 2
     plan["narration_duration_seconds"] = round(target_duration, 3)
     plan["narration_mode"] = mode
+    plan["narration_voice"] = voice_id
     plan["narration"] = timed_lines
     arc.plan_json = plan
     session.flush()
@@ -270,23 +265,6 @@ def _safe_slug(value: str) -> str:
     return slug or "narration"
 
 
-def _powershell_tts_script() -> str:
-    return """param(
-  [Parameter(Mandatory=$true)][string]$TextPath,
-  [Parameter(Mandatory=$true)][string]$OutputPath
-)
-Add-Type -AssemblyName System.Speech
-$culture = [System.Globalization.CultureInfo]::GetCultureInfo("ru-RU")
-$text = Get-Content -LiteralPath $TextPath -Raw -Encoding UTF8
-$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$voice = $speaker.GetInstalledVoices($culture) | Select-Object -First 1
-if ($voice) { $speaker.SelectVoice($voice.VoiceInfo.Name) }
-$speaker.Rate = 0
-$speaker.Volume = 100
-$speaker.SetOutputToWaveFile($OutputPath)
-$speaker.Speak($text)
-$speaker.Dispose()
-"""
 
 
 def _narration_prompt(arc: StoryArc, narration_mode: str = "first_person") -> str:

@@ -1528,6 +1528,73 @@
         }
       }
     },
+    "/api/tts/voices": {
+      "get": {
+        "summary": "List Tts Voices",
+        "operationId": "list_tts_voices_api_tts_voices_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TtsVoiceCatalogRead"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/characters/{character_id}/narration-voice": {
+      "put": {
+        "summary": "Set Character Narration Voice",
+        "operationId": "set_character_narration_voice_api_characters__character_id__narration_voice_put",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NarrationVoiceUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/seasons/{season_id}/characters": {
       "get": {
         "summary": "List Characters",
@@ -4573,6 +4640,28 @@
           "voice_sample_count": {
             "type": "integer",
             "title": "Voice Sample Count"
+          },
+          "narration_voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Narration Voice"
+          },
+          "narration_voice_auto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Narration Voice Auto"
           }
         },
         "type": "object",
@@ -5587,6 +5676,30 @@
             ],
             "title": "Llm Latency Ms"
           },
+          "tts_adapter": {
+            "type": "string",
+            "title": "Tts Adapter"
+          },
+          "tts_ready": {
+            "type": "boolean",
+            "title": "Tts Ready"
+          },
+          "tts_model_path": {
+            "type": "string",
+            "title": "Tts Model Path"
+          },
+          "tts_model_exists": {
+            "type": "boolean",
+            "title": "Tts Model Exists"
+          },
+          "tts_torch_installed": {
+            "type": "boolean",
+            "title": "Tts Torch Installed"
+          },
+          "tts_narrator_voice": {
+            "type": "string",
+            "title": "Tts Narrator Voice"
+          },
           "face_ready": {
             "type": "boolean",
             "title": "Face Ready"
@@ -5641,6 +5754,12 @@
           "llm_url",
           "llm_model_hint",
           "llm_latency_ms",
+          "tts_adapter",
+          "tts_ready",
+          "tts_model_path",
+          "tts_model_exists",
+          "tts_torch_installed",
+          "tts_narrator_voice",
           "face_ready",
           "face_model",
           "face_detector_path",
@@ -5722,6 +5841,24 @@
           "lines"
         ],
         "title": "NarrationRead"
+      },
+      "NarrationVoiceUpdate": {
+        "properties": {
+          "narration_voice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Narration Voice"
+          }
+        },
+        "type": "object",
+        "title": "NarrationVoiceUpdate"
       },
       "PreviewRenderResponse": {
         "properties": {
@@ -6435,6 +6572,21 @@
             "minLength": 1,
             "title": "Export Filename Template"
           },
+          "tts_adapter": {
+            "type": "string",
+            "enum": [
+              "windows-sapi",
+              "silero",
+              "stub"
+            ],
+            "title": "Tts Adapter"
+          },
+          "tts_narrator_voice": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Tts Narrator Voice"
+          },
           "asr_adapter": {
             "type": "string",
             "enum": [
@@ -6475,6 +6627,8 @@
           "subtitle_safe_zone",
           "subtitle_show_speaker_names",
           "export_filename_template",
+          "tts_adapter",
+          "tts_narrator_voice",
           "asr_adapter",
           "llm_adapter",
           "llm_base_url"
@@ -6551,6 +6705,14 @@
             "type": "string",
             "title": "Export Filename Template"
           },
+          "tts_adapter": {
+            "type": "string",
+            "title": "Tts Adapter"
+          },
+          "tts_narrator_voice": {
+            "type": "string",
+            "title": "Tts Narrator Voice"
+          },
           "asr_adapter": {
             "type": "string",
             "title": "Asr Adapter"
@@ -6583,6 +6745,8 @@
           "subtitle_safe_zone",
           "subtitle_show_speaker_names",
           "export_filename_template",
+          "tts_adapter",
+          "tts_narrator_voice",
           "asr_adapter",
           "llm_adapter",
           "llm_base_url"
@@ -7683,6 +7847,50 @@
           "too_fast_rows"
         ],
         "title": "SubtitleQualityRead"
+      },
+      "TtsVoiceCatalogRead": {
+        "properties": {
+          "adapter": {
+            "type": "string",
+            "title": "Adapter"
+          },
+          "voices": {
+            "items": {
+              "$ref": "#/components/schemas/TtsVoiceRead"
+            },
+            "type": "array",
+            "title": "Voices"
+          }
+        },
+        "type": "object",
+        "required": [
+          "adapter",
+          "voices"
+        ],
+        "title": "TtsVoiceCatalogRead"
+      },
+      "TtsVoiceRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "gender": {
+            "type": "string",
+            "title": "Gender"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "gender"
+        ],
+        "title": "TtsVoiceRead"
       },
       "ValidationError": {
         "properties": {

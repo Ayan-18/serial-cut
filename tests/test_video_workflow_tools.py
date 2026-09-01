@@ -117,22 +117,19 @@ def test_story_arc_narration_and_queue_render_job(session, tmp_path, monkeypatch
     assert all(line["voice"] == "narrator" for line in narrator.lines)
 
     def fake_runner(args: list[str], timeout: int) -> ProcessResult:
-        output = Path(args[-1])
-        if "powershell" in args[0].lower():
-            with wave.open(str(output), "wb") as handle:
-                handle.setnchannels(1)
-                handle.setsampwidth(2)
-                handle.setframerate(16_000)
-                handle.writeframes(b"\0\0" * 8_000)
-        else:
-            output.write_bytes(b"wav")
+        # Only the ffmpeg timeline step reaches the runner now; the stub
+        # synthesizer writes the per-line WAV files itself.
+        Path(args[-1]).write_bytes(b"wav")
         return ProcessResult(args, 0, "", "")
+
+    from app.media.tts import StubTtsSynthesizer
 
     audio = synthesize_story_arc_narration(
         session,
         arc.id,
         Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
         runner=fake_runner,
+        synthesizer=StubTtsSynthesizer(),
     )
     assert Path(audio.audio_path).read_bytes() == b"wav"
 
