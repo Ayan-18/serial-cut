@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 import shutil
 import sys
 from dataclasses import asdict, dataclass
@@ -7,6 +8,9 @@ from pathlib import Path
 
 from app.infrastructure.config import Settings, get_settings
 from app.infrastructure.processes import run_process
+
+# Checks that are advisory only — a red status here does not block the MVP path.
+OPTIONAL_CHECKS = {"nvidia-smi", "node", "llama-server", "long_paths", "virtualenv"}
 
 
 @dataclass(frozen=True)
@@ -26,14 +30,18 @@ def run_system_check(settings: Settings | None = None) -> SystemCheckReport:
     settings = settings or get_settings()
     items = [
         _python_check(),
+        _virtualenv_check(),
         _tool_check("ffmpeg", settings.ffmpeg_path, ["-version"]),
         _tool_check("ffprobe", settings.ffprobe_path, ["-version"]),
         _tool_check("nvidia-smi", "nvidia-smi", ["--query-gpu=name,memory.total", "--format=csv,noheader"]),
+        _tool_check("node", "node", ["--version"]),
+        _presence_check("llama-server", "llama-server"),
+        _long_paths_check(),
         _directory_check("cache", settings.cache_dir),
         _directory_check("output", settings.output_dir),
         _disk_check(settings.cache_dir),
     ]
-    required_ok = all(item.ok for item in items if item.name not in {"nvidia-smi"})
+    required_ok = all(item.ok for item in items if item.name not in OPTIONAL_CHECKS)
     return SystemCheckReport(ok=required_ok, items=items)
 
 
@@ -48,6 +56,52 @@ def _python_check() -> CheckItem:
         name="python",
         ok=ok,
         message=f"{version.major}.{version.minor}.{version.micro}; требуется 3.11+",
+    )
+
+
+def _presence_check(name: str, executable: str) -> CheckItem:
+    resolved = shutil.which(executable)
+    return CheckItem(
+        name=name,
+        ok=resolved is not None,
+        message=resolved or f"{executable} не найден в PATH (нужен только для локальной Qwen)",
+    )
+
+
+def _virtualenv_check() -> CheckItem:
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    return CheckItem(
+        name="virtualenv",
+        ok=in_venv,
+        message=(
+            f"venv активен: {sys.prefix}"
+            if in_venv
+            else "Python запущен вне .venv — используйте .\\.venv\\Scripts\\python.exe"
+        ),
+    )
+
+
+def _long_paths_check() -> CheckItem:
+    if platform.system() != "Windows":
+        return CheckItem(name="long_paths", ok=True, message="не требуется вне Windows")
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\FileSystem"
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "LongPathsEnabled")
+        enabled = bool(value)
+    except OSError:
+        enabled = False
+    return CheckItem(
+        name="long_paths",
+        ok=enabled,
+        message=(
+            "поддержка длинных путей включена"
+            if enabled
+            else "длинные пути отключены — рендер в глубоких папках может падать (MAX_PATH 260)"
+        ),
     )
 
 

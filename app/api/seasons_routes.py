@@ -17,6 +17,8 @@ def import_season_endpoint(payload: SeasonImportRequest, session: Session = Depe
         created=result.created,
         skipped_duplicates=result.skipped_duplicates,
         episode_ids=result.episode_ids,
+        scanned=result.scanned,
+        errors=[{"file_name": item.file_name, "reason": item.reason} for item in result.errors],
     )
 
 

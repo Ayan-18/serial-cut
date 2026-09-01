@@ -56,11 +56,18 @@ class RuntimeSettingsRead(BaseModel):
     llm_base_url: str
 
 
+class ImportFileErrorRead(BaseModel):
+    file_name: str
+    reason: str
+
+
 class ImportResponse(BaseModel):
     season_id: int
     created: int
     skipped_duplicates: int
     episode_ids: list[int]
+    scanned: int = 0
+    errors: list[ImportFileErrorRead] = Field(default_factory=list)
 
 
 class JobRead(BaseModel):
@@ -175,6 +182,25 @@ class KeyframeStripRead(BaseModel):
     start_time: float
     end_time: float
     frames: list[KeyframeInfoRead]
+
+
+class ModelCatalogEntryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    title: str
+    purpose: str
+    approx_size_mb: int
+    target_dir: str
+    installed: bool
+    files_present: list[str]
+    files_missing: list[str]
+    installable_in_app: bool
+    install_command: str
+
+
+class ModelInstallRequest(BaseModel):
+    confirm: bool = False
 
 
 class Stage2RunResponse(BaseModel):

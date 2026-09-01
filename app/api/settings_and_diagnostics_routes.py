@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.api._shared import *  # noqa: F403
 from app.application.log_reader import read_log_tail
+from app.application.model_install import install_model, model_catalog
 from app.application.runtime_info import health_report, version_report
 
 router = APIRouter(prefix="/api")
@@ -34,6 +35,21 @@ def system_check() -> dict:
 @router.get("/model-diagnostics", response_model=ModelDiagnosticsRead)
 def model_diagnostics(session: Session = Depends(get_session)):
     return check_models(effective_settings(session, get_settings()))
+
+
+@router.get("/model-catalog", response_model=list[ModelCatalogEntryRead])
+def get_model_catalog():
+    return model_catalog()
+
+
+@router.post("/model-catalog/{key}/install", response_model=ModelCatalogEntryRead)
+def install_catalog_model(key: str, payload: ModelInstallRequest):
+    try:
+        return install_model(key, confirm=payload.confirm)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=f"Не удалось скачать модель: {exc}") from exc
 
 
 @router.get("/cache", response_model=CacheRead)
