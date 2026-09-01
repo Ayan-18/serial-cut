@@ -1,5 +1,22 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - Frontend App Split
+
+Completed prompt point 4:
+
+- Moved the React entry point to a tiny `frontend/src/main.tsx` and moved the application
+  container to `frontend/src/App.tsx`.
+- Added `frontend/src/hooks/useSerialCutsController.ts` for the UI state/API orchestration that
+  previously lived directly in `main.tsx`.
+- Added `frontend/src/hooks/useCandidates.ts` for candidate filtering, sorting, selected edits and
+  moment type derivation.
+- Added `frontend/src/components/AppView.tsx` as the presentation layer fed by the controller hook.
+- Added `frontend/src/hooks/useCandidates.test.ts` covering filtering, score threshold, search,
+  problem filtering, boundary sorting and moment type extraction.
+
+Verification: `npm run build` passed (`tsc -b` + Vite production build). `npm run test` passed
+outside the sandbox after the known local `spawn EPERM` issue (`3 test files`, `10 tests`).
+
 ## 2026-09-01 - API Router Split
 
 Completed prompt point 3:
