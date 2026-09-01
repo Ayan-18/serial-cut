@@ -163,6 +163,20 @@ class BatchOutcomeRead(BaseModel):
     job_ids: list[int]
 
 
+class KeyframeInfoRead(BaseModel):
+    index: int
+    time: float
+    url: str
+
+
+class KeyframeStripRead(BaseModel):
+    candidate_id: int
+    edit_revision: int
+    start_time: float
+    end_time: float
+    frames: list[KeyframeInfoRead]
+
+
 class Stage2RunResponse(BaseModel):
     episode_id: int
     stage: str

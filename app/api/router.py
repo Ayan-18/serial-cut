@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api import (
     candidate_batch_routes,
     candidate_history_routes,
+    candidate_media_routes,
     candidates_routes,
     characters_routes,
     episodes_routes,
@@ -26,6 +27,7 @@ domain_routers = (
     candidates_routes.router,
     candidate_history_routes.router,
     candidate_batch_routes.router,
+    candidate_media_routes.router,
     exports_routes.router,
 )
 
