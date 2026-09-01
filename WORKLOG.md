@@ -1,5 +1,23 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - API Error Boundary Pass
+
+Completed prompt point 1:
+
+- Added `app/api/errors.py` with shared application exceptions and FastAPI exception handlers for
+  domain errors, `ValueError`, `ProcessingBusyError`, database integrity conflicts and unexpected
+  runtime failures.
+- Wired the handlers into `app/main.py`; unexpected API exceptions now return a generic 500 response
+  and log the internal exception instead of exposing details as a 400.
+- Replaced broad `except Exception` blocks in `app/api/routes.py` and `app/api/queue_routes.py` with
+  narrower expected-error catches. `rg -n "except Exception" app/api --glob "*.py"` now returns no
+  API matches.
+- Added `tests/test_api_errors.py` for readable 400 domain errors and generic logged 500 responses.
+
+Verification: `.\.venv\Scripts\python.exe -m pytest tests\test_api_errors.py
+tests\test_remaining_audit_hardening.py tests\test_queue.py` passed (`13 passed`, one upstream
+Starlette deprecation warning).
+
 ## 2026-09-01 - Queue-First Runtime Hardening
 
 Implemented the selected project weaknesses 1, 3, 4, 5, 6, 7 and 8 without changing the launcher:

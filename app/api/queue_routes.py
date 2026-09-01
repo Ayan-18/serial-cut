@@ -73,7 +73,7 @@ def retry_job_from_stage_endpoint(
         job = retry_job_from_stage(session, job_id, payload.stage_name)
         session.commit()
         return job
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

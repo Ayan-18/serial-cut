@@ -209,7 +209,7 @@ def delete_cache(payload: CacheClearRequest, session: Session = Depends(get_sess
         )
     except ProcessingBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -235,7 +235,7 @@ def update_settings(payload: RuntimeSettings, session: Session = Depends(get_ses
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -245,7 +245,7 @@ def import_season_endpoint(payload: SeasonImportRequest, session: Session = Depe
     try:
         result = import_season(session, payload.root_path, payload.title)
         session.commit()
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ImportResponse(
@@ -309,7 +309,7 @@ def create_story_arc(payload: StoryArcCreateRequest, session: Session = Depends(
         )
         session.commit()
         return _story_arc_read(session, arc)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -318,7 +318,7 @@ def create_story_arc(payload: StoryArcCreateRequest, session: Session = Depends(
 def read_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
     try:
         return _story_arc_read(session, get_story_arc(session, story_arc_id))
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -332,7 +332,7 @@ def patch_story_arc(
         arc = update_story_arc(session, story_arc_id, StoryArcUpdate(**payload.model_dump(exclude_unset=True)))
         session.commit()
         return _story_arc_read(session, arc)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -343,7 +343,7 @@ def rebuild_story_arc(story_arc_id: int, session: Session = Depends(get_session)
         arc = rebuild_story_arc_plan(session, story_arc_id, effective_settings(session, get_settings()))
         session.commit()
         return _story_arc_read(session, arc)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -364,7 +364,7 @@ def patch_story_arc_segment(
         )
         session.commit()
         return _story_arc_read(session, arc)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -379,7 +379,7 @@ def delete_story_arc_segment(
         arc = remove_story_arc_segment(session, story_arc_id, segment_id)
         session.commit()
         return _story_arc_read(session, arc)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -394,7 +394,7 @@ def add_story_arc_segment(
         arc = add_candidate_to_story_arc(session, story_arc_id, payload.candidate_id)
         session.commit()
         return _story_arc_read(session, arc)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -427,7 +427,7 @@ def render_story_arc_endpoint(
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -442,7 +442,7 @@ def enqueue_story_arc_render_endpoint(
         job = enqueue_story_arc_render(session, story_arc_id, payload.model_dump())
         session.commit()
         return StoryArcRenderJobResponse(job=job)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -455,7 +455,7 @@ def read_story_arc_narration(
 ):
     try:
         return story_arc_narration(session, story_arc_id, narration_mode=narration_mode)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -474,7 +474,7 @@ def create_story_arc_narration_audio(
         )
         session.commit()
         return audio
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -516,7 +516,7 @@ def remove_story_arc(story_arc_id: int, session: Session = Depends(get_session))
                 [settings.output_dir],
             )
         return {"deleted": True}
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -536,7 +536,7 @@ def create_script(payload: VideoScriptCreateRequest, session: Session = Depends(
         )
         session.commit()
         return _video_script_read(script)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -553,7 +553,7 @@ def patch_script(script_id: int, payload: VideoScriptUpdateRequest, session: Ses
         )
         session.commit()
         return _video_script_read(script)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -569,7 +569,7 @@ def create_publication(payload: PublishingPlanCreateRequest, session: Session = 
         plan = create_publishing_plan(session, PublishingPlanRequest(**payload.model_dump()))
         session.commit()
         return _publishing_plan_read(plan)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -588,7 +588,7 @@ def patch_publication(plan_id: int, payload: PublishingPlanUpdateRequest, sessio
         )
         session.commit()
         return _publishing_plan_read(plan)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -600,7 +600,7 @@ def package_publication(plan_id: int, session: Session = Depends(get_session)):
         path = create_publishing_package(session, plan_id, settings.output_dir)
         session.commit()
         return PublishingPackageRead(plan_id=plan_id, manifest_path=str(path))
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -641,7 +641,7 @@ def create_character(
         session.commit()
         session.refresh(character)
         return _character_read(character)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -659,7 +659,7 @@ def add_character_reference_photo(
         add_character_photo(character, payload.photo_data_url, get_settings().characters_dir)
         session.commit()
         return _character_read(character)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -720,7 +720,7 @@ def merge_character_endpoint(
         session.commit()
         session.refresh(character)
         return _character_read(character)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -779,7 +779,7 @@ def update_speaker_identity(
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -811,7 +811,7 @@ def identify_episode_characters(episode_id: int, session: Session = Depends(get_
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -825,7 +825,7 @@ def probe_episode(episode_id: int, session: Session = Depends(get_session)):
         summary = probe_media(get_settings().ffprobe_path, media_path=Path(episode.file_path))
         apply_probe_to_episode(episode, summary)
         session.commit()
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "stage": episode.stage}
@@ -842,7 +842,7 @@ def enqueue_episode(
         job = enqueue_episode_analysis(session, episode_id, payload=job_payload)
         session.commit()
         session.refresh(job)
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return job
@@ -853,7 +853,7 @@ def enqueue_season(season_id: int, payload: EnqueueSeasonRequest, session: Sessi
     try:
         jobs = enqueue_season_analysis(session, season_id, auto=payload.auto)
         session.commit()
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return jobs
@@ -871,7 +871,7 @@ def run_stage2_episode(episode_id: int, session: Session = Depends(get_session))
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
@@ -891,7 +891,7 @@ def run_stage3_episode(episode_id: int, session: Session = Depends(get_session))
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
@@ -914,7 +914,7 @@ def list_episode_candidates(episode_id: int, session: Session = Depends(get_sess
 def episode_quality(episode_id: int, session: Session = Depends(get_session)):
     try:
         return episode_quality_report(session, episode_id)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -944,7 +944,7 @@ def review_candidate_endpoint(candidate_id: int, payload: ReviewRequest, session
             payload.reason,
         )
         session.commit()
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
@@ -954,7 +954,7 @@ def review_candidate_endpoint(candidate_id: int, payload: ReviewRequest, session
 def read_candidate_subtitles(candidate_id: int, session: Session = Depends(get_session)):
     try:
         return subtitles_for_candidate(session, candidate_id)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -962,7 +962,7 @@ def read_candidate_subtitles(candidate_id: int, session: Session = Depends(get_s
 def candidate_quality(candidate_id: int, session: Session = Depends(get_session)):
     try:
         return candidate_quality_report(session, candidate_id)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -980,7 +980,7 @@ def update_candidate_subtitles(
         )
         session.commit()
         return result
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -991,7 +991,7 @@ def reset_candidate_subtitles_endpoint(candidate_id: int, session: Session = Dep
         result = reset_candidate_subtitles(session, candidate_id)
         session.commit()
         return result
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1000,7 +1000,7 @@ def reset_candidate_subtitles_endpoint(candidate_id: int, session: Session = Dep
 def read_subtitle_quality(candidate_id: int, session: Session = Depends(get_session)):
     try:
         return subtitle_quality_report(session, candidate_id)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -1010,7 +1010,7 @@ def auto_split_subtitles(candidate_id: int, session: Session = Depends(get_sessi
         result = auto_split_candidate_subtitles(session, candidate_id)
         session.commit()
         return result
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1097,7 +1097,7 @@ def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_sessio
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1126,7 +1126,7 @@ def render_candidate_endpoint(candidate_id: int, payload: RenderRequest, session
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
@@ -1150,7 +1150,7 @@ def update_candidate_edits(
         )
         session.commit()
         return result
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1183,7 +1183,7 @@ def render_candidate_preview_endpoint(
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1216,7 +1216,7 @@ def enqueue_candidate_render_endpoint(
         session.commit()
         session.refresh(job)
         return job
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1278,7 +1278,7 @@ def auto_export_episode(episode_id: int, payload: AutoExportRequest, session: Se
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
