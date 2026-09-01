@@ -63,9 +63,11 @@ def character_photo(character_id: int, photo_index: int, session: Session = Depe
     character = session.get(Character, character_id)
     if character is None or photo_index < 0 or photo_index >= len(character.photos_json or []):
         raise HTTPException(status_code=404, detail="Фотография не найдена")
-    path = Path(character.photos_json[photo_index]).resolve()
-    root = get_settings().characters_dir.resolve()
-    if root not in path.parents or not path.exists():
+    try:
+        path = resolve_within(character.photos_json[photo_index], [get_settings().characters_dir])
+    except PathOutsideAllowedRootsError as exc:
+        raise HTTPException(status_code=404, detail="Фотография не найдена") from exc
+    if not path.is_file():
         raise HTTPException(status_code=404, detail="Фотография не найдена")
     return FileResponse(path)
 

@@ -192,21 +192,25 @@ def create_story_arc_narration_audio(
 @router.get("/story-arc-exports/{export_id}/file")
 def story_arc_export_file(export_id: int, session: Session = Depends(get_session)):
     export = _get_story_arc_export(session, export_id)
-    path = Path(export.output_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Файл StoryArc экспорта не найден")
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
+    settings = effective_settings(session, get_settings())
+    return _safe_file_response(
+        settings,
+        export.output_path,
+        media_type="video/mp4",
+        missing_detail="Файл StoryArc экспорта не найден",
+    )
 
 
 @router.get("/story-arc-exports/{export_id}/cover")
 def story_arc_export_cover(export_id: int, session: Session = Depends(get_session)):
     export = _get_story_arc_export(session, export_id)
-    if not export.cover_path:
-        raise HTTPException(status_code=404, detail="Обложка StoryArc не создана")
-    path = Path(export.cover_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Файл обложки StoryArc не найден")
-    return FileResponse(path, media_type="image/jpeg", filename=path.name)
+    settings = effective_settings(session, get_settings())
+    return _safe_file_response(
+        settings,
+        export.cover_path,
+        media_type="image/jpeg",
+        missing_detail="Файл обложки StoryArc не найден",
+    )
 
 
 @router.delete("/story-arcs/{story_arc_id}")

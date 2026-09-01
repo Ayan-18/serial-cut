@@ -10,12 +10,21 @@ from app.infrastructure.config import Settings
 
 _HANDLER_MARKER = "_serialcuts_configured"
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_DEFAULT_LOG_DIR = Path("./data/logs")
+_active_log_path: Path = _DEFAULT_LOG_DIR / "serialcuts.log"
+
+
+def current_log_path() -> Path:
+    """Path of the rotating log file the app is currently writing to."""
+    return _active_log_path
 
 
 def configure_logging(settings: Settings, log_dir: Path | None = None) -> Path:
-    logs_dir = log_dir or Path("./data/logs")
+    global _active_log_path
+    logs_dir = log_dir or _DEFAULT_LOG_DIR
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "serialcuts.log"
+    _active_log_path = log_path
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
     for logger_name in ("app", "uvicorn.error", "uvicorn.access"):

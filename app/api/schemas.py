@@ -84,6 +84,49 @@ class LocalApiTokenRead(BaseModel):
     token: str
 
 
+class QueueHealthRead(BaseModel):
+    state: str
+    queued: int
+    running: int
+    failed: int
+
+
+class HealthRead(BaseModel):
+    ok: bool
+    service: str
+    version: str
+    commit: str | None = None
+    boot_id: str
+    token_fingerprint: str
+    started_at: str
+    uptime_seconds: float
+    db_revision: str | None = None
+    queue: QueueHealthRead
+
+
+class VersionRead(BaseModel):
+    service: str
+    version: str
+    commit: str | None = None
+    boot_id: str
+    started_at: str
+
+
+class LogEntryRead(BaseModel):
+    timestamp: str | None = None
+    level: str
+    logger: str
+    message: str
+
+
+class LogTailRead(BaseModel):
+    path: str
+    exists: bool
+    size_bytes: int
+    returned: int
+    entries: list[LogEntryRead]
+
+
 class Stage2RunResponse(BaseModel):
     episode_id: int
     stage: str

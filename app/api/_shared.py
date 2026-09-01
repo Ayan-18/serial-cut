@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.dependencies import get_session
 from app.api.loopback import local_api_token
+from app.api.media_files import safe_file_response as _safe_file_response
+from app.api.media_files import served_media_roots as _served_media_roots
 from app.api.schemas import *
 from app.application.auto import auto_approve_and_export
 from app.application.cache import cache_summary, clear_cache, prepare_cache_directory
@@ -63,11 +66,15 @@ from app.application.story_arcs import (
 from app.application.system_check import report_as_dict, run_system_check
 from app.application.video_scripts import VideoScriptRequest, create_video_script, list_video_scripts, update_video_script
 from app.domain.enums import JobStatus
-from app.infrastructure.config import get_settings
+from app.domain.paths import PathOutsideAllowedRootsError, resolve_within
+from app.infrastructure.config import Settings, get_settings
 from app.media.ffprobe import apply_probe_to_episode, probe_media
 from app.media.rendering import smooth_crop_keyframes
 from app.models.entities import *
 from app.workers.queue import enqueue_candidate_render, enqueue_episode_analysis, enqueue_season_analysis, enqueue_story_arc_render
+
+logger = logging.getLogger(__name__)
+
 
 def _get_export(session: Session, export_id: int) -> Export:
     export = session.get(Export, export_id)
@@ -269,6 +276,7 @@ def _cache_protected_paths(session: Session, output_dir: Path) -> list[Path]:
 def _is_legacy_default_cache(cache_dir: Path) -> bool:
     default_cache = Path(__file__).resolve().parents[2] / "data" / "cache"
     return cache_dir.expanduser().resolve(strict=False) == default_cache.resolve(strict=False)
+
 
 __all__ = [name for name in globals() if not name.startswith("__")]
 

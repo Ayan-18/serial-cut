@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 from app.api._shared import *  # noqa: F403
+from app.application.log_reader import read_log_tail
+from app.application.runtime_info import health_report, version_report
 
 router = APIRouter(prefix="/api")
 
-@router.get("/health")
-def health() -> dict:
-    return {"ok": True, "service": "SerialCuts"}
+@router.get("/health", response_model=HealthRead)
+def health(session: Session = Depends(get_session)):
+    return health_report(session, local_api_token())
+
+
+@router.get("/version", response_model=VersionRead)
+def version() -> dict:
+    return version_report()
+
+
+@router.get("/logs", response_model=LogTailRead)
+def logs(lines: int = 200, level: str | None = None, search: str | None = None):
+    return read_log_tail(lines=lines, min_level=level, search=search)
 
 
 @router.get("/security-token", response_model=LocalApiTokenRead)
