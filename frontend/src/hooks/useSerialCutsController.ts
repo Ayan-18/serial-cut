@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, jsonHeaders } from "../api";
 import { useCandidates, type CandidateFilter, type CandidateSort } from "./useCandidates";
-import type { CacheInfo, Candidate, CandidateQuality, Character, CheckItem, Episode, EpisodeOutline, EpisodeQuality, ExportItem, Job, JobStage, ModelDiagnostics, PreviewRender, ProjectDiagnostics, PublishingPlan, QueueData, RuntimeSettings, SearchResult, Season, SpeakerIdentity, StoryArc, StoryArcSegment, StoryContext, Subtitle, SubtitleQuality, VideoScript } from "../types";
+import type { BatchOutcome, CacheInfo, Candidate, CandidateQuality, Character, CheckItem, Episode, EpisodeOutline, EpisodeQuality, ExportItem, ImportResult, Job, JobStage, ModelDiagnostics, PreviewRender, ProjectDiagnostics, PublishingPlan, QueueData, RuntimeSettings, SearchResult, Season, SpeakerIdentity, StoryArc, StoryArcSegment, StoryContext, Subtitle, SubtitleQuality, VideoScript } from "../types";
 import { editFromCandidate, errorMessage, fileDataUrl, formatElapsed, splitLines, stageLabel } from "../utils";
 
 export function useSerialCutsController() {
@@ -76,9 +76,46 @@ export function useSerialCutsController() {
   const [characterName, setCharacterName] = useState("");
   const [characterDescription, setCharacterDescription] = useState("");
   const [characterPhotos, setCharacterPhotos] = useState<string[]>([]);
+  const [batchSelection, setBatchSelection] = useState<number[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const backgroundVideoRef = useRef<HTMLVideoElement>(null);
-  
+
+  function toggleBatchCandidate(candidateId: number) {
+    setBatchSelection((current) => current.includes(candidateId) ? current.filter((id) => id !== candidateId) : [...current, candidateId]);
+  }
+  function setBatchCandidates(ids: number[]) { setBatchSelection(ids); }
+  function clearBatchSelection() { setBatchSelection([]); }
+
+  async function batchReviewCandidates(episodeId: number, decision: "approve" | "reject") {
+    if (!batchSelection.length) return;
+    try {
+      const outcome = await api<BatchOutcome>(`/api/episodes/${episodeId}/candidates/batch-review`, {
+        method: "POST", headers: jsonHeaders, body: JSON.stringify({ candidate_ids: batchSelection, decision }),
+      });
+      setMessage(`${decision === "approve" ? "Принято" : "Отклонено"}: ${outcome.succeeded.length}${outcome.skipped.length ? `, пропущено ${outcome.skipped.length}` : ""}`);
+      clearBatchSelection();
+      await loadCandidates(episodeId, false);
+    } catch (error) { setMessage(`Пакетная проверка: ${errorMessage(error)}`); }
+  }
+
+  async function batchRenderCandidates() {
+    if (!batchSelection.length) return;
+    try {
+      const outcome = await api<BatchOutcome>("/api/candidates/batch-render-job", {
+        method: "POST", headers: jsonHeaders, body: JSON.stringify({
+          candidate_ids: batchSelection,
+          include_subtitles: true,
+          use_nvenc: settings?.render_use_nvenc ?? null,
+          preset_name: settings?.render_preset ?? null,
+          loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null,
+        }),
+      });
+      setMessage(`Рендеров в очереди: ${outcome.job_ids.length}${outcome.skipped.length ? `, пропущено ${outcome.skipped.length} (не принятые)` : ""}`);
+      clearBatchSelection();
+      await refreshActivity();
+    } catch (error) { setMessage(`Пакетный рендер: ${errorMessage(error)}`); }
+  }
+
   async function refresh() {
     const [seasonData, queueData, settingsData, exportData, cacheData, arcData, scriptData, publishingData, projectData] = await Promise.all([
       api<Season[]>("/api/seasons"), api<QueueData>("/api/jobs"), api<RuntimeSettings>("/api/settings"),
@@ -102,8 +139,9 @@ export function useSerialCutsController() {
   
   async function importSeason() {
     try {
-      const data = await api<{ created: number; skipped_duplicates: number }>("/api/seasons/import", { method: "POST", headers: jsonHeaders, body: JSON.stringify({ root_path: rootPath }) });
-      setMessage(`Добавлено: ${data.created}, дубликатов: ${data.skipped_duplicates}`); await refresh();
+      const data = await api<ImportResult>("/api/seasons/import", { method: "POST", headers: jsonHeaders, body: JSON.stringify({ root_path: rootPath }) });
+      const errorNote = data.errors.length ? `, не прочитано: ${data.errors.length} (${data.errors.map((item) => item.file_name).join(", ")})` : "";
+      setMessage(`Просканировано ${data.scanned}: добавлено ${data.created}, дубликатов ${data.skipped_duplicates}${errorNote}`); await refresh();
     } catch (error) { setMessage(errorMessage(error)); }
   }
   
@@ -567,6 +605,7 @@ export function useSerialCutsController() {
   function onVideoTimeUpdate() { const player = videoRef.current; const background = backgroundVideoRef.current; if (!player) return; setVideoTime(player.currentTime); if (background && Math.abs(background.currentTime - player.currentTime) > 0.2) background.currentTime = player.currentTime; if (selectedCandidate) { const end = Number((edits[selectedCandidate.id] ?? editFromCandidate(selectedCandidate)).end); if (player.currentTime >= end) player.pause(); } }
   function isEpisodeBusy(episodeId: number) { return (queue?.items ?? []).some((job) => job.episode_id === episodeId && ["queued", "running", "paused", "cancel_requested"].includes(job.status)); }
   
+  useEffect(() => { setBatchSelection([]); }, [selectedEpisodeId]);
   useEffect(() => { refresh().catch((error) => setMessage(errorMessage(error))); runSystemCheck().catch((error) => setMessage(errorMessage(error))); }, []);
   useEffect(() => { const timer = window.setInterval(() => refreshActivity().catch(() => undefined), 2500); return () => window.clearInterval(timer); }, [selectedEpisodeId]);
   useEffect(() => {
@@ -746,6 +785,12 @@ export function useSerialCutsController() {
     workflowArc,
     workflowScripts,
     workflowPublishing,
+    batchSelection,
+    toggleBatchCandidate,
+    setBatchCandidates,
+    clearBatchSelection,
+    batchReviewCandidates,
+    batchRenderCandidates,
   };
 }
 
