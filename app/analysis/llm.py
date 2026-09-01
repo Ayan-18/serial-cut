@@ -193,9 +193,7 @@ class LlamaCppHttpAnalyzer:
                 f"Расшифровка выбранной части:\n{chunk}\n\nГраницы сцен:\n{scene_lines}"
             )
             try:
-                parsed = parse_candidate_json(
-                    self._complete_json(prompt, CandidateListPayload.model_json_schema(), max_tokens=1600)
-                )
+                parsed = self._candidates_for_prompt(prompt, chunk_index)
             except ValueError as exc:
                 logger.warning("LLM candidate JSON validation failed: chunk=%s error=%s", chunk_index, exc)
                 first_error = first_error or exc
@@ -209,6 +207,43 @@ class LlamaCppHttpAnalyzer:
             raise first_error
         logger.info("LLM candidate analysis completed: candidates=%s", len(all_candidates))
         return CandidateListPayload(candidates=sorted(all_candidates, key=lambda item: item.start_time)[:8])
+
+    def _candidates_for_prompt(
+        self,
+        prompt: str,
+        chunk_index: int,
+        max_attempts: int = 2,
+    ) -> CandidateListPayload:
+        """Ask the local model for candidates, retrying once on invalid JSON.
+
+        Small local models occasionally emit truncated or markdown-wrapped JSON.
+        A single stricter retry recovers most of those without a visible failure.
+        """
+        schema = CandidateListPayload.model_json_schema()
+        last_error: ValueError | None = None
+        for attempt in range(1, max_attempts + 1):
+            self._raise_if_cancelled()
+            attempt_prompt = prompt
+            if attempt > 1:
+                attempt_prompt = (
+                    f"{prompt}\n\nПредыдущий ответ не был валидным JSON "
+                    f"({last_error}). Верни строго один JSON-объект по схеме, без markdown и текста вокруг."
+                )
+            try:
+                return parse_candidate_json(
+                    self._complete_json(attempt_prompt, schema, max_tokens=1600)
+                )
+            except ValueError as exc:
+                last_error = exc
+                logger.warning(
+                    "LLM candidate JSON invalid: chunk=%s attempt=%s/%s error=%s",
+                    chunk_index,
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+        assert last_error is not None
+        raise last_error
 
     @staticmethod
     def _context_prompt(context: AnalysisContext) -> str:

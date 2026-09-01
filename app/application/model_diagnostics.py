@@ -70,13 +70,14 @@ def check_models(settings: Settings) -> ModelDiagnostics:
     face_detector_exists = settings.face_detector_model.exists()
     face_recognizer_exists = settings.face_recognizer_model.exists()
     face_ready = face_detector_exists and face_recognizer_exists
-    details.append(
-        "YuNet и SFace готовы"
-        if face_ready
-        else "YuNet/SFace не установлены — доступен резервный поиск лиц"
-    )
+    if face_ready:
+        details.append("YuNet и SFace готовы")
+    elif _legacy_face_fallback_available():
+        details.append("YuNet/SFace не установлены — доступен резервный Haar-поиск лиц")
+    else:
+        details.append("YuNet/SFace не установлены — идентификация по лицу отключена, работает только голос")
     if not face_ready:
-        recommendations.append("Положите YuNet и SFace ONNX-модели в data/models/face для лучшего автокадрирования")
+        recommendations.append("Положите YuNet и SFace ONNX-модели в data/models/face для автокадрирования по лицам")
 
     return ModelDiagnostics(
         asr_adapter=settings.asr_adapter,
@@ -101,6 +102,15 @@ def check_models(settings: Settings) -> ModelDiagnostics:
         details=details,
         recommendations=recommendations,
     )
+
+
+def _legacy_face_fallback_available() -> bool:
+    """Whether this OpenCV build still ships the Haar cascade fallback detector."""
+    try:
+        import cv2
+    except ImportError:
+        return False
+    return hasattr(cv2, "CascadeClassifier") and hasattr(cv2, "data")
 
 
 def _llm_health(base_url: str) -> tuple[bool, int | None]:

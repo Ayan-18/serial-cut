@@ -290,7 +290,13 @@ def select_cover_timestamp(input_path: Path, start_time: float, end_time: float)
         capture = cv2.VideoCapture(str(input_path))
         if not capture.isOpened():
             return fallback
-        cascade = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"))
+        cascade = None
+        if hasattr(cv2, "CascadeClassifier") and hasattr(cv2, "data"):
+            cascade = cv2.CascadeClassifier(
+                str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+            )
+            if cascade.empty():
+                cascade = None
         best: tuple[float, float] | None = None
         try:
             for index in range(7):
@@ -307,7 +313,11 @@ def select_cover_timestamp(input_path: Path, start_time: float, end_time: float)
                 sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
                 brightness = float(gray.mean())
                 exposure = max(0.0, 1.0 - abs(brightness - 125.0) / 125.0)
-                faces = cascade.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(40, 40))
+                faces = (
+                    cascade.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(40, 40))
+                    if cascade is not None
+                    else []
+                )
                 face_bonus = max((w * h for _, _, w, h in faces), default=0) / max(1, gray.size) * 5000
                 edge_penalty = min(index, 6 - index) * 2
                 score = sharpness + exposure * 35 + face_bonus + edge_penalty

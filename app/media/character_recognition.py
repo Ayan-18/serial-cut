@@ -62,8 +62,7 @@ class LocalFaceRecognizer:
                 self.detector = None
                 self.recognizer = None
         if self.detector is None or self.recognizer is None:
-            cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
-            self.cascade = cv2.CascadeClassifier(str(cascade_path))
+            self.cascade = _load_haar_cascade(cv2)
 
     @property
     def neural(self) -> bool:
@@ -71,13 +70,19 @@ class LocalFaceRecognizer:
 
     @property
     def model_name(self) -> str:
-        return "YuNet + SFace" if self.neural else "Haar + DCT (резервный режим)"
+        if self.neural:
+            return "YuNet + SFace"
+        if self.cascade is not None:
+            return "Haar + DCT (резервный режим)"
+        return "Только голос (лица не распознаются без YuNet/SFace)"
 
     def detect(self, frame: np.ndarray) -> list[FaceObservation]:
         if frame is None or frame.size == 0:
             return []
         if self.neural:
             return self._detect_neural(frame)
+        if self.cascade is None:
+            return []
         return self._detect_fallback(frame)
 
     def _detect_neural(self, frame: np.ndarray) -> list[FaceObservation]:
@@ -133,6 +138,21 @@ class LocalFaceRecognizer:
                 )
             )
         return observations
+
+
+def _load_haar_cascade(cv2_module):
+    """Legacy Haar detector, when this OpenCV build still ships it.
+
+    OpenCV 5 headless drops ``CascadeClassifier``; without YuNet/SFace weights the
+    recognizer then works from voice only and never crashes on a missing symbol.
+    """
+    if not hasattr(cv2_module, "CascadeClassifier") or not hasattr(cv2_module, "data"):
+        return None
+    cascade_path = Path(cv2_module.data.haarcascades) / "haarcascade_frontalface_default.xml"
+    if not cascade_path.exists():
+        return None
+    cascade = cv2_module.CascadeClassifier(str(cascade_path))
+    return cascade if not cascade.empty() else None
 
 
 def recognize_speaker_clusters(
