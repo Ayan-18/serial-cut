@@ -1,5 +1,18 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - Backend CI Database Preparation
+
+Follow-up after the first GitHub Actions run for the prompt work:
+
+- GitHub backend CI passed install, `ruff` and `mypy`, then failed during `pytest` collection because
+  `app.main` requires an Alembic-migrated database and the CI runner had no SQLite database yet.
+- Updated `.github/workflows/ci.yml` so the backend job uses a dedicated `data/ci.db` database and
+  runs `python -m alembic upgrade head` before `python -m pytest`.
+
+Verification: reproduced the CI-style database setup locally with a temporary SQLite URL, then ran
+`python -m alembic upgrade head`, `python -m ruff check .`, `python -m mypy app` and
+`python -m pytest --basetemp data\pytest-tmp-ci3` (`107 passed`, `3 skipped`).
+
 ## 2026-09-01 - Dependency Registry Verification
 
 Completed prompt point 6:
