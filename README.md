@@ -160,6 +160,8 @@ precision, duplicate rate и invalid clips. Это базовый измерит
 ## Проверки
 
 ```powershell
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy app
 .\.venv\Scripts\python.exe -m pytest
 Push-Location frontend
 npm run build
@@ -167,6 +169,10 @@ npm test
 Pop-Location
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 ```
+
+GitHub Actions CI повторяет backend `ruff`, `mypy` и `pytest`, а также frontend `npm run build`
+и `npm run test` на Linux runner. CI использует stub-адаптеры и не скачивает реальные Whisper/Qwen
+модели, не проверяет GPU/NVENC и не запускает Windows-only PowerShell launcher.
 
 ## Безопасность исходников
 

@@ -27,6 +27,8 @@
 - `frontend` - React + TypeScript панель.
 - `migrations` - Alembic.
 - `scripts` - Windows PowerShell-команды установки, запуска и диагностики.
+- `.github/workflows/ci.yml` - GitHub Actions CI: backend lint/typecheck/tests и frontend
+  build/tests. Реальные локальные модели, GPU/NVENC и Windows-only launcher не выполняются в CI.
 
 ## Этапы конвейера
 

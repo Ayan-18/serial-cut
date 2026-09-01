@@ -1,5 +1,24 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - Typecheck And CI Setup
+
+Completed prompt point 5 configuration:
+
+- Added backend dev tools `ruff` and `mypy` to `pyproject.toml`.
+- Added a starter `[tool.mypy]` profile for Python 3.11 with unused-ignore warnings, relaxed
+  untyped defs for the first pass and missing import ignores for optional media/AI packages.
+- Added `.github/workflows/ci.yml` with separate backend and frontend jobs. Backend installs
+  `.[dev]`, runs `ruff`, `mypy app` and `pytest`; frontend runs `npm ci`, `npm run build`
+  and `npm run test`.
+- Confirmed `frontend/tsconfig.json` already has `strict: true`; CI uses the existing `tsc -b`
+  from `npm run build`.
+- Documented CI scope in `README.md` and `ARCHITECTURE.md`, including that real models,
+  GPU/NVENC and Windows-only launcher scripts are intentionally outside Linux CI.
+
+Verification: configuration was added and documented. Local `ruff`/`mypy` execution is deferred
+to the dependency-version pass because the current prompt explicitly marks several pinned
+versions as suspicious and the local venv does not yet include these new dev tools.
+
 ## 2026-09-01 - Frontend App Split
 
 Completed prompt point 4:
