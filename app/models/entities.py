@@ -86,6 +86,9 @@ class Job(TimestampMixin, Base):
     payload: Mapped[dict | None] = mapped_column(JSON)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     episode: Mapped[Episode | None] = relationship(back_populates="jobs")
     stages: Mapped[list["JobStage"]] = relationship(back_populates="job", cascade="all, delete-orphan")
@@ -238,6 +241,8 @@ class StoryArcExport(TimestampMixin, Base):
     arc_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     transition_style: Mapped[str] = mapped_column(String(32), default="cut", nullable=False)
     narration_included: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    render_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
 
     story_arc: Mapped[StoryArc] = relationship(back_populates="exports")
 
@@ -353,6 +358,8 @@ class Export(TimestampMixin, Base):
     preset_name: Mapped[str] = mapped_column(String(64), default="youtube_shorts", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="completed", nullable=False, index=True)
     candidate_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    render_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
 
 
 class AppSetting(TimestampMixin, Base):

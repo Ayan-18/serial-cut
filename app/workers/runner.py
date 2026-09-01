@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
+import socket
 from time import monotonic
 from typing import Callable
-from threading import Lock
+from threading import Event, Lock, Thread
+from uuid import uuid4
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.application.auto import auto_approve_and_export
 from app.application.queue_control import get_queue_state
@@ -16,10 +19,9 @@ from app.application.stage4 import render_candidate
 from app.application.story_arc_render import render_story_arc
 from app.domain.enums import JobKind, JobStatus
 from app.infrastructure.config import Settings
-from app.infrastructure.database import SessionLocal
 from app.infrastructure.processes import ProcessCancelledError, run_process_cancellable
 from app.models.entities import Job, JobStage
-from app.workers.queue import next_queued_job
+from app.workers.queue import claim_next_queued_job, heartbeat_job_lease, recover_interrupted_jobs
 
 
 Stage2Func = Callable[..., object]
@@ -27,6 +29,7 @@ Stage3Func = Callable[..., object]
 
 
 _RUNNER_LOCK = Lock()
+_WORKER_ID = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:12]}"
 
 
 @dataclass(frozen=True)
@@ -63,21 +66,19 @@ def _run_next_job_unlocked(
 ) -> WorkerRunResult:
     if get_queue_state(session) == "paused":
         return WorkerRunResult(False, None, "paused", "Очередь на паузе")
-    job = next_queued_job(session)
+    recover_interrupted_jobs(session)
+    session.commit()
+    job = claim_next_queued_job(session, _WORKER_ID)
     if job is None:
         return WorkerRunResult(False, None, "idle", "Нет задач в очереди")
+    heartbeat = _LeaseHeartbeat(session.get_bind(), job.id, _WORKER_ID)
+    heartbeat.start()
     if job.episode_id is None and job.kind != JobKind.RENDER_STORY_ARC.value:
-        job.status = JobStatus.FAILED.value
-        job.error_message = "У job нет episode_id"
-        job.progress_message = "Ошибка запуска"
-        job.finished_at = datetime.now(timezone.utc)
-        return WorkerRunResult(True, job.id, job.status, job.error_message)
+        heartbeat.stop()
+        message = "У job нет episode_id"
+        _record_job_terminal(session, job.id, JobStatus.FAILED.value, message, "Ошибка запуска")
+        return WorkerRunResult(True, job.id, JobStatus.FAILED.value, message)
 
-    job.status = JobStatus.RUNNING.value
-    job.error_message = None
-    job.progress_message = "Запуск задачи"
-    job.started_at = datetime.now(timezone.utc)
-    job.finished_at = None
     payload = job.payload or {}
     resume_from_stage = str(payload.get("resume_from_stage") or "")
     job.progress = _resume_progress(resume_from_stage)
@@ -87,7 +88,7 @@ def _run_next_job_unlocked(
         cancellable_runner = lambda args, timeout: run_process_cancellable(
             args,
             timeout,
-            lambda: _job_cancel_requested(job.id),
+            lambda: _job_cancel_requested(session.get_bind(), job.id),
         )
         if job.kind == JobKind.RENDER_CLIP.value:
             if resume_from_stage and resume_from_stage != "render_clip":
@@ -132,7 +133,7 @@ def _run_next_job_unlocked(
                     progress_callback=lambda current, total, _message: _update_render_progress(
                         session, job, current, total
                     ),
-                    cancel_check=lambda: _job_cancel_requested(job.id),
+                    cancel_check=lambda: _job_cancel_requested(session.get_bind(), job.id),
                     runner=cancellable_runner,
                 ),
                 0.95,
@@ -155,18 +156,20 @@ def _run_next_job_unlocked(
                     job,
                     "stage2_media",
                     (
-                        lambda: stage2_func(
-                            session,
-                            job.episode_id,
-                            settings,
-                            progress_callback=lambda value, message: _update_analysis_progress(
-                                session, job, 0.0, 0.45, value, message
-                            ),
-                            cancel_check=lambda: _job_cancel_requested(job.id),
-                            runner=cancellable_runner,
+                        (
+                            lambda: stage2_func(
+                                session,
+                                job.episode_id,
+                                settings,
+                                progress_callback=lambda value, message: _update_analysis_progress(
+                                    session, job, 0.0, 0.45, value, message
+                                ),
+                                cancel_check=lambda: _job_cancel_requested(session.get_bind(), job.id),
+                                runner=cancellable_runner,
+                            )
                         )
                         if default_stage2
-                        else lambda: stage2_func(session, job.episode_id, settings)
+                        else (lambda: stage2_func(session, job.episode_id, settings))
                     ),
                     0.45,
                 )
@@ -177,17 +180,19 @@ def _run_next_job_unlocked(
                     job,
                     "stage3_candidates",
                     (
-                        lambda: stage3_func(
-                            session,
-                            job.episode_id,
-                            settings,
-                            progress_callback=lambda value, message: _update_analysis_progress(
-                                session, job, 0.45, 0.75, value, message
-                            ),
-                            cancel_check=lambda: _job_cancel_requested(job.id),
+                        (
+                            lambda: stage3_func(
+                                session,
+                                job.episode_id,
+                                settings,
+                                progress_callback=lambda value, message: _update_analysis_progress(
+                                    session, job, 0.45, 0.75, value, message
+                                ),
+                                cancel_check=lambda: _job_cancel_requested(session.get_bind(), job.id),
+                            )
                         )
                         if default_stage3
-                        else lambda: stage3_func(session, job.episode_id, settings)
+                        else (lambda: stage3_func(session, job.episode_id, settings))
                     ),
                     0.75,
                 )
@@ -208,28 +213,42 @@ def _run_next_job_unlocked(
                     ),
                     0.95,
                 )
-        job.status = JobStatus.COMPLETED.value
-        job.progress = 1.0
-        job.current_stage = "completed"
-        job.progress_message = "Задача завершена"
-        job.finished_at = datetime.now(timezone.utc)
-        session.commit()
+        heartbeat.stop()
+        completed = _record_job_terminal(
+            session,
+            job.id,
+            JobStatus.COMPLETED.value,
+            None,
+            "Задача завершена",
+            progress=1.0,
+            current_stage="completed",
+        )
         elapsed = monotonic() - started
+        if not completed:
+            return WorkerRunResult(False, job.id, "lost_lease", "Lease задачи уже перешёл другому worker")
         return WorkerRunResult(True, job.id, job.status, f"Задача завершена за {elapsed:.1f} сек")
     except CancelledError as exc:
-        job.status = JobStatus.PAUSED.value
-        job.error_message = str(exc)
-        job.progress_message = "Задача остановлена"
-        job.finished_at = datetime.now(timezone.utc)
-        session.commit()
-        return WorkerRunResult(True, job.id, job.status, str(exc))
+        heartbeat.stop()
+        _record_job_terminal(
+            session,
+            job.id,
+            JobStatus.PAUSED.value,
+            str(exc),
+            "Задача остановлена",
+        )
+        return WorkerRunResult(True, job.id, JobStatus.PAUSED.value, str(exc))
     except Exception as exc:
-        job.status = JobStatus.FAILED.value
-        job.error_message = str(exc)
-        job.progress_message = "Ошибка выполнения"
-        job.finished_at = datetime.now(timezone.utc)
-        session.commit()
-        return WorkerRunResult(True, job.id, job.status, str(exc))
+        heartbeat.stop()
+        _record_job_terminal(
+            session,
+            job.id,
+            JobStatus.FAILED.value,
+            str(exc),
+            "Ошибка выполнения",
+        )
+        return WorkerRunResult(True, job.id, JobStatus.FAILED.value, str(exc))
+    finally:
+        heartbeat.stop()
 
 
 def estimate_eta_seconds(session: Session) -> float | None:
@@ -275,6 +294,7 @@ def _resume_progress(stage: str) -> float:
 
 
 def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], progress: float) -> None:
+    job_id = job.id
     stage = _get_or_create_stage(session, job, name)
     stage.status = JobStatus.RUNNING.value
     stage.started_at = datetime.now(timezone.utc).isoformat()
@@ -284,18 +304,10 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
     try:
         fn()
     except ProcessCancelledError as exc:
-        stage.status = JobStatus.PAUSED.value
-        stage.finished_at = datetime.now(timezone.utc).isoformat()
-        stage.error_message = str(exc)
-        job.progress_message = str(exc)
-        session.commit()
+        _record_stage_terminal(session, job_id, name, JobStatus.PAUSED.value, str(exc))
         raise CancelledError(str(exc)) from exc
     except Exception as exc:
-        stage.status = JobStatus.FAILED.value
-        stage.finished_at = datetime.now(timezone.utc).isoformat()
-        stage.error_message = str(exc)
-        job.progress_message = f"Ошибка: {exc}"
-        session.commit()
+        _record_stage_terminal(session, job_id, name, JobStatus.FAILED.value, str(exc))
         raise
     else:
         stage.status = JobStatus.COMPLETED.value
@@ -321,13 +333,107 @@ def _raise_if_cancelled(session: Session, job: Job) -> None:
         raise CancelledError("Задача остановлена по запросу пользователя")
 
 
-def _job_cancel_requested(job_id: int) -> bool:
-    with SessionLocal() as check_session:
+def _job_cancel_requested(bind, job_id: int) -> bool:
+    factory = sessionmaker(bind=bind, expire_on_commit=False, autoflush=False)
+    with factory() as check_session:
         current = check_session.get(Job, job_id)
         return bool(
             current is not None
             and (current.cancel_requested or current.status == JobStatus.CANCEL_REQUESTED.value)
         )
+
+
+class _LeaseHeartbeat:
+    def __init__(self, bind, job_id: int, worker_id: str, interval_seconds: float = 20.0) -> None:
+        self._factory = sessionmaker(bind=bind, expire_on_commit=False, autoflush=False)
+        self._job_id = job_id
+        self._worker_id = worker_id
+        self._interval_seconds = interval_seconds
+        self._stop = Event()
+        self._thread = Thread(target=self._run, name=f"job-lease-{job_id}", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            with self._factory() as lease_session:
+                try:
+                    if not heartbeat_job_lease(lease_session, self._job_id, self._worker_id):
+                        return
+                except Exception:
+                    lease_session.rollback()
+
+
+def _record_stage_terminal(
+    session: Session,
+    job_id: int,
+    stage_name: str,
+    status: str,
+    error_message: str,
+) -> None:
+    bind = session.get_bind()
+    session.rollback()
+    factory = sessionmaker(bind=bind, expire_on_commit=False, autoflush=False)
+    with factory() as terminal_session:
+        stage = terminal_session.scalar(
+            select(JobStage).where(JobStage.job_id == job_id, JobStage.name == stage_name)
+        )
+        current = terminal_session.get(Job, job_id)
+        if current is None or current.worker_id != _WORKER_ID:
+            return
+        if stage is not None:
+            stage.status = status
+            stage.finished_at = datetime.now(timezone.utc).isoformat()
+            stage.error_message = error_message
+        current.progress_message = (
+            error_message if status == JobStatus.PAUSED.value else f"Ошибка: {error_message}"
+        )
+        terminal_session.commit()
+    session.expire_all()
+
+
+def _record_job_terminal(
+    session: Session,
+    job_id: int,
+    status: str,
+    error_message: str | None,
+    progress_message: str,
+    *,
+    progress: float | None = None,
+    current_stage: str | None = None,
+) -> bool:
+    bind = session.get_bind()
+    session.rollback()
+    factory = sessionmaker(bind=bind, expire_on_commit=False, autoflush=False)
+    with factory() as terminal_session:
+        current = terminal_session.get(Job, job_id)
+        if current is None or current.worker_id != _WORKER_ID:
+            return False
+        current.status = status
+        current.error_message = error_message
+        current.progress_message = progress_message
+        current.finished_at = datetime.now(timezone.utc)
+        current.cancel_requested = False
+        if progress is not None:
+            current.progress = progress
+        if current_stage is not None:
+            current.current_stage = current_stage
+        _clear_job_lease(current)
+        terminal_session.commit()
+    session.expire_all()
+    return True
+
+
+def _clear_job_lease(job: Job) -> None:
+    job.worker_id = None
+    job.lease_expires_at = None
+    job.heartbeat_at = None
 
 
 def _update_render_progress(session: Session, job: Job, current: int, total: int) -> None:

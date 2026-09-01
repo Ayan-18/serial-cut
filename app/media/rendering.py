@@ -51,6 +51,7 @@ def build_render_args(
     preset: RenderPresetConfig | None = None,
     loudnorm_filter: str = "loudnorm=I=-16:TP=-1.5:LRA=11",
     extra_video_filters: list[str] | None = None,
+    audio_stream_index: int | None = None,
 ) -> list[str]:
     preset = preset or RENDER_PRESETS["youtube_shorts"]
     filters = [
@@ -76,6 +77,10 @@ def build_render_args(
         f"{start_time:.3f}",
         "-i",
         str(input_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        f"0:{audio_stream_index}" if audio_stream_index is not None else "0:a:0?",
         "-t",
         f"{duration:.3f}",
         "-vf",
@@ -103,6 +108,7 @@ def build_loudnorm_analysis_args(
     input_path: Path,
     start_time: float,
     end_time: float,
+    audio_stream_index: int | None = None,
 ) -> list[str]:
     duration = max(0.1, end_time - start_time)
     return [
@@ -112,6 +118,8 @@ def build_loudnorm_analysis_args(
         f"{start_time:.3f}",
         "-i",
         str(input_path),
+        "-map",
+        f"0:{audio_stream_index}" if audio_stream_index is not None else "0:a:0?",
         "-t",
         f"{duration:.3f}",
         "-af",
@@ -184,6 +192,7 @@ def render_clip(
     loudnorm_two_pass: bool = False,
     extra_video_filters: list[str] | None = None,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
+    audio_stream_index: int | None = None,
 ) -> RenderedArtifacts:
     output_dir.mkdir(parents=True, exist_ok=True)
     subtitle_path = output_dir / f"{slug}.ass" if subtitle_text else None
@@ -194,7 +203,16 @@ def render_clip(
     preset = RENDER_PRESETS.get(preset_name, RENDER_PRESETS["youtube_shorts"])
     loudnorm_filter = "loudnorm=I=-16:TP=-1.5:LRA=11"
     if loudnorm_two_pass:
-        analysis = runner(build_loudnorm_analysis_args(ffmpeg_path, input_path, start_time, end_time), 1800)
+        analysis = runner(
+            build_loudnorm_analysis_args(
+                ffmpeg_path,
+                input_path,
+                start_time,
+                end_time,
+                audio_stream_index,
+            ),
+            1800,
+        )
         if analysis.returncode == 0:
             loudnorm_filter = loudnorm_second_pass_filter(parse_loudnorm_stats(analysis.stderr))
     def run_video_render(enable_nvenc: bool) -> ProcessResult:
@@ -214,6 +232,7 @@ def render_clip(
                 preset=preset,
                 loudnorm_filter=loudnorm_filter,
                 extra_video_filters=extra_video_filters,
+                audio_stream_index=audio_stream_index,
             ),
             3600,
         )

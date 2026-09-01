@@ -66,7 +66,9 @@ class FFmpegMediaPreparer:
 
         base_dir = settings.cache_dir / "episodes" / episode.fingerprint
         audio_path = base_dir / "audio" / "ru_16khz_mono.wav"
-        proxy_path = base_dir / "proxy" / "proxy.mp4"
+        # v2 includes the selected Russian audio stream. The versioned name
+        # prevents silently reusing older video-only proxies.
+        proxy_path = base_dir / "proxy" / "proxy-audio-v2.mp4"
         if not audio_path.exists():
             _raise_if_cancelled(self.cancel_check)
             _report(self.progress_callback, 0.10, "Извлечение русской аудиодорожки")
@@ -87,6 +89,7 @@ class FFmpegMediaPreparer:
                 proxy_path,
                 width=settings.proxy_width,
                 crf=settings.proxy_crf,
+                audio_stream_index=episode.selected_audio_stream_index,
                 runner=self.runner,
             )
         _report(self.progress_callback, 0.38, "Proxy-видео готово")

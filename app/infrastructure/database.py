@@ -52,6 +52,29 @@ def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
 
 
+def require_migrated_database(engine: Engine) -> None:
+    """Refuse startup when Alembic was skipped instead of creating an unversioned schema."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import inspect, text
+
+    if not inspect(engine).has_table("alembic_version"):
+        raise RuntimeError(
+            "База SerialCuts не мигрирована. Выполните: .\\.venv\\Scripts\\python.exe -m alembic upgrade head"
+        )
+    config_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+    expected_heads = set(ScriptDirectory.from_config(Config(str(config_path))).get_heads())
+    with engine.connect() as connection:
+        current_heads = set(connection.execute(text("SELECT version_num FROM alembic_version")).scalars())
+    if current_heads != expected_heads:
+        current = ", ".join(sorted(current_heads)) or "нет версии"
+        expected = ", ".join(sorted(expected_heads))
+        raise RuntimeError(
+            f"Версия базы устарела ({current}; нужна {expected}). "
+            "Выполните: .\\.venv\\Scripts\\python.exe -m alembic upgrade head"
+        )
+
+
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
 

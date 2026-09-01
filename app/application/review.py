@@ -154,7 +154,7 @@ def _apply_candidate_edits(
     candidate.edit_revision += 1
     if candidate.status == "rendered":
         candidate.status = "approved"
-    _invalidate_candidate_derivatives(session, candidate, boundary_changed)
+    invalidate_candidate_derivatives(session, candidate, boundary_changed)
 
 
 def _snap_speech_boundary(session: Session, episode_id: int, value: float, is_start: bool) -> float:
@@ -170,7 +170,7 @@ def _snap_speech_boundary(session: Session, episode_id: int, value: float, is_st
     return segment.start_time if is_start else segment.end_time
 
 
-def _invalidate_candidate_derivatives(
+def invalidate_candidate_derivatives(
     session: Session,
     candidate: ClipCandidate,
     boundary_changed: bool,

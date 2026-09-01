@@ -258,9 +258,10 @@ def test_review_and_render_are_idempotent(session, tmp_path: Path, monkeypatch):
     def fake_render_clip(*args, **kwargs):
         nonlocal render_calls
         render_calls += 1
-        out = tmp_path / "out" / "clip.mp4"
-        meta = tmp_path / "out" / "clip.json"
-        sub = tmp_path / "out" / "clip.ass"
+        slug = args[3]
+        out = tmp_path / "out" / f"{slug}.mp4"
+        meta = tmp_path / "out" / f"{slug}.json"
+        sub = tmp_path / "out" / f"{slug}.ass"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"mp4")
         meta.write_text("{}", encoding="utf-8")
@@ -278,6 +279,9 @@ def test_review_and_render_are_idempotent(session, tmp_path: Path, monkeypatch):
     )
 
     assert first_render.export_id == second_render.export_id
-    assert first_render.export_id == forced_render.export_id
+    assert first_render.export_id != forced_render.export_id
+    assert first_render.output_path != forced_render.output_path
     assert render_calls == 2
-    assert len(session.scalars(select(Export)).all()) == 1
+    exports = session.scalars(select(Export).order_by(Export.version)).all()
+    assert [item.version for item in exports] == [1, 2]
+    assert exports[0].render_fingerprint == exports[1].render_fingerprint

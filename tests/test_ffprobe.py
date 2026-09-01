@@ -50,18 +50,20 @@ def test_extract_audio_command_maps_selected_stream_and_normalizes_for_whisper()
     assert args[-1] == r"C:\cache\audio.wav"
 
 
-def test_proxy_command_uses_video_only_scaled_h264_output():
+def test_proxy_command_uses_selected_audio_and_scaled_h264_output():
     args = build_proxy_args(
         "ffmpeg",
         Path(r"D:\Видео тест\серия 01.mkv"),
         Path(r"C:\cache\proxy.mp4"),
         width=640,
         crf=28,
+        audio_stream_index=2,
     )
 
     assert "-map" in args
     assert "0:v:0" in args
-    assert "-an" in args
+    assert "0:2" in args
+    assert "aac" in args
     assert "scale=640:-2" in args
     assert "libx264" in args
     assert args[-1] == r"C:\cache\proxy.mp4"

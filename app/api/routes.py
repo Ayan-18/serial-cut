@@ -78,7 +78,8 @@ from app.application.candidate_editor import (
     subtitles_for_candidate,
 )
 from app.application.auto import auto_approve_and_export
-from app.application.cache import cache_summary, clear_cache
+from app.application.cache import cache_summary, clear_cache, prepare_cache_directory
+from app.application.derived_files import delete_derived_artifacts, delete_derived_tree
 from app.application.characters import (
     add_character_photo,
     assign_speaker_identity,
@@ -179,13 +180,27 @@ def model_diagnostics(session: Session = Depends(get_session)):
 
 @router.get("/cache", response_model=CacheRead)
 def read_cache(session: Session = Depends(get_session)):
-    return cache_summary(effective_settings(session, get_settings()).cache_dir)
+    settings = effective_settings(session, get_settings())
+    prepare_cache_directory(
+        settings.cache_dir,
+        protected_paths=_cache_protected_paths(session, settings.output_dir),
+        allow_existing_unmarked=_is_legacy_default_cache(settings.cache_dir),
+    )
+    return cache_summary(settings.cache_dir)
 
 
 @router.delete("/cache", response_model=CacheRead)
 def delete_cache(payload: CacheClearRequest, session: Session = Depends(get_session)):
     try:
-        return clear_cache(effective_settings(session, get_settings()).cache_dir, confirmed=payload.confirm)
+        _ensure_no_active_jobs(session, "Нельзя очищать кэш, пока есть активные или остановленные задачи")
+        settings = effective_settings(session, get_settings())
+        return clear_cache(
+            settings.cache_dir,
+            confirmed=payload.confirm,
+            protected_paths=_cache_protected_paths(session, settings.output_dir),
+        )
+    except ProcessingBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -197,9 +212,24 @@ def read_settings(session: Session = Depends(get_session)):
 
 @router.put("/settings", response_model=RuntimeSettingsRead)
 def update_settings(payload: RuntimeSettings, session: Session = Depends(get_session)):
-    result = save_runtime_settings(session, payload)
-    session.commit()
-    return result.model_dump(mode="json")
+    try:
+        current = get_runtime_settings(session, get_settings())
+        if payload.cache_dir.expanduser().resolve(strict=False) != current.cache_dir.expanduser().resolve(strict=False):
+            _ensure_no_active_jobs(session, "Нельзя менять кэш, пока есть активные или остановленные задачи")
+        prepare_cache_directory(
+            payload.cache_dir,
+            protected_paths=_cache_protected_paths(session, payload.output_dir),
+            allow_existing_unmarked=_is_legacy_default_cache(payload.cache_dir),
+        )
+        result = save_runtime_settings(session, payload)
+        session.commit()
+        return result.model_dump(mode="json")
+    except ProcessingBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/seasons/import", response_model=ImportResponse)
@@ -450,8 +480,19 @@ def story_arc_export_cover(export_id: int, session: Session = Depends(get_sessio
 @router.delete("/story-arcs/{story_arc_id}")
 def remove_story_arc(story_arc_id: int, session: Session = Depends(get_session)):
     try:
-        delete_story_arc(session, story_arc_id)
+        settings = effective_settings(session, get_settings())
+        artifacts = delete_story_arc(session, story_arc_id)
         session.commit()
+        delete_derived_artifacts(artifacts.paths, [settings.output_dir, settings.cache_dir])
+        delete_derived_tree(
+            settings.cache_dir / "story-arc-segments" / str(story_arc_id),
+            [settings.cache_dir],
+        )
+        for plan_id in artifacts.publishing_plan_ids:
+            delete_derived_tree(
+                settings.output_dir / "publishing" / f"plan-{plan_id}",
+                [settings.output_dir],
+            )
         return {"deleted": True}
     except Exception as exc:
         session.rollback()
@@ -1305,6 +1346,8 @@ def _story_arc_export_read(export: StoryArcExport) -> StoryArcExportRead:
         status=export.status,
         transition_style=export.transition_style,
         narration_included=export.narration_included,
+        version=export.version,
+        render_fingerprint=export.render_fingerprint,
     )
 
 
@@ -1383,3 +1426,34 @@ def _ensure_episode_not_enqueued(session: Session, episode_id: int) -> None:
         raise ProcessingBusyError(
             f"Серия уже обрабатывается задачей №{active_job_id}. Используйте управление очередью."
         )
+
+
+def _ensure_no_active_jobs(session: Session, message: str) -> None:
+    active_job_id = session.scalar(
+        select(Job.id)
+        .where(
+            Job.status.in_(
+                [
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PAUSED.value,
+                    JobStatus.CANCEL_REQUESTED.value,
+                ]
+            )
+        )
+        .limit(1)
+    )
+    if active_job_id is not None:
+        raise ProcessingBusyError(f"{message}. Задача №{active_job_id} ещё не завершена.")
+
+
+def _cache_protected_paths(session: Session, output_dir: Path) -> list[Path]:
+    paths = [Path(__file__).resolve().parents[2], output_dir]
+    paths.extend(Path(item) for item in session.scalars(select(Season.root_path)).all())
+    paths.extend(Path(item) for item in session.scalars(select(Episode.file_path)).all())
+    return paths
+
+
+def _is_legacy_default_cache(cache_dir: Path) -> bool:
+    default_cache = Path(__file__).resolve().parents[2] / "data" / "cache"
+    return cache_dir.expanduser().resolve(strict=False) == default_cache.resolve(strict=False)

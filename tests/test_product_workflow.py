@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from sqlalchemy import select
 
-from app.application.cache import cache_summary, clear_cache
+from app.application.cache import cache_summary, clear_cache, prepare_cache_directory
 from app.application.candidate_editor import (
     EditableSubtitle,
     auto_split_candidate_subtitles,
@@ -246,6 +246,7 @@ def test_cache_cleanup_only_removes_files_inside_cache(tmp_path: Path):
     assert cache_summary(cache_dir).bytes == 4
     with pytest.raises(ValueError, match="подтверждение"):
         clear_cache(cache_dir, confirmed=False)
+    prepare_cache_directory(cache_dir, allow_existing_unmarked=True)
     cleared = clear_cache(cache_dir, confirmed=True)
 
     assert cleared.files == 0

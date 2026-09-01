@@ -6,10 +6,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.api.loopback import LoopbackOnlyMiddleware
 from app.api.routes import router
 from app.api.queue_routes import router as queue_router
 from app.api.search_routes import router as search_router
-from app.infrastructure.database import engine, init_db
+from app.infrastructure.database import engine, require_migrated_database
 from app.workers.background import background_queue
 
 
@@ -23,8 +24,9 @@ async def lifespan(_: FastAPI):
 
 
 def create_app() -> FastAPI:
-    init_db(engine)
+    require_migrated_database(engine)
     app = FastAPI(title="SerialCuts", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(LoopbackOnlyMiddleware)
     app.include_router(router)
     app.include_router(queue_router)
     app.include_router(search_router)

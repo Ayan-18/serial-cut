@@ -151,3 +151,15 @@ def test_story_arc_render_builds_segments_and_concat_export(session, tmp_path, m
     )
     assert reused.export_id == result.export_id
     assert reused.duration_seconds == 59.75
+
+    rerendered = render_story_arc(
+        session,
+        arc.id,
+        Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
+        runner=fake_runner,
+        force_rerender=True,
+        transition_style="fade",
+    )
+    assert rerendered.export_id != result.export_id
+    assert rerendered.output_path != result.output_path
+    assert Path(result.output_path).exists()

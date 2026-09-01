@@ -305,9 +305,27 @@ def test_stage3_keeps_story_arc_snapshot_when_candidates_are_regenerated(session
     session.flush()
     session.add(WordTimestamp(segment_id=transcript.id, start_time=1, end_time=2, word="Герой"))
     session.add(Scene(episode_id=episode_id, start_time=0, end_time=40))
-    settings = Settings(asr_adapter="stub", llm_adapter="stub")
+    settings = Settings(
+        asr_adapter="stub",
+        llm_adapter="stub",
+        cache_dir=tmp_path / "cache",
+        output_dir=tmp_path / "out",
+    )
     run_stage3_candidate_analysis(session, episode_id, settings)
     old_candidate = session.scalar(select(ClipCandidate).where(ClipCandidate.episode_id == episode_id))
+    old_video = settings.output_dir / "old.mp4"
+    old_metadata = settings.output_dir / "old.json"
+    old_video.parent.mkdir(parents=True)
+    old_video.write_bytes(b"derived")
+    old_metadata.write_text("{}", encoding="utf-8")
+    session.add(
+        Export(
+            candidate_id=old_candidate.id,
+            output_path=str(old_video),
+            metadata_path=str(old_metadata),
+        )
+    )
+    session.flush()
     arc = create_story_arc_plan(session, StoryArcPlanRequest(season_id=session.get(Episode, episode_id).season_id))
     old_segment_id = arc.segments[0].id
 
@@ -318,6 +336,7 @@ def test_stage3_keeps_story_arc_snapshot_when_candidates_are_regenerated(session
     assert snapshot.manually_edited is True
     assert "оставлен снимок границ" in snapshot.note
     assert session.get(ClipCandidate, old_candidate.id) is None
+    assert not old_video.exists() and not old_metadata.exists()
 
 
 def test_worker_marks_cancelled_render_as_paused(session, tmp_path, monkeypatch):

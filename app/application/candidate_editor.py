@@ -131,6 +131,7 @@ def save_candidate_subtitles(
                 sort_order=index,
             )
         )
+    _invalidate_after_subtitle_change(session, candidate)
     session.flush()
     return subtitles_for_candidate(session, candidate_id)
 
@@ -199,7 +200,9 @@ def auto_split_candidate_subtitles(
 
 def reset_candidate_subtitles(session: Session, candidate_id: int) -> list[EditableSubtitle]:
     candidate = _candidate(session, candidate_id)
-    session.execute(delete(CandidateSubtitle).where(CandidateSubtitle.candidate_id == candidate_id))
+    result = session.execute(delete(CandidateSubtitle).where(CandidateSubtitle.candidate_id == candidate_id))
+    if result.rowcount:
+        _invalidate_after_subtitle_change(session, candidate)
     session.flush()
     return generated_subtitles(session, candidate)
 
@@ -268,3 +271,12 @@ def _unique(items: list[str]) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+def _invalidate_after_subtitle_change(session: Session, candidate: ClipCandidate) -> None:
+    from app.application.review import invalidate_candidate_derivatives
+
+    candidate.edit_revision += 1
+    if candidate.status == "rendered":
+        candidate.status = "approved"
+    invalidate_candidate_derivatives(session, candidate, boundary_changed=False)

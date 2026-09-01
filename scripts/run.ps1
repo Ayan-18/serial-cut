@@ -4,6 +4,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($HostName -notin @("127.0.0.1", "localhost", "::1")) {
+  throw "SerialCuts разрешено запускать только на 127.0.0.1, localhost или ::1."
+}
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $env:PYTHONUTF8 = "1"
 $Python = ".\.venv\Scripts\python.exe"

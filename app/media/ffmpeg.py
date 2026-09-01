@@ -22,8 +22,15 @@ def build_extract_audio_args(
     return args
 
 
-def build_proxy_args(ffmpeg_path: str, media_path: Path, output_path: Path, width: int, crf: int) -> list[str]:
-    return [
+def build_proxy_args(
+    ffmpeg_path: str,
+    media_path: Path,
+    output_path: Path,
+    width: int,
+    crf: int,
+    audio_stream_index: int | None = None,
+) -> list[str]:
+    args = [
         ffmpeg_path,
         "-hide_banner",
         "-y",
@@ -31,7 +38,8 @@ def build_proxy_args(ffmpeg_path: str, media_path: Path, output_path: Path, widt
         str(media_path),
         "-map",
         "0:v:0",
-        "-an",
+        "-map",
+        f"0:{audio_stream_index}" if audio_stream_index is not None else "0:a:0?",
         "-vf",
         f"scale={width}:-2",
         "-c:v",
@@ -40,10 +48,15 @@ def build_proxy_args(ffmpeg_path: str, media_path: Path, output_path: Path, widt
         "veryfast",
         "-crf",
         str(crf),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
         "-movflags",
         "+faststart",
         str(output_path),
     ]
+    return args
 
 
 def extract_audio(
@@ -73,13 +86,14 @@ def create_proxy(
     output_path: Path,
     width: int,
     crf: int,
+    audio_stream_index: int | None = None,
     timeout_seconds: int = 1800,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> Path:
     temp_path = temp_sibling(output_path).with_suffix(".mp4")
     temp_path.parent.mkdir(parents=True, exist_ok=True)
     result = runner(
-        build_proxy_args(ffmpeg_path, media_path, temp_path, width, crf),
+        build_proxy_args(ffmpeg_path, media_path, temp_path, width, crf, audio_stream_index),
         timeout_seconds,
     )
     if result.returncode != 0:

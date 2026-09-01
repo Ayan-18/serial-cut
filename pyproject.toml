@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=83"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -15,7 +15,7 @@ dependencies = [
   "pydantic-settings==2.10.1",
   "SQLAlchemy==2.0.52",
   "alembic==1.19.1",
-  "python-dotenv==1.1.1",
+  "python-dotenv==1.2.2",
   "requests==2.34.2",
   "numpy==2.4.6",
   "opencv-python-headless==5.0.0.93",
@@ -28,7 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest==8.4.1",
+  "pytest==9.0.3",
   "pytest-cov==6.2.1",
 ]
 

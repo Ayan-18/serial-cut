@@ -1,5 +1,30 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - Remaining Full-Audit Hardening
+
+Completed audit findings 1-4, 6, 12 and 13:
+
+- Cache cleanup now requires a validated `.serialcuts-cache` marker, rejects paths that could contain
+  the project, an imported episode or output, and is blocked while resumable jobs exist.
+- Proxy files include the selected Russian AAC track and use a v2 filename so silent legacy proxies
+  are not reused. Candidate and StoryArc render commands explicitly map each episode's selected
+  audio stream.
+- SQLite jobs are atomically claimed with a process identity, renewable lease and heartbeat. Only one
+  heavy job can own the global lease across application processes; expired leases are recovered, and
+  failed SQLAlchemy sessions roll back before stage/job failure is recorded in a fresh transaction.
+- Candidate and StoryArc exports are immutable versions with unique paths and complete render
+  fingerprints (source, stream, ranges, crop, subtitles/style, preset, loudnorm, transitions and
+  narration content). Publishing plans therefore keep pointing to the exact MP4 they were built for.
+- The HTTP app is loopback-only at settings, launcher and ASGI boundaries. Startup no longer calls
+  `create_all`; it requires the current Alembic revision and provides an upgrade command otherwise.
+- Stage 3 and StoryArc deletion clean only explicit derived files contained by cache/output roots.
+- Updated advisory-affected tooling to python-dotenv 1.2.2, pytest 9.0.3 and setuptools 84.0.0.
+- Added Alembic revision `0013_remaining_audit_hardening`; upgraded the live database to head.
+
+Verification: backend suite passed (`101 tests`, one upstream Starlette warning); frontend Vitest
+passed (`6 tests`); frontend production build passed; `pip check`, Alembic current and every system
+check passed. Original media was not modified and no media/transcript data left the computer.
+
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
 ## 2026-09-01 - Audit Weaknesses 5, 7-11 And 14

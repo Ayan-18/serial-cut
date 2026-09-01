@@ -181,6 +181,8 @@ class StoryArcExportRead(BaseModel):
     status: str
     transition_style: str = "cut"
     narration_included: bool = False
+    version: int = 1
+    render_fingerprint: str | None = None
 
 
 class StoryArcRead(BaseModel):
@@ -580,6 +582,8 @@ class ExportRead(BaseModel):
     include_subtitles: bool
     preset_name: str
     status: str
+    version: int = 1
+    render_fingerprint: str | None = None
 
 
 class AutoExportRequest(BaseModel):

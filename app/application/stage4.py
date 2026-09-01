@@ -4,15 +4,17 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Callable
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessResult, run_process
-from app.media.rendering import detect_nvenc, render_clip
+from app.media.rendering import RENDER_PRESETS, detect_nvenc, render_clip
 from app.application.candidate_editor import subtitle_cues_for_render
+from app.application.render_fingerprint import canonical_render_fingerprint, source_signature
 from app.media.subtitles import render_ass
 from app.models.entities import ClipCandidate, Episode, Export
 
@@ -53,26 +55,6 @@ def render_candidate(
     if episode is None:
         raise ValueError(f"Episode {candidate.episode_id} not found")
     resolved_preset = preset_name or settings.render_preset
-    existing = session.scalar(
-        select(Export).where(Export.candidate_id == candidate_id).order_by(Export.updated_at.desc(), Export.id.desc())
-    )
-    reusable = (
-        existing is not None
-        and existing.status == "completed"
-        and existing.candidate_revision == candidate.edit_revision
-        and existing.include_subtitles == include_subtitles
-        and existing.preset_name == resolved_preset
-        and Path(existing.output_path).exists()
-    )
-    if reusable and not force_rerender:
-        return RenderResult(
-            candidate_id,
-            existing.id,
-            existing.output_path,
-            existing.subtitle_path,
-            existing.cover_path,
-        )
-
     cues = subtitle_cues_for_render(
         session,
         candidate,
@@ -88,8 +70,62 @@ def render_candidate(
         if include_subtitles
         else None
     )
+    resolved_loudnorm = settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass
+    render_fingerprint = canonical_render_fingerprint(
+        {
+            "kind": "candidate",
+            "candidate_id": candidate.id,
+            "candidate_revision": candidate.edit_revision,
+            "source": source_signature(Path(episode.file_path)),
+            "episode_fingerprint": episode.fingerprint,
+            "audio_stream_index": episode.selected_audio_stream_index,
+            "range": [candidate.start_time, candidate.end_time],
+            "crop": {
+                "mode": candidate.crop_mode,
+                "offset_x": candidate.crop_offset_x,
+                "scale": candidate.crop_scale,
+                "keyframes": candidate.crop_keyframes_json,
+            },
+            "subtitles": subtitle_text,
+            "subtitle_style": {
+                "font": settings.subtitle_font_name,
+                "size": settings.subtitle_font_size,
+                "safe_zone": settings.subtitle_safe_zone,
+                "speaker_names": settings.subtitle_show_speaker_names,
+            },
+            "include_subtitles": include_subtitles,
+            "preset": resolved_preset,
+            "loudnorm_two_pass": resolved_loudnorm,
+            "encoder_preference": use_nvenc,
+        }
+    )
+    existing = session.scalar(
+        select(Export)
+        .where(
+            Export.candidate_id == candidate_id,
+            Export.render_fingerprint == render_fingerprint,
+            Export.status == "completed",
+        )
+        .order_by(Export.version.desc(), Export.id.desc())
+    )
+    if existing is not None and Path(existing.output_path).exists() and not force_rerender:
+        return RenderResult(
+            candidate_id,
+            existing.id,
+            existing.output_path,
+            existing.subtitle_path,
+            existing.cover_path,
+        )
+
     session.commit()
-    slug = export_slug(settings.export_filename_template, episode, candidate)
+    version = int(
+        session.scalar(select(func.coalesce(func.max(Export.version), 0)).where(Export.candidate_id == candidate.id))
+        or 0
+    ) + 1
+    slug = (
+        f"{export_slug(settings.export_filename_template, episode, candidate)}-"
+        f"v{version:03}-{render_fingerprint[:8]}-{uuid4().hex[:8]}"
+    )
     resolved_nvenc = detect_nvenc(settings.ffmpeg_path, runner) if use_nvenc is None else use_nvenc
     artifacts = render_clip(
         settings.ffmpeg_path,
@@ -109,17 +145,20 @@ def render_candidate(
             "crop_keyframes": candidate.crop_keyframes_json,
             "start_time": candidate.start_time,
             "end_time": candidate.end_time,
+            "version": version,
+            "render_fingerprint": render_fingerprint,
+            "audio_stream_index": episode.selected_audio_stream_index,
         },
         crop_offset_x=candidate.crop_offset_x,
         crop_scale=candidate.crop_scale,
         crop_keyframes=candidate.crop_keyframes_json,
         use_nvenc=resolved_nvenc,
         preset_name=resolved_preset,
-        loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,
+        loudnorm_two_pass=resolved_loudnorm,
         runner=runner,
+        audio_stream_index=episode.selected_audio_stream_index,
     )
-    export = existing or Export(candidate_id=candidate.id, output_path=str(artifacts.output_path))
-    export.output_path = str(artifacts.output_path)
+    export = Export(candidate_id=candidate.id, output_path=str(artifacts.output_path))
     export.metadata_path = str(artifacts.metadata_path)
     export.subtitle_path = str(artifacts.subtitle_path) if artifacts.subtitle_path else None
     export.cover_path = str(artifacts.cover_path) if artifacts.cover_path else None
@@ -127,9 +166,13 @@ def render_candidate(
     export.preset_name = resolved_preset
     export.status = "completed"
     export.candidate_revision = candidate.edit_revision
+    export.version = version
+    export.render_fingerprint = render_fingerprint
+    preset = RENDER_PRESETS.get(resolved_preset, RENDER_PRESETS["youtube_shorts"])
+    export.width = preset.width
+    export.height = preset.height
     candidate.thumbnail_path = export.cover_path
-    if existing is None:
-        session.add(export)
+    session.add(export)
     candidate.status = "rendered"
     episode.stage = EpisodeStage.RENDERED.value
     session.commit()
@@ -195,6 +238,7 @@ def render_candidate_preview(
         preset_name="preview",
         loudnorm_two_pass=False,
         runner=runner,
+        audio_stream_index=episode.selected_audio_stream_index,
     )
     return PreviewRenderResult(
         candidate.id,

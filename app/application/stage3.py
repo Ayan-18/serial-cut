@@ -13,6 +13,7 @@ from app.analysis.validation import adjust_candidate_boundaries, dedupe_candidat
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessCancelledError
+from app.application.derived_files import delete_derived_artifacts, delete_derived_tree
 from app.models.entities import (
     CandidateSubtitle,
     ClipCandidate,
@@ -139,7 +140,15 @@ def run_stage3_candidate_analysis(
         )
     session.add_all(new_rows)
     session.flush()
+    obsolete_artifacts: list[str | None] = []
     if previous_candidate_ids:
+        previous_exports = session.scalars(
+            select(Export).where(Export.candidate_id.in_(previous_candidate_ids))
+        ).all()
+        for item in previous_exports:
+            obsolete_artifacts.extend(
+                [item.output_path, item.metadata_path, item.subtitle_path, item.cover_path]
+            )
         linked_segments = session.scalars(
             select(StoryArcSegment).where(StoryArcSegment.candidate_id.in_(previous_candidate_ids))
         ).all()
@@ -172,6 +181,11 @@ def run_stage3_candidate_analysis(
         session.execute(delete(ClipCandidate).where(ClipCandidate.id.in_(previous_candidate_ids)))
     episode.stage = EpisodeStage.CANDIDATES_GENERATED.value
     session.commit()
+    delete_derived_artifacts(obsolete_artifacts, [settings.output_dir, settings.cache_dir])
+    delete_derived_tree(
+        settings.cache_dir / "previews" / episode.fingerprint,
+        [settings.cache_dir],
+    )
     _report(progress_callback, 1.0, "Кандидаты готовы")
     return Stage3Result(
         episode_id=episode_id,

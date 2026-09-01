@@ -10,7 +10,18 @@ from app.analysis.text_similarity import natural_key, semantic_similarity
 from app.analysis.local_text import generate_local_text
 from app.analysis.schemas import extract_json_object
 from app.infrastructure.config import Settings
-from app.models.entities import Character, ClipCandidate, Episode, Season, SpeakerIdentity, StoryArc, StoryArcSegment, TranscriptSegment
+from app.models.entities import (
+    Character,
+    ClipCandidate,
+    Episode,
+    PublishingPlan,
+    Season,
+    SpeakerIdentity,
+    StoryArc,
+    StoryArcExport,
+    StoryArcSegment,
+    TranscriptSegment,
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +42,12 @@ class StoryArcBuildItem:
     episode: Episode
     score: float
     reason: str
+
+
+@dataclass(frozen=True)
+class StoryArcDeleteArtifacts:
+    paths: list[str]
+    publishing_plan_ids: list[int]
 
 
 @dataclass(frozen=True)
@@ -105,12 +122,33 @@ def get_story_arc(session: Session, story_arc_id: int) -> StoryArc:
     return _load_arc(session, story_arc_id)
 
 
-def delete_story_arc(session: Session, story_arc_id: int) -> None:
+def delete_story_arc(session: Session, story_arc_id: int) -> StoryArcDeleteArtifacts:
     arc = session.get(StoryArc, story_arc_id)
     if arc is None:
         raise ValueError("Арка не найдена")
+    exports = session.scalars(
+        select(StoryArcExport).where(StoryArcExport.story_arc_id == story_arc_id)
+    ).all()
+    paths = [
+        value
+        for item in exports
+        for value in (item.output_path, item.metadata_path, item.cover_path)
+        if value
+    ]
+    plan = dict(arc.plan_json or {})
+    paths.extend(
+        str(value)
+        for value in (plan.get("narration_audio_path"), plan.get("narration_script_path"))
+        if value
+    )
+    publishing_plan_ids = list(
+        session.scalars(
+            select(PublishingPlan.id).where(PublishingPlan.story_arc_id == story_arc_id)
+        ).all()
+    )
     session.delete(arc)
     session.flush()
+    return StoryArcDeleteArtifacts(paths=paths, publishing_plan_ids=publishing_plan_ids)
 
 
 def update_story_arc(session: Session, story_arc_id: int, patch: StoryArcUpdate) -> StoryArc:

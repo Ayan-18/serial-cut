@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.domain.enums import EpisodeStage, JobKind, JobStatus
@@ -130,8 +130,12 @@ def enqueue_story_arc_render(session: Session, story_arc_id: int, payload: dict)
 
 
 def recover_interrupted_jobs(session: Session) -> int:
+    now = datetime.now(timezone.utc)
     jobs = session.scalars(
-        select(Job).where(Job.status.in_([JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value]))
+        select(Job).where(
+            Job.status.in_([JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value]),
+            or_(Job.lease_expires_at.is_(None), Job.lease_expires_at <= now),
+        )
     ).all()
     for job in jobs:
         if job.status == JobStatus.CANCEL_REQUESTED.value:
@@ -145,6 +149,9 @@ def recover_interrupted_jobs(session: Session) -> int:
             job.progress_message = "Ожидает повторного запуска после восстановления"
             job.started_at = None
             job.finished_at = None
+        job.worker_id = None
+        job.lease_expires_at = None
+        job.heartbeat_at = None
     return len(jobs)
 
 
@@ -175,6 +182,9 @@ def retry_job(session: Session, job_id: int) -> Job:
     job.progress_message = "Ожидает повторного запуска"
     job.started_at = None
     job.finished_at = None
+    job.worker_id = None
+    job.lease_expires_at = None
+    job.heartbeat_at = None
     job.attempts += 1
     return job
 
@@ -195,6 +205,9 @@ def retry_job_from_stage(session: Session, job_id: int, stage_name: str) -> Job:
     job.progress_message = "Ожидает повторного запуска выбранного этапа"
     job.started_at = None
     job.finished_at = None
+    job.worker_id = None
+    job.lease_expires_at = None
+    job.heartbeat_at = None
     job.attempts += 1
     start_index = stages.index(stage_name)
     rows = session.scalars(select(JobStage).where(JobStage.job_id == job.id)).all()
@@ -216,12 +229,73 @@ def queue_snapshot(session: Session) -> QueueSnapshot:
     )
 
 
-def next_queued_job(session: Session) -> Job | None:
-    return session.scalar(
-        select(Job)
+def claim_next_queued_job(
+    session: Session,
+    worker_id: str,
+    *,
+    lease_seconds: int = 120,
+) -> Job | None:
+    """Atomically claim one job and one global heavy-processing lease."""
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=max(30, lease_seconds))
+    candidate_id = (
+        select(Job.id)
         .where(Job.status == JobStatus.QUEUED.value)
         .order_by(Job.created_at, Job.id)
+        .limit(1)
+        .scalar_subquery()
     )
+    active_lease = exists(
+        select(Job.id).where(
+            Job.status.in_([JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value]),
+            Job.lease_expires_at > now,
+        )
+    ).correlate(None)
+    claimed_id = session.execute(
+        update(Job)
+        .where(
+            Job.id == candidate_id,
+            Job.status == JobStatus.QUEUED.value,
+            ~active_lease,
+        )
+        .values(
+            status=JobStatus.RUNNING.value,
+            worker_id=worker_id,
+            heartbeat_at=now,
+            lease_expires_at=expires,
+            error_message=None,
+            progress_message="Запуск задачи",
+            started_at=now,
+            finished_at=None,
+        )
+        .returning(Job.id)
+    ).scalar_one_or_none()
+    session.commit()
+    if claimed_id is None:
+        return None
+    session.expire_all()
+    return session.get(Job, claimed_id)
+
+
+def heartbeat_job_lease(
+    session: Session,
+    job_id: int,
+    worker_id: str,
+    *,
+    lease_seconds: int = 120,
+) -> bool:
+    now = datetime.now(timezone.utc)
+    result = session.execute(
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.worker_id == worker_id,
+            Job.status.in_([JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value]),
+        )
+        .values(heartbeat_at=now, lease_expires_at=now + timedelta(seconds=max(30, lease_seconds)))
+    )
+    session.commit()
+    return bool(result.rowcount)
 
 
 def _get_job(session: Session, job_id: int) -> Job:

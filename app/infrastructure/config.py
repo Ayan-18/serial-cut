@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     def validate_llm_base_url(cls, value: str) -> str:
         return validate_loopback_http_url(value)
 
+    @field_validator("app_host")
+    @classmethod
+    def validate_app_host(cls, value: str) -> str:
+        return validate_loopback_host(value)
+
 
 def validate_loopback_http_url(value: str) -> str:
     """Keep transcript-bearing model requests on this computer."""
@@ -94,6 +99,18 @@ def validate_loopback_http_url(value: str) -> str:
     if parsed.username or parsed.password:
         raise ValueError("LLM URL не должен содержать логин или пароль")
     return normalized
+
+
+def validate_loopback_host(value: str) -> str:
+    normalized = value.strip().strip("[]").casefold()
+    if normalized == "localhost":
+        return value.strip()
+    try:
+        if ip_address(normalized).is_loopback:
+            return value.strip()
+    except ValueError:
+        pass
+    raise ValueError("SerialCuts можно запускать только на localhost/loopback")
 
 
 @lru_cache(maxsize=1)

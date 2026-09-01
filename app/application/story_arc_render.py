@@ -6,12 +6,18 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.application.candidate_editor import subtitle_cues_for_render
 from app.application.narration import synthesize_story_arc_narration
+from app.application.render_fingerprint import (
+    canonical_render_fingerprint,
+    small_file_sha256,
+    source_signature,
+)
 from app.infrastructure.atomic import replace_atomically, temp_sibling, write_text_atomically
 from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessCancelledError, ProcessResult, run_process
@@ -47,30 +53,55 @@ def render_story_arc(
     runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> StoryArcRenderResult:
     arc = _load_arc(session, story_arc_id)
-    existing = session.scalar(
-        select(StoryArcExport)
-        .where(StoryArcExport.story_arc_id == story_arc_id)
-        .order_by(StoryArcExport.created_at.desc())
-    )
+    if not arc.segments:
+        raise ValueError("В монтажном плане нет сегментов")
+    preset = RENDER_PRESETS.get(preset_name or settings.render_preset, RENDER_PRESETS["youtube_shorts"])
+    season = session.get(Season, arc.season_id)
+    if season is None:
+        raise ValueError("Сезон не найден")
     narration_path = _narration_path(arc)
     narration_requested = bool(include_narration and (arc.plan_json or {}).get("narration"))
-    reusable = (
-        existing is not None
-        and existing.status == "completed"
-        and existing.arc_revision == arc.edit_revision
-        and existing.include_subtitles == include_subtitles
-        and existing.preset_name == (preset_name or settings.render_preset)
-        and existing.transition_style == transition_style
-        and existing.narration_included == narration_requested
-        and Path(existing.output_path).exists()
+    segment_durations = [max(0.0, item.end_time - item.start_time) for item in arc.segments]
+    expected_duration = (
+        _crossfade_duration(segment_durations) if transition_style == "fade" else sum(segment_durations)
     )
-    if reusable and not force_rerender:
-        reusable_durations = [max(0.0, item.end_time - item.start_time) for item in arc.segments]
-        reusable_duration = (
-            _crossfade_duration(reusable_durations)
-            if existing.transition_style == "fade"
-            else sum(reusable_durations)
+    if narration_requested:
+        plan = dict(arc.plan_json or {})
+        timeline_outdated = (
+            plan.get("narration_timeline_version") != 2
+            or abs(float(plan.get("narration_duration_seconds") or 0.0) - expected_duration) > 0.25
         )
+        if narration_path is None or not narration_path.exists() or timeline_outdated:
+            narration_audio = synthesize_story_arc_narration(
+                session,
+                arc.id,
+                settings,
+                runner=runner,
+                target_duration_seconds=expected_duration,
+            )
+            narration_path = Path(narration_audio.audio_path)
+    resolved_loudnorm = settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass
+    render_fingerprint = _story_arc_render_fingerprint(
+        session,
+        arc,
+        settings,
+        include_subtitles=include_subtitles,
+        preset_name=preset.name,
+        loudnorm_two_pass=resolved_loudnorm,
+        transition_style=transition_style,
+        narration_path=narration_path if narration_requested else None,
+        encoder_preference=use_nvenc,
+    )
+    existing = session.scalar(
+        select(StoryArcExport)
+        .where(
+            StoryArcExport.story_arc_id == story_arc_id,
+            StoryArcExport.render_fingerprint == render_fingerprint,
+            StoryArcExport.status == "completed",
+        )
+        .order_by(StoryArcExport.version.desc(), StoryArcExport.id.desc())
+    )
+    if existing is not None and Path(existing.output_path).exists() and not force_rerender:
         return StoryArcRenderResult(
             arc.id,
             existing.id,
@@ -78,23 +109,26 @@ def render_story_arc(
             existing.metadata_path,
             existing.cover_path,
             existing.segment_count,
-            round(reusable_duration, 3),
+            round(expected_duration, 3),
         )
-    if not arc.segments:
-        raise ValueError("В монтажном плане нет сегментов")
-
-    preset = RENDER_PRESETS.get(preset_name or settings.render_preset, RENDER_PRESETS["youtube_shorts"])
-    season = session.get(Season, arc.season_id)
-    if season is None:
-        raise ValueError("Сезон не найден")
-    output_slug = _story_arc_slug(arc)
+    version = int(
+        session.scalar(
+            select(func.coalesce(func.max(StoryArcExport.version), 0)).where(
+                StoryArcExport.story_arc_id == arc.id
+            )
+        )
+        or 0
+    ) + 1
+    output_slug = (
+        f"{_story_arc_slug(arc)}-v{version:03}-{render_fingerprint[:8]}-{uuid4().hex[:8]}"
+    )
     output_dir = settings.output_dir / _safe_slug(season.title) / f"story-arc-{arc.id}"
     segment_dir = settings.cache_dir / "story-arc-segments" / str(arc.id)
     output_dir.mkdir(parents=True, exist_ok=True)
     segment_dir.mkdir(parents=True, exist_ok=True)
     resolved_nvenc = detect_nvenc(settings.ffmpeg_path, runner) if use_nvenc is None else use_nvenc
     segment_paths: list[Path] = []
-    segment_durations: list[float] = []
+    segment_durations = []
     segment_metadata: list[dict] = []
     first_cover: Path | None = None
 
@@ -157,8 +191,9 @@ def render_story_arc(
             crop_keyframes=crop_keyframes,
             use_nvenc=resolved_nvenc,
             preset_name=preset.name,
-            loudnorm_two_pass=settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass,
+            loudnorm_two_pass=resolved_loudnorm,
             runner=runner,
+            audio_stream_index=episode.selected_audio_stream_index,
         )
         segment_paths.append(artifacts.output_path)
         segment_durations.append(segment.end_time - segment.start_time)
@@ -227,6 +262,8 @@ def render_story_arc(
         "segment_count": len(segment_paths),
         "duration_seconds": round(final_duration, 3),
         "transition_style": transition_style,
+        "version": version,
+        "render_fingerprint": render_fingerprint,
         "segments": segment_metadata,
         "narration": (arc.plan_json or {}).get("narration", []),
     }
@@ -240,8 +277,7 @@ def render_story_arc(
     else:
         cover_path = None
 
-    export = existing or StoryArcExport(story_arc_id=arc.id, output_path=str(output_path))
-    export.output_path = str(output_path)
+    export = StoryArcExport(story_arc_id=arc.id, output_path=str(output_path))
     export.metadata_path = str(metadata_path)
     export.cover_path = str(cover_path) if cover_path else None
     export.width = preset.width
@@ -253,9 +289,10 @@ def render_story_arc(
     export.arc_revision = arc.edit_revision
     export.transition_style = transition_style
     export.narration_included = bool(metadata["narration_included"])
+    export.version = version
+    export.render_fingerprint = render_fingerprint
     arc.status = "rendered"
-    if existing is None:
-        session.add(export)
+    session.add(export)
     session.flush()
     if progress_callback is not None:
         progress_callback(total_steps, total_steps, "StoryArc готов")
@@ -482,6 +519,90 @@ def _narration_path(arc: StoryArc) -> Path | None:
 def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
     if cancel_check is not None and cancel_check():
         raise ProcessCancelledError("Рендер StoryArc остановлен пользователем")
+
+
+def _story_arc_render_fingerprint(
+    session: Session,
+    arc: StoryArc,
+    settings: Settings,
+    *,
+    include_subtitles: bool,
+    preset_name: str,
+    loudnorm_two_pass: bool,
+    transition_style: str,
+    narration_path: Path | None,
+    encoder_preference: bool | None,
+) -> str:
+    segments: list[dict] = []
+    for segment in arc.segments:
+        episode = session.get(Episode, segment.episode_id)
+        candidate = session.get(ClipCandidate, segment.candidate_id) if segment.candidate_id else None
+        if episode is None:
+            raise ValueError(f"Серия сегмента {segment.id} не найдена")
+        cues = (
+            subtitle_cues_for_render(
+                session,
+                candidate,
+                settings.subtitle_show_speaker_names,
+                start_time=segment.start_time,
+                end_time=segment.end_time,
+            )
+            if candidate and include_subtitles
+            else []
+        )
+        subtitle_text = (
+            render_ass(
+                cues,
+                font_name=settings.subtitle_font_name,
+                font_size=settings.subtitle_font_size,
+                safe_zone=settings.subtitle_safe_zone,
+            )
+            if include_subtitles
+            else None
+        )
+        segments.append(
+            {
+                "id": segment.id,
+                "order": segment.sort_order,
+                "range": [segment.start_time, segment.end_time],
+                "title": segment.title,
+                "note": segment.note,
+                "role": segment.role,
+                "candidate_id": segment.candidate_id,
+                "candidate_revision": candidate.edit_revision if candidate else segment.candidate_revision,
+                "crop": {
+                    "mode": candidate.crop_mode if candidate else "blurred-background",
+                    "offset_x": candidate.crop_offset_x if candidate else 0.0,
+                    "scale": candidate.crop_scale if candidate else 1.0,
+                    "keyframes": candidate.crop_keyframes_json if candidate else [],
+                },
+                "source": source_signature(Path(episode.file_path)),
+                "episode_fingerprint": episode.fingerprint,
+                "audio_stream_index": episode.selected_audio_stream_index,
+                "subtitles": subtitle_text,
+            }
+        )
+    return canonical_render_fingerprint(
+        {
+            "kind": "story_arc",
+            "story_arc_id": arc.id,
+            "arc_revision": arc.edit_revision,
+            "segments": segments,
+            "include_subtitles": include_subtitles,
+            "subtitle_style": {
+                "font": settings.subtitle_font_name,
+                "size": settings.subtitle_font_size,
+                "safe_zone": settings.subtitle_safe_zone,
+                "speaker_names": settings.subtitle_show_speaker_names,
+            },
+            "preset": preset_name,
+            "loudnorm_two_pass": loudnorm_two_pass,
+            "transition_style": transition_style,
+            "encoder_preference": encoder_preference,
+            "narration": (arc.plan_json or {}).get("narration", []),
+            "narration_audio_sha256": small_file_sha256(narration_path),
+        }
+    )
 
 
 def _load_arc(session: Session, story_arc_id: int) -> StoryArc:
