@@ -87,7 +87,12 @@ def recognize_episode_characters(
     settings: Settings,
 ) -> CharacterRecognitionResult:
     from app.media.character_recognition import CharacterProfile, recognize_speaker_clusters
-    from app.media.voice_identity import merge_voice_profile, recognize_voice_clusters, voice_profile_from_json
+    from app.media.voice_identity import (
+        VoiceEmbedding,
+        merge_voice_profile,
+        recognize_voice_clusters,
+        voice_profile_from_json,
+    )
 
     episode = session.get(Episode, episode_id)
     if episode is None:

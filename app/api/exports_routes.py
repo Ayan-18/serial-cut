@@ -36,7 +36,7 @@ def open_export_folder(export_id: int, session: Session = Depends(get_session)):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Файл экспорта не найден")
     try:
-        os.startfile(path.parent)  # type: ignore[attr-defined]
+        os.startfile(path.parent)
     except OSError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "folder": str(path.parent)}
