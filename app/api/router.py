@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api import (
+    candidate_batch_routes,
     candidate_history_routes,
     candidates_routes,
     characters_routes,
@@ -24,6 +25,7 @@ domain_routers = (
     episodes_routes.router,
     candidates_routes.router,
     candidate_history_routes.router,
+    candidate_batch_routes.router,
     exports_routes.router,
 )
 

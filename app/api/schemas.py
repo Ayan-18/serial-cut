@@ -142,6 +142,27 @@ class CandidateSnapshotRead(BaseModel):
     subtitle_rows: int
 
 
+class BatchReviewRequest(BaseModel):
+    candidate_ids: list[int] = Field(min_length=1)
+    decision: str
+
+
+class BatchRenderRequest(BaseModel):
+    candidate_ids: list[int] = Field(min_length=1)
+    include_subtitles: bool = True
+    use_nvenc: bool | None = None
+    preset_name: str | None = None
+    loudnorm_two_pass: bool | None = None
+    force_rerender: bool = False
+
+
+class BatchOutcomeRead(BaseModel):
+    requested: int
+    succeeded: list[int]
+    skipped: list[dict]
+    job_ids: list[int]
+
+
 class Stage2RunResponse(BaseModel):
     episode_id: int
     stage: str
