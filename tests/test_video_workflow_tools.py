@@ -112,6 +112,9 @@ def test_story_arc_narration_and_queue_render_job(session, tmp_path, monkeypatch
     )
     narration = story_arc_narration(session, arc.id)
     assert "показывает важный этап" in narration.text
+    narrator = story_arc_narration(session, arc.id, narration_mode="narrator")
+    assert narrator.mode == "narrator"
+    assert all(line["voice"] == "narrator" for line in narrator.lines)
 
     def fake_runner(args: list[str], timeout: int) -> ProcessResult:
         output = Path(args[-1])

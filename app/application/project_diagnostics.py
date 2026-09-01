@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
@@ -21,9 +23,6 @@ from app.models.entities import (
     StoryArcSegment,
     VideoScript,
 )
-
-
-EXPECTED_DB_REVISION = "0011_job_stage_consistency"
 
 
 @dataclass(frozen=True)
@@ -76,6 +75,8 @@ def run_project_diagnostics(session: Session, settings: Settings) -> ProjectDiag
         session.scalar(select(func.count(StoryArcExport.id)).where(StoryArcExport.status == "stale")) or 0
     )
     db_revision = _database_revision(session)
+    expected_db_revisions = _expected_database_revisions()
+    episode_warnings = _episode_warnings(session)
     free_bytes = _free_bytes(output_dir)
     ffmpeg_ready = _tool_exists(settings.ffmpeg_path)
     ffprobe_ready = _tool_exists(settings.ffprobe_path)
@@ -83,7 +84,7 @@ def run_project_diagnostics(session: Session, settings: Settings) -> ProjectDiag
         DiagnosticCheck("База проекта", counts["seasons"] > 0, f"{counts['seasons']} сезонов, {counts['episodes']} серий"),
         DiagnosticCheck(
             "Миграция базы",
-            db_revision in {None, EXPECTED_DB_REVISION},
+            db_revision is None or db_revision in expected_db_revisions,
             db_revision or "чистая тестовая база",
         ),
         DiagnosticCheck("Исходные файлы", not missing_files, _missing_message(missing_files)),
@@ -103,6 +104,11 @@ def run_project_diagnostics(session: Session, settings: Settings) -> ProjectDiag
         ),
         DiagnosticCheck("Output", output_dir.exists(), str(output_dir)),
         DiagnosticCheck("Cache", cache_dir.exists(), str(cache_dir)),
+        DiagnosticCheck(
+            "Предупреждения анализа",
+            not episode_warnings,
+            f"серий с предупреждениями: {len(episode_warnings)}",
+        ),
     ]
     recommendations: list[str] = []
     if counts["candidates"] == 0 and counts["episodes"] > 0:
@@ -113,7 +119,7 @@ def run_project_diagnostics(session: Session, settings: Settings) -> ProjectDiag
         recommendations.append("Откройте этапы failed-задач и перезапустите с проблемного шага.")
     if missing_files:
         recommendations.append("Проверьте, что внешний диск или папка с сериалом подключены по тому же пути.")
-    if db_revision not in {None, EXPECTED_DB_REVISION}:
+    if db_revision is not None and db_revision not in expected_db_revisions:
         recommendations.append("Перезапустите приложение штатным scripts\\run.ps1, чтобы применить миграции базы.")
     if not ffmpeg_ready or not ffprobe_ready:
         recommendations.append("Укажите рабочие FFmpeg/ffprobe в .env или добавьте их в PATH.")
@@ -125,6 +131,8 @@ def run_project_diagnostics(session: Session, settings: Settings) -> ProjectDiag
         recommendations.append("Освободите минимум 2 ГБ в папке output перед длинным рендером.")
     if settings.asr_adapter == "stub" or settings.llm_adapter == "stub":
         recommendations.append("Для реального анализа включите faster-whisper и llama.cpp через .env.")
+    if episode_warnings:
+        recommendations.append("Проверьте предупреждения media-анализа: часть персонажных функций могла сработать в fallback-режиме.")
     return ProjectDiagnostics(checks=checks, recommendations=recommendations, counts=counts)
 
 
@@ -145,6 +153,19 @@ def _database_revision(session: Session) -> str | None:
     if "alembic_version" not in inspect(bind).get_table_names():
         return None
     return session.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar_one_or_none()
+
+
+def _expected_database_revisions() -> set[str]:
+    config_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+    return set(ScriptDirectory.from_config(Config(str(config_path))).get_heads())
+
+
+def _episode_warnings(session: Session) -> list[Episode]:
+    return [
+        episode
+        for episode in session.scalars(select(Episode).order_by(Episode.file_name)).all()
+        if (episode.probe_json or {}).get("serialcuts_warnings")
+    ]
 
 
 def _tool_exists(value: str) -> bool:

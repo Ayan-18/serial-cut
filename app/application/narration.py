@@ -20,6 +20,8 @@ class NarrationScript:
     story_arc_id: int
     text: str
     lines: list[dict]
+    mode: str = "first_person"
+    tts_notice: str = "Локальная TTS-озвучка не имитирует голос актёра или персонажа."
 
 
 @dataclass(frozen=True)
@@ -29,14 +31,17 @@ class NarrationAudio:
     script_path: str
 
 
-def story_arc_narration(session: Session, story_arc_id: int) -> NarrationScript:
+def story_arc_narration(session: Session, story_arc_id: int, narration_mode: str = "first_person") -> NarrationScript:
     arc = session.get(StoryArc, story_arc_id)
     if arc is None:
         raise ValueError("Арка не найдена")
+    mode = _effective_narration_mode(arc, narration_mode)
     lines = list((arc.plan_json or {}).get("narration", []))
+    if mode == "narrator":
+        lines = [_as_narrator_line(item) for item in lines]
     if not lines:
-        lines = _fallback_lines(arc)
-    return NarrationScript(story_arc_id=arc.id, text=_join_lines(lines), lines=lines)
+        lines = _fallback_lines(arc, mode)
+    return NarrationScript(story_arc_id=arc.id, text=_join_lines(lines), lines=lines, mode=mode)
 
 
 def synthesize_story_arc_narration(
@@ -45,22 +50,26 @@ def synthesize_story_arc_narration(
     settings: Settings,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
     target_duration_seconds: float | None = None,
+    narration_mode: str = "first_person",
 ) -> NarrationAudio:
     arc = session.get(StoryArc, story_arc_id)
     if arc is None:
         raise ValueError("Арка не найдена")
-    narration = story_arc_narration(session, story_arc_id)
+    mode = _effective_narration_mode(arc, narration_mode)
+    if mode == "none":
+        raise ValueError("Озвучка выключена для этого StoryArc")
+    narration = story_arc_narration(session, story_arc_id, mode)
     plan = dict(arc.plan_json or {})
     if not plan.get("narration_custom"):
-        generated = generate_local_text(settings, _narration_prompt(arc), max_tokens=900)
+        generated = generate_local_text(settings, _narration_prompt(arc, mode), max_tokens=900)
         if generated:
             generated_lines = [
-                {"order": index, "voice": "narrator", "text": line.strip(" -•\t")}
+                {"order": index, "voice": _line_voice(arc, mode), "text": line.strip(" -•\t")}
                 for index, line in enumerate(generated.splitlines(), start=1)
                 if line.strip(" -•\t")
             ]
             if generated_lines:
-                narration = NarrationScript(arc.id, _join_lines(generated_lines), generated_lines)
+                narration = NarrationScript(arc.id, _join_lines(generated_lines), generated_lines, mode=mode)
     target_duration = max(1.0, float(target_duration_seconds or arc.total_duration_seconds))
     timed_lines = _timed_lines(
         narration.lines,
@@ -133,24 +142,26 @@ def synthesize_story_arc_narration(
     plan["narration_script_path"] = str(script_path)
     plan["narration_timeline_version"] = 2
     plan["narration_duration_seconds"] = round(target_duration, 3)
+    plan["narration_mode"] = mode
     plan["narration"] = timed_lines
     arc.plan_json = plan
     session.flush()
     return NarrationAudio(story_arc_id=arc.id, audio_path=str(audio_path), script_path=str(script_path))
 
 
-def _fallback_lines(arc: StoryArc) -> list[dict]:
+def _fallback_lines(arc: StoryArc, narration_mode: str = "first_person") -> list[dict]:
     chapters = list((arc.plan_json or {}).get("chapters", []))
+    voice = _line_voice(arc, narration_mode)
     if not chapters:
-        return [{"order": 1, "voice": "narrator", "text": f"Это монтажная история: {arc.title}."}]
+        return [{"order": 1, "voice": voice, "text": f"Это монтажная история: {arc.title}."}]
     elapsed = 0.0
     result = []
     for index, item in enumerate(chapters, start=1):
         result.append(
         {
             "order": item.get("order", index),
-            "voice": "narrator",
-            "text": f"{item.get('title', 'Фрагмент')} показывает важный этап этой линии.",
+            "voice": voice,
+            "text": _fallback_text(item.get("title", "Фрагмент"), narration_mode),
             "start_time": round(elapsed + 0.35, 3),
         }
         )
@@ -278,17 +289,49 @@ $speaker.Dispose()
 """
 
 
-def _narration_prompt(arc: StoryArc) -> str:
+def _narration_prompt(arc: StoryArc, narration_mode: str = "first_person") -> str:
     chapters = list((arc.plan_json or {}).get("chapters", []))
     chapter_text = "\n".join(
         f"{item.get('order')}. {item.get('title')} — роль {item.get('role')}, серия {item.get('episode')}"
         for item in chapters
     )
     max_words = max(25, min(220, round(arc.total_duration_seconds * 1.5)))
-    perspective = (arc.plan_json or {}).get("target_character") or "нейтрального рассказчика"
+    target_character = (arc.plan_json or {}).get("target_character")
+    perspective = target_character if narration_mode == "first_person" and target_character else "нейтрального рассказчика"
+    wording = "от первого лица" if narration_mode == "first_person" and target_character else "от нейтрального рассказчика"
     return (
-        f"Напиши связный закадровый текст от лица {perspective}, максимум {max_words} слов. "
+        f"Напиши связный закадровый текст {wording} ({perspective}), максимум {max_words} слов. "
         "Каждая строка должна быть отдельной короткой связкой между монтажными частями. "
         "Не выдумывай новых фактов и не повторяй названия дословно.\n"
         f"Арка: {arc.title}\nЧасти:\n{chapter_text}"
     )
+
+
+def _normalize_narration_mode(value: str) -> str:
+    return value if value in {"narrator", "first_person", "none"} else "first_person"
+
+
+def _effective_narration_mode(arc: StoryArc, value: str) -> str:
+    mode = _normalize_narration_mode(value)
+    if mode == "first_person" and not (arc.plan_json or {}).get("target_character"):
+        return "narrator"
+    return mode
+
+
+def _line_voice(arc: StoryArc, narration_mode: str) -> str:
+    target_character = (arc.plan_json or {}).get("target_character")
+    if narration_mode == "first_person" and target_character:
+        return str(target_character)
+    return "narrator"
+
+
+def _as_narrator_line(item: dict) -> dict:
+    line = dict(item)
+    line["voice"] = "narrator"
+    return line
+
+
+def _fallback_text(title: object, narration_mode: str) -> str:
+    if narration_mode == "first_person":
+        return f"Этот момент стал важным этапом моей истории: {title}."
+    return f"{title} показывает важный этап этой линии."

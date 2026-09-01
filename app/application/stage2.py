@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -13,7 +13,6 @@ from app.media.ffmpeg import create_proxy, extract_audio
 from app.media.ffprobe import apply_probe_to_episode, probe_media
 from app.media.scenes import PySceneDetectAdapter, SceneDetector, save_scenes
 from app.media.tracks import select_russian_audio_track, select_russian_subtitle_track
-from app.media.speakers import assign_speaker_labels
 from app.media.transcription import (
     FasterWhisperTranscriber,
     StubTranscriber,
@@ -113,6 +112,7 @@ class Stage2Result:
     proxy_path: str | None
     transcript_segments: int
     scenes: int
+    warnings: list[str] = field(default_factory=list)
 
 
 def run_stage2_media_analysis(
@@ -151,12 +151,21 @@ def run_stage2_media_analysis(
     transcript_count = save_transcript(session, episode.id, transcript)
     episode.stage = EpisodeStage.TRANSCRIBED.value
     session.commit()
+    warnings: list[str] = []
     try:
         _report(progress_callback, 0.74, "Группировка голосов")
+        from app.media.speakers import assign_speaker_labels
+
         assign_speaker_labels(session, episode.id, prep.audio_path)
         session.commit()
-    except RuntimeError:
+    except Exception as exc:
         session.rollback()
+        episode = session.get(Episode, episode_id, options=[selectinload(Episode.tracks)])
+        warning = f"Speaker labeling skipped: {exc}"
+        if episode is not None:
+            _append_episode_warning(episode, "speaker_labeling", warning)
+            session.commit()
+        warnings.append(warning)
 
     _raise_if_cancelled(cancel_check)
     _report(progress_callback, 0.80, "Поиск границ сцен")
@@ -180,6 +189,7 @@ def run_stage2_media_analysis(
         proxy_path=episode.proxy_path,
         transcript_segments=transcript_count,
         scenes=scene_count,
+        warnings=warnings,
     )
 
 
@@ -208,4 +218,13 @@ def _report(callback: Callable[[float, str], None] | None, value: float, message
 def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
     if cancel_check is not None and cancel_check():
         raise ProcessCancelledError("Медиа-анализ остановлен пользователем")
+
+
+def _append_episode_warning(episode: Episode, code: str, message: str) -> None:
+    payload = dict(episode.probe_json or {})
+    warnings = [dict(item) for item in payload.get("serialcuts_warnings") or []]
+    warnings = [item for item in warnings if item.get("code") != code]
+    warnings.append({"code": code, "message": message})
+    payload["serialcuts_warnings"] = warnings[-20:]
+    episode.probe_json = payload
 

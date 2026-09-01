@@ -48,6 +48,7 @@ def render_story_arc(
     force_rerender: bool = False,
     transition_style: str = "cut",
     include_narration: bool = True,
+    narration_mode: str = "first_person",
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
@@ -60,7 +61,8 @@ def render_story_arc(
     if season is None:
         raise ValueError("Сезон не найден")
     narration_path = _narration_path(arc)
-    narration_requested = bool(include_narration and (arc.plan_json or {}).get("narration"))
+    resolved_narration_mode = _normalize_narration_mode(arc, narration_mode, include_narration)
+    narration_requested = bool(resolved_narration_mode != "none" and (arc.plan_json or {}).get("narration"))
     segment_durations = [max(0.0, item.end_time - item.start_time) for item in arc.segments]
     expected_duration = (
         _crossfade_duration(segment_durations) if transition_style == "fade" else sum(segment_durations)
@@ -78,6 +80,7 @@ def render_story_arc(
                 settings,
                 runner=runner,
                 target_duration_seconds=expected_duration,
+                narration_mode=resolved_narration_mode,
             )
             narration_path = Path(narration_audio.audio_path)
     resolved_loudnorm = settings.render_loudnorm_two_pass if loudnorm_two_pass is None else loudnorm_two_pass
@@ -90,6 +93,7 @@ def render_story_arc(
         loudnorm_two_pass=resolved_loudnorm,
         transition_style=transition_style,
         narration_path=narration_path if narration_requested else None,
+        narration_mode=resolved_narration_mode,
         encoder_preference=use_nvenc,
     )
     existing = session.scalar(
@@ -243,6 +247,7 @@ def render_story_arc(
                 settings,
                 runner=runner,
                 target_duration_seconds=final_duration,
+                narration_mode=resolved_narration_mode,
             )
             narration_path = Path(narration_audio.audio_path)
         _raise_if_cancelled(cancel_check)
@@ -266,6 +271,7 @@ def render_story_arc(
         "render_fingerprint": render_fingerprint,
         "segments": segment_metadata,
         "narration": (arc.plan_json or {}).get("narration", []),
+        "narration_mode": resolved_narration_mode,
     }
     metadata["narration_included"] = bool(narration_requested and narration_path and narration_path.exists())
     write_text_atomically(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
@@ -531,6 +537,7 @@ def _story_arc_render_fingerprint(
     loudnorm_two_pass: bool,
     transition_style: str,
     narration_path: Path | None,
+    narration_mode: str,
     encoder_preference: bool | None,
 ) -> str:
     segments: list[dict] = []
@@ -600,6 +607,7 @@ def _story_arc_render_fingerprint(
             "transition_style": transition_style,
             "encoder_preference": encoder_preference,
             "narration": (arc.plan_json or {}).get("narration", []),
+            "narration_mode": narration_mode,
             "narration_audio_sha256": small_file_sha256(narration_path),
         }
     )
@@ -618,6 +626,15 @@ def _load_arc(session: Session, story_arc_id: int) -> StoryArc:
 
 def _story_arc_slug(arc: StoryArc) -> str:
     return _safe_slug(f"story-arc-{arc.id}-{arc.title}")[:120].rstrip("-")
+
+
+def _normalize_narration_mode(arc: StoryArc, value: str, include_narration: bool) -> str:
+    if not include_narration:
+        return "none"
+    mode = value if value in {"none", "narrator", "first_person"} else "first_person"
+    if mode == "first_person" and not (arc.plan_json or {}).get("target_character"):
+        return "narrator"
+    return mode
 
 
 def _safe_slug(value: str) -> str:

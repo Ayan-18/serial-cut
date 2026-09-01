@@ -80,6 +80,10 @@ class JobRead(BaseModel):
     updated_at: datetime
 
 
+class LocalApiTokenRead(BaseModel):
+    token: str
+
+
 class Stage2RunResponse(BaseModel):
     episode_id: int
     stage: str
@@ -87,6 +91,7 @@ class Stage2RunResponse(BaseModel):
     proxy_path: str | None
     transcript_segments: int
     scenes: int
+    warnings: list[str] = Field(default_factory=list)
 
 
 class Stage3RunResponse(BaseModel):
@@ -210,6 +215,7 @@ class StoryArcRenderRequest(BaseModel):
     force_rerender: bool = False
     transition_style: str = Field(default="cut", pattern="^(cut|fade)$")
     include_narration: bool = True
+    narration_mode: str = Field(default="first_person", pattern="^(none|narrator|first_person)$")
 
 
 class StoryArcRenderResponse(BaseModel):
@@ -251,6 +257,8 @@ class NarrationRead(BaseModel):
     story_arc_id: int
     text: str
     lines: list[dict]
+    mode: str = "first_person"
+    tts_notice: str = "Локальная TTS-озвучка не имитирует голос актёра или персонажа."
 
 
 class NarrationAudioRead(BaseModel):
@@ -601,6 +609,14 @@ class AutoExportResponse(BaseModel):
 
 class EnqueueSeasonRequest(BaseModel):
     auto: bool = False
+
+
+class EnqueueEpisodeRequest(BaseModel):
+    resume_from_stage: str | None = Field(default=None, pattern="^(stage2_media|stage3_candidates|auto_export)$")
+    auto: bool | None = None
+    threshold: int | None = Field(default=None, ge=0, le=100)
+    max_clips: int | None = Field(default=None, ge=1, le=20)
+    use_nvenc: bool | None = None
 
 
 class QueueRunResponse(BaseModel):

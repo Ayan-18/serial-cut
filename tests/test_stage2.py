@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+import types
 
 import pytest
 from sqlalchemy import select
@@ -97,6 +99,34 @@ def test_stage2_smoke_with_stub_models(session, tmp_path: Path):
     assert transcriber.transaction_was_open is False
     assert session.scalar(select(TranscriptSegment).where(TranscriptSegment.episode_id == episode.id)) is not None
     assert session.scalar(select(Scene).where(Scene.episode_id == episode.id)) is not None
+
+
+def test_stage2_records_speaker_labeling_warning(session, tmp_path: Path, monkeypatch):
+    season = tmp_path / "Сезон 2"
+    season.mkdir()
+    (season / "Серия 01.mkv").write_bytes(b"synthetic-video")
+    imported = import_season(session, season)
+    session.commit()
+
+    def broken_speaker_labels(*_args, **_kwargs):
+        raise RuntimeError("speaker model unavailable")
+
+    speakers_module = types.ModuleType("app.media.speakers")
+    speakers_module.assign_speaker_labels = broken_speaker_labels
+    monkeypatch.setitem(sys.modules, "app.media.speakers", speakers_module)
+    result = run_stage2_media_analysis(
+        session,
+        imported.episode_ids[0],
+        Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
+        media_preparer=StubMediaPreparer(tmp_path / "cache" / "audio.wav", tmp_path / "cache" / "proxy.mp4"),
+        transcriber=StubTranscriber(),
+        scene_detector=StubSceneDetector(),
+    )
+
+    episode = session.get(Episode, imported.episode_ids[0])
+    warnings = (episode.probe_json or {}).get("serialcuts_warnings")
+    assert result.warnings and "speaker model unavailable" in result.warnings[0]
+    assert warnings and warnings[0]["code"] == "speaker_labeling"
 
 
 def test_faster_whisper_auto_device_falls_back_to_cpu(monkeypatch, tmp_path: Path):

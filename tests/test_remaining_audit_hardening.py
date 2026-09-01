@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 
-from app.api.loopback import _is_loopback_client
+from app.api.loopback import _has_valid_local_api_token, _is_loopback_client, _requires_local_api_token, local_api_token
 from app.application.cache import clear_cache, prepare_cache_directory
 from app.application.candidate_editor import EditableSubtitle, save_candidate_subtitles
 from app.application.derived_files import delete_derived_artifacts
@@ -181,3 +181,10 @@ def test_startup_requires_alembic_and_network_is_loopback_only():
     assert _is_loopback_client({"client": ("127.0.0.1", 1000)})
     assert _is_loopback_client({"client": ("testclient", 1000)})
     assert not _is_loopback_client({"client": ("192.168.1.20", 1000)})
+    unsafe_scope = {"type": "http", "method": "POST", "client": ("127.0.0.1", 1000), "headers": []}
+    assert _requires_local_api_token(unsafe_scope)
+    assert not _has_valid_local_api_token(unsafe_scope)
+    assert _has_valid_local_api_token(
+        {**unsafe_scope, "headers": [(b"x-serialcuts-token", local_api_token().encode("utf-8"))]}
+    )
+    assert not _requires_local_api_token({"type": "http", "method": "POST", "client": ("testclient", 1000)})

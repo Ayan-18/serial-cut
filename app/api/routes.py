@@ -24,10 +24,12 @@ from app.api.schemas import (
     CharacterPhotoAdd,
     CharacterRead,
     CharacterRecognitionResponse,
+    EnqueueEpisodeRequest,
     EnqueueSeasonRequest,
     ExportRead,
     ImportResponse,
     JobRead,
+    LocalApiTokenRead,
     ModelDiagnosticsRead,
     NarrationAudioRead,
     NarrationRead,
@@ -69,6 +71,7 @@ from app.api.schemas import (
     VideoScriptUpdateRequest,
     StoryArcUpdateRequest,
 )
+from app.api.loopback import local_api_token
 from app.application.candidate_editor import (
     EditableSubtitle,
     auto_split_candidate_subtitles,
@@ -166,6 +169,11 @@ def run_stage2_media_analysis(session: Session, episode_id: int, settings):
 @router.get("/health")
 def health() -> dict:
     return {"ok": True, "service": "SerialCuts"}
+
+
+@router.get("/security-token", response_model=LocalApiTokenRead)
+def security_token() -> LocalApiTokenRead:
+    return LocalApiTokenRead(token=local_api_token())
 
 
 @router.get("/system-check")
@@ -412,6 +420,7 @@ def render_story_arc_endpoint(
                 force_rerender=payload.force_rerender,
                 transition_style=payload.transition_style,
                 include_narration=payload.include_narration,
+                narration_mode=payload.narration_mode,
             )
         session.commit()
         return result
@@ -439,17 +448,30 @@ def enqueue_story_arc_render_endpoint(
 
 
 @router.get("/story-arcs/{story_arc_id}/narration", response_model=NarrationRead)
-def read_story_arc_narration(story_arc_id: int, session: Session = Depends(get_session)):
+def read_story_arc_narration(
+    story_arc_id: int,
+    narration_mode: str = "first_person",
+    session: Session = Depends(get_session),
+):
     try:
-        return story_arc_narration(session, story_arc_id)
+        return story_arc_narration(session, story_arc_id, narration_mode=narration_mode)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/story-arcs/{story_arc_id}/narration-audio", response_model=NarrationAudioRead)
-def create_story_arc_narration_audio(story_arc_id: int, session: Session = Depends(get_session)):
+def create_story_arc_narration_audio(
+    story_arc_id: int,
+    narration_mode: str = "first_person",
+    session: Session = Depends(get_session),
+):
     try:
-        audio = synthesize_story_arc_narration(session, story_arc_id, effective_settings(session, get_settings()))
+        audio = synthesize_story_arc_narration(
+            session,
+            story_arc_id,
+            effective_settings(session, get_settings()),
+            narration_mode=narration_mode,
+        )
         session.commit()
         return audio
     except Exception as exc:
@@ -810,9 +832,14 @@ def probe_episode(episode_id: int, session: Session = Depends(get_session)):
 
 
 @router.post("/episodes/{episode_id}/enqueue", response_model=JobRead)
-def enqueue_episode(episode_id: int, session: Session = Depends(get_session)):
+def enqueue_episode(
+    episode_id: int,
+    payload: EnqueueEpisodeRequest | None = None,
+    session: Session = Depends(get_session),
+):
     try:
-        job = enqueue_episode_analysis(session, episode_id)
+        job_payload = payload.model_dump(exclude_none=True) if payload else None
+        job = enqueue_episode_analysis(session, episode_id, payload=job_payload)
         session.commit()
         session.refresh(job)
     except Exception as exc:

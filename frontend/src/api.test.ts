@@ -18,4 +18,17 @@ describe("api", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
     await expect(api("/api/test")).rejects.toThrow("HTTP 500");
   });
+
+  it("adds the local API token to unsafe requests", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: "local-token" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(api<{ ok: boolean }>("/api/test", { method: "POST" })).resolves.toEqual({ ok: true });
+
+    const request = fetch.mock.calls[1][1] as RequestInit;
+    expect(new Headers(request.headers).get("X-SerialCuts-Token")).toBe("local-token");
+  });
 });

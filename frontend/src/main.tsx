@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, BookOpen, CalendarDays, Check, Clapperboard, FileText, FolderOpen, FolderPlus, ListFilter, ListVideo, LoaderCircle, Play, RefreshCcw, RotateCcw, Save, Search, Sparkles, Trash2, UserRound, Volume2, WandSparkles, X } from "lucide-react";
+import { Activity, BookOpen, CalendarDays, Check, Clapperboard, FileText, FolderPlus, ListFilter, ListVideo, LoaderCircle, Play, RefreshCcw, RotateCcw, Save, Search, Sparkles, Trash2, UserRound, Volume2, WandSparkles, X } from "lucide-react";
 import { api, jsonHeaders } from "./api";
+import { ExportsPanel } from "./components/ExportsPanel";
 import { SettingCheck, SettingNumber, SettingText } from "./components/SettingsFields";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { QueuePanel } from "./components/QueuePanel";
 import { SystemPanel } from "./components/SystemPanel";
-import type { BlockingProgress, CacheInfo, Candidate, CandidateEdit, CandidateQuality, Character, CheckItem, Episode, EpisodeOutline, EpisodeQuality, ExportItem, Job, JobStage, ModelDiagnostics, PreviewRender, ProjectDiagnostics, PublishingPlan, QueueData, RuntimeSettings, SearchResult, Season, SpeakerIdentity, StoryArc, StoryArcSegment, StoryContext, Subtitle, SubtitleQuality, VideoScript } from "./types";
+import type { CacheInfo, Candidate, CandidateEdit, CandidateQuality, Character, CheckItem, Episode, EpisodeOutline, EpisodeQuality, ExportItem, Job, JobStage, ModelDiagnostics, PreviewRender, ProjectDiagnostics, PublishingPlan, QueueData, RuntimeSettings, SearchResult, Season, SpeakerIdentity, StoryArc, StoryArcSegment, StoryContext, Subtitle, SubtitleQuality, VideoScript } from "./types";
 import { arcNarration, editFromCandidate, errorMessage, fileDataUrl, formatArcFormat, formatBytes, formatClock, formatElapsed, formatRange, identityMethodLabel, previewCropOffset, splitLines, stageLabel, statusLabel } from "./utils";
 import "./styles.css";
 
@@ -37,8 +38,6 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [blockingProgress, setBlockingProgress] = useState<BlockingProgress | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [videoTime, setVideoTime] = useState(0);
   const [storyContext, setStoryContext] = useState<StoryContext | null>(null);
   const [storyArcs, setStoryArcs] = useState<StoryArc[]>([]);
@@ -57,6 +56,7 @@ function App() {
   const [workflowArcId, setWorkflowArcId] = useState<number | null>(null);
   const [arcTransition, setArcTransition] = useState<"cut" | "fade">("fade");
   const [arcIncludeNarration, setArcIncludeNarration] = useState(true);
+  const [arcNarrationMode, setArcNarrationMode] = useState<"first_person" | "narrator" | "none">("first_person");
   const [seasonSearch, setSeasonSearch] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [scriptPrompt, setScriptPrompt] = useState("");
@@ -135,19 +135,12 @@ function App() {
   }
 
   async function runDirectStage(episode: Episode, kind: "media" | "candidates") {
-    if (blockingProgress) return;
-    setBlockingProgress({ kind, episodeId: episode.id, fileName: episode.file_name, startedAt: Date.now() }); setElapsedSeconds(0);
-    setMessage(kind === "media" ? "Медиа-анализ начат" : "Поиск кандидатов начат");
     try {
-      if (kind === "media") {
-        const data = await api<{ transcript_segments: number; scenes: number }>(`/api/episodes/${episode.id}/stage2`, { method: "POST" });
-        setMessage(`Медиа готово: сегментов ${data.transcript_segments}, сцен ${data.scenes}`);
-      } else {
-        const data = await api<{ candidates: number }>(`/api/episodes/${episode.id}/stage3`, { method: "POST" });
-        setMessage(`Кандидаты готовы: ${data.candidates}`); await loadCandidates(episode.id);
-      }
+      const resume_from_stage = kind === "media" ? "stage2_media" : "stage3_candidates";
+      const job = await api<Job>(`/api/episodes/${episode.id}/enqueue`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ resume_from_stage }) });
+      setMessage(kind === "media" ? `Медиа-анализ поставлен в очередь, задача №${job.id}` : `Поиск кандидатов поставлен в очередь, задача №${job.id}`);
     } catch (error) { setMessage(`Ошибка: ${errorMessage(error)}`); }
-    finally { setBlockingProgress(null); await refresh().catch(() => undefined); }
+    finally { await refresh().catch(() => undefined); }
   }
 
   async function loadCandidates(episodeId: number, selectEpisode = true) {
@@ -371,9 +364,9 @@ function App() {
 
   async function renderStoryArc(arc: StoryArc, includeSubtitles: boolean) {
     setArcRenderBusy(arc.id);
-    setMessage(`Рендерим монтажный план «${arc.title}» из ${arc.segments.length} частей…`);
+    setMessage(`Ставим монтажный план «${arc.title}» в очередь…`);
     try {
-      const result = await api<{ export_id: number; segment_count: number; duration_seconds: number }>(`/api/story-arcs/${arc.id}/render`, {
+      const result = await api<{ job: Job }>(`/api/story-arcs/${arc.id}/render-job`, {
         method: "POST", headers: jsonHeaders, body: JSON.stringify({
           include_subtitles: includeSubtitles,
           use_nvenc: settings?.render_use_nvenc ?? null,
@@ -381,11 +374,12 @@ function App() {
           loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null,
           force_rerender: true,
           transition_style: arcTransition,
-          include_narration: arcIncludeNarration,
+          include_narration: arcIncludeNarration && arcNarrationMode !== "none",
+          narration_mode: arcNarrationMode,
         }),
       });
-      setMessage(`StoryArc MP4 готов: ${result.segment_count} частей, ${formatElapsed(Math.round(result.duration_seconds))}`);
-      setStoryArcs(await api<StoryArc[]>("/api/story-arcs"));
+      setMessage(`StoryArc поставлен в очередь, задача №${result.job.id}`);
+      await refreshActivity();
     } catch (error) { setMessage(`StoryArc не отрендерен: ${errorMessage(error)}`); }
     finally { setArcRenderBusy(null); }
   }
@@ -399,7 +393,8 @@ function App() {
         loudnorm_two_pass: settings?.render_loudnorm_two_pass ?? null,
         force_rerender: true,
         transition_style: arcTransition,
-        include_narration: arcIncludeNarration,
+        include_narration: arcIncludeNarration && arcNarrationMode !== "none",
+        narration_mode: arcNarrationMode,
       }),
     });
     setMessage(`StoryArc поставлен в очередь, задача №${result.job.id}`);
@@ -479,7 +474,7 @@ function App() {
   }
 
   async function synthesizeNarration(arc: StoryArc) {
-    const audio = await api<{ audio_path: string }>(`/api/story-arcs/${arc.id}/narration-audio`, { method: "POST" });
+    const audio = await api<{ audio_path: string }>(`/api/story-arcs/${arc.id}/narration-audio?narration_mode=${arcNarrationMode}`, { method: "POST" });
     setMessage(`WAV озвучки создан: ${audio.audio_path}`);
     setStoryArcs(await api<StoryArc[]>("/api/story-arcs"));
   }
@@ -529,9 +524,13 @@ function App() {
   }
 
   async function autoExport(episodeId: number) {
-    setMessage("Автоэкспорт выполняется…");
-    const data = await api<{ rendered: number }>(`/api/episodes/${episodeId}/auto-export`, { method: "POST", headers: jsonHeaders, body: "{}" });
-    setMessage(`Автоэкспорт: готово ${data.rendered}`); await loadCandidates(episodeId); await refresh();
+    const job = await api<Job>(`/api/episodes/${episodeId}/enqueue`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ resume_from_stage: "auto_export", auto: true }),
+    });
+    setMessage(`Автоэкспорт поставлен в очередь, задача №${job.id}`);
+    await refreshActivity();
   }
 
   async function saveSettings() {
@@ -565,7 +564,6 @@ function App() {
 
   useEffect(() => { refresh().catch((error) => setMessage(errorMessage(error))); runSystemCheck().catch((error) => setMessage(errorMessage(error))); }, []);
   useEffect(() => { const timer = window.setInterval(() => refreshActivity().catch(() => undefined), 2500); return () => window.clearInterval(timer); }, [selectedEpisodeId]);
-  useEffect(() => { if (!blockingProgress) return; const update = () => setElapsedSeconds(Math.floor((Date.now() - blockingProgress.startedAt) / 1000)); update(); const timer = window.setInterval(update, 1000); return () => window.clearInterval(timer); }, [blockingProgress]);
   useEffect(() => {
     const seasonId = selectedArcSeasonId();
     if (!seasonId) { setAvailableArcCharacters([]); return; }
@@ -600,8 +598,6 @@ function App() {
   return <main className="app-shell">
     <section className="topbar"><div><h1>SerialCuts</h1><p>Локальная подготовка вертикальных клипов из серий</p></div><button className="icon-button" title="Обновить всё" onClick={() => refresh()}><RefreshCcw size={20} /></button></section>
     {message && <p className="notice" role="status">{message}</p>}
-    {blockingProgress && <div className="processing-banner" role="status"><LoaderCircle className="spinner" size={24} /><div><strong>{blockingProgress.kind === "media" ? "Медиа-анализ" : "Поиск кандидатов"}: {blockingProgress.fileName}</strong><span>Приложение работает · прошло {formatElapsed(elapsedSeconds)}</span></div></div>}
-
     <section className="grid dashboard-grid">
       <div className="panel"><div className="panel-title"><FolderPlus size={19} /><h2>Сезоны</h2></div><div className="path-row"><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="D:\Сериалы\Название\Сезон 1" /><button onClick={importSeason}>Добавить</button></div><div className="season-list">
         {seasons.map((season) => <article className="season" key={season.id}><div><strong>{season.title}</strong><small>{season.episodes.length} серий</small></div><button onClick={() => enqueueSeason(season.id, false)}>Анализ сезона</button><button onClick={() => enqueueSeason(season.id, true)}><Sparkles size={16} /> Auto</button></article>)}
@@ -610,7 +606,7 @@ function App() {
       <QueuePanel queue={queue} jobStages={jobStages} onRunNext={runQueueNext} onSetPaused={setPaused} onLoadStages={loadJobStages} onCancel={cancelJob} onRetry={retryJob} onRetryStage={retryJobStage} />
     </section>
 
-    <section className="panel section-gap"><div className="panel-title"><ListVideo size={19} /><h2>Серии</h2></div><div className="episodes">{seasons.flatMap((season) => season.episodes).map((episode) => { const busy = isEpisodeBusy(episode.id); return <article className="episode" key={episode.id}><div><strong>{episode.file_name}</strong><small>{busy ? "Обрабатывается в очереди" : stageLabel(episode.stage)}</small></div><span>{formatBytes(episode.size_bytes)}</span><span>{episode.width && episode.height ? `${episode.width}×${episode.height}` : "без метаданных"}</span><button disabled={busy} onClick={() => enqueueEpisode(episode)}>В очередь</button><button className="secondary" disabled={blockingProgress !== null || busy} onClick={() => runDirectStage(episode, "media")}>Только медиа</button><button className="secondary" disabled={blockingProgress !== null || busy} onClick={() => runDirectStage(episode, "candidates")}>Только кандидаты</button><button onClick={() => loadCandidates(episode.id)}>Открыть</button><button className="secondary" disabled={busy} onClick={() => autoExport(episode.id)}>Auto export</button></article>; })}</div></section>
+    <section className="panel section-gap"><div className="panel-title"><ListVideo size={19} /><h2>Серии</h2></div><div className="episodes">{seasons.flatMap((season) => season.episodes).map((episode) => { const busy = isEpisodeBusy(episode.id); return <article className="episode" key={episode.id}><div><strong>{episode.file_name}</strong><small>{busy ? "Обрабатывается в очереди" : stageLabel(episode.stage)}</small></div><span>{formatBytes(episode.size_bytes)}</span><span>{episode.width && episode.height ? `${episode.width}×${episode.height}` : "без метаданных"}</span><button disabled={busy} onClick={() => enqueueEpisode(episode)}>В очередь</button><button className="secondary" disabled={busy} onClick={() => runDirectStage(episode, "media")}>Только медиа</button><button className="secondary" disabled={busy} onClick={() => runDirectStage(episode, "candidates")}>Только кандидаты</button><button onClick={() => loadCandidates(episode.id)}>Открыть</button><button className="secondary" disabled={busy} onClick={() => autoExport(episode.id)}>Auto export</button></article>; })}</div></section>
 
     <section className="story-arc-workspace section-gap">
       <div className="panel"><div className="panel-title"><BookOpen size={19} /><h2>Сюжетные видео</h2><span className="badge">{visibleStoryArcs.length}</span></div><div className="arc-form"><label><span>Сезон</span><select value={arcSeason?.id ?? ""} onChange={(event) => setArcSeasonId(Number(event.target.value) || null)}>{seasons.map((season) => <option key={season.id} value={season.id}>{season.title}</option>)}</select></label><label><span>Формат</span><select value={arcFormat} onChange={(event) => setArcFormat(event.target.value as StoryArc["output_format"])}><option value="single_short">Один Shorts</option><option value="shorts_series">Серия Shorts</option><option value="story_video">Видео 2–10 мин</option><option value="long_video">Длинное видео</option></select></label><label><span>Персонаж</span><select value={arcCharacterId ?? ""} onChange={(event) => setArcCharacterId(Number(event.target.value) || null)}><option value="">Без персонажа</option>{arcCharacters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select></label><SettingNumber title="Частей" hint="Сколько фрагментов попадёт в план." value={arcMaxSegments} min={1} max={40} onChange={setArcMaxSegments} /><SettingNumber title="Лимит, сек." hint="Суммарная длительность монтажного плана." value={arcMaxDuration} min={15} max={7200} onChange={setArcMaxDuration} /><SettingText title="Название" hint="Можно оставить пустым." value={arcTitle} onChange={setArcTitle} /><label className="setting-field setting-field-wide"><span>Запрос к арке</span><textarea rows={3} value={arcPrompt} onChange={(event) => setArcPrompt(event.target.value)} placeholder="Например: как герой узнал правду об отце, развитие отношений, вся линия конфликта…" /><small>План строится из уже найденных кандидатов сезона.</small></label><button disabled={!arcSeason} onClick={createStoryArc}><Sparkles size={16} /> Создать план</button></div></div>
@@ -624,7 +620,7 @@ function App() {
         <label className="story-field"><span>Суть этой серии</span><textarea rows={4} value={storyContext.episode_summary} onChange={(event) => setStoryContext({ ...storyContext, episode_summary: event.target.value })} placeholder="Завязка, конфликт, важный поворот и итог серии…" /></label>
         <div className="story-columns"><label className="story-field"><span>Обязательно показать</span><textarea rows={3} value={storyContext.required_events.join("\n")} onChange={(event) => setStoryContext({ ...storyContext, required_events: splitLines(event.target.value) })} placeholder="По одному событию на строку" /></label><label className="story-field"><span>Не включать</span><textarea rows={3} value={storyContext.excluded_events.join("\n")} onChange={(event) => setStoryContext({ ...storyContext, excluded_events: splitLines(event.target.value) })} placeholder="Второстепенные линии или нежелательные сцены" /></label></div>
         <label className="inline-check"><input type="checkbox" checked={storyContext.spoilers_allowed} onChange={(event) => setStoryContext({ ...storyContext, spoilers_allowed: event.target.checked })} /> Можно показывать концовку серии</label>
-        <div className="story-actions"><button onClick={saveStoryContext}><Save size={16} /> Сохранить контекст</button><button className="secondary" disabled={isEpisodeBusy(selectedEpisodeId) || blockingProgress !== null} onClick={regenerateStoryCandidates}><Sparkles size={16} /> Пересоздать кандидатов</button></div>
+        <div className="story-actions"><button onClick={saveStoryContext}><Save size={16} /> Сохранить контекст</button><button className="secondary" disabled={isEpisodeBusy(selectedEpisodeId)} onClick={regenerateStoryCandidates}><Sparkles size={16} /> Пересоздать кандидатов</button></div>
         {episodeOutline && <details className="outline-card"><summary>Построенная карта серии</summary><p>{episodeOutline.summary}</p><ol>{episodeOutline.time_ranges.map((item, index) => <li key={`${item.start_time}-${index}`}><strong>{formatClock(item.start_time)}–{formatClock(item.end_time)}</strong> {item.summary}</li>)}</ol></details>}
       </div>
       <div className="panel character-panel"><div className="panel-title"><UserRound size={19} /><h2>Персонажи и голоса</h2><span className="badge">{characters.length}</span></div>
@@ -655,7 +651,51 @@ function App() {
     <section className="panel section-gap workflow-panel"><div className="panel-title"><Activity size={19} /><h2>Workflow сезона</h2><button className="icon-button secondary" title="Диагностика проекта" onClick={refreshProjectDiagnostics}><RefreshCcw size={17} /></button></div>
       <div className="workflow-grid">
         <div className="workflow-block"><h3>Поиск</h3><div className="search-row"><input value={seasonSearch} onChange={(event) => setSeasonSearch(event.target.value)} placeholder="Найти сцену, реплику или событие по сезону" /><button disabled={!arcSeason || !seasonSearch.trim()} onClick={runSeasonSearch}><Search size={16} /> Найти</button></div><div className="search-results">{searchResults.slice(0, 6).map((result) => <article key={`${result.kind}-${result.episode_id}-${result.start_time}`}><div><strong>{result.title}</strong><small>{result.episode_file_name} · {formatRange(result.start_time, result.end_time)} · score {result.score}</small></div><p>{result.snippet}</p>{workflowArc && result.candidate_id && <button className="text-button" onClick={() => addSearchResultToArc(workflowArc, result)}>Добавить в StoryArc</button>}</article>)}{!searchResults.length && <small>Поиск работает по кандидатам и транскриптам выбранного сезона.</small>}</div></div>
-        <div className="workflow-block"><h3>StoryArc редактор</h3>{workflowArc ? <><label className="setting-field"><span>План</span><select value={workflowArc.id} onChange={(event) => setWorkflowArcId(Number(event.target.value))}>{visibleStoryArcs.map((arc) => <option key={arc.id} value={arc.id}>{arc.title}</option>)}</select><small>{workflowArc.segments.length} частей · {formatElapsed(Math.round(workflowArc.total_duration_seconds))}</small></label><div className="arc-edit-row"><input value={workflowArc.title} onChange={(event) => patchArcLocal(workflowArc.id, { title: event.target.value })} /><select value={workflowArc.output_format} onChange={(event) => patchArcLocal(workflowArc.id, { output_format: event.target.value as StoryArc["output_format"] })}><option value="single_short">Один Shorts</option><option value="shorts_series">Серия Shorts</option><option value="story_video">Видео 2–10 мин</option><option value="long_video">Длинное видео</option></select><button onClick={() => saveArcMeta(workflowArc)}><Save size={16} /> Сохранить</button></div><label className="setting-field"><span>Переходы</span><select value={arcTransition} onChange={(event) => setArcTransition(event.target.value as "cut" | "fade")}><option value="fade">Fade</option><option value="cut">Склейка без перехода</option></select><small>Применяется при StoryArc-рендере.</small></label><SettingCheck title="Добавлять озвучку" hint="Локальная озвучка смешивается с приглушённым звуком оригинала." checked={arcIncludeNarration} onChange={setArcIncludeNarration} /><div className="arc-actions"><button disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => enqueueStoryArcRender(workflowArc, true)}><Clapperboard size={16} /> В очередь</button><button className="secondary" disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => renderStoryArc(workflowArc, true)}>Сейчас</button><button className="secondary" onClick={() => synthesizeNarration(workflowArc)}><Volume2 size={16} /> WAV</button></div></> : <p className="empty">Создайте StoryArc, чтобы редактировать сезонный монтаж.</p>}</div>
+        <div className="workflow-block">
+          <h3>StoryArc редактор</h3>
+          {workflowArc ? <>
+            <label className="setting-field">
+              <span>План</span>
+              <select value={workflowArc.id} onChange={(event) => setWorkflowArcId(Number(event.target.value))}>
+                {visibleStoryArcs.map((arc) => <option key={arc.id} value={arc.id}>{arc.title}</option>)}
+              </select>
+              <small>{workflowArc.segments.length} частей · {formatElapsed(Math.round(workflowArc.total_duration_seconds))}</small>
+            </label>
+            <div className="arc-edit-row">
+              <input value={workflowArc.title} onChange={(event) => patchArcLocal(workflowArc.id, { title: event.target.value })} />
+              <select value={workflowArc.output_format} onChange={(event) => patchArcLocal(workflowArc.id, { output_format: event.target.value as StoryArc["output_format"] })}>
+                <option value="single_short">Один Shorts</option>
+                <option value="shorts_series">Серия Shorts</option>
+                <option value="story_video">Видео 2–10 мин</option>
+                <option value="long_video">Длинное видео</option>
+              </select>
+              <button onClick={() => saveArcMeta(workflowArc)}><Save size={16} /> Сохранить</button>
+            </div>
+            <label className="setting-field">
+              <span>Переходы</span>
+              <select value={arcTransition} onChange={(event) => setArcTransition(event.target.value as "cut" | "fade")}>
+                <option value="fade">Fade</option>
+                <option value="cut">Склейка без перехода</option>
+              </select>
+              <small>Применяется при StoryArc-рендере.</small>
+            </label>
+            <SettingCheck title="Добавлять озвучку" hint="Локальная озвучка смешивается с приглушённым звуком оригинала." checked={arcIncludeNarration} onChange={setArcIncludeNarration} />
+            <label className="setting-field">
+              <span>Режим озвучки</span>
+              <select value={arcNarrationMode} onChange={(event) => { const mode = event.target.value as "first_person" | "narrator" | "none"; setArcNarrationMode(mode); setArcIncludeNarration(mode !== "none"); }}>
+                <option value="first_person">От лица героя</option>
+                <option value="narrator">Нейтральный диктор</option>
+                <option value="none">Без озвучки</option>
+              </select>
+              <small>Это локальный TTS, не имитация голоса актёра.</small>
+            </label>
+            <div className="arc-actions">
+              <button disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => enqueueStoryArcRender(workflowArc, true)}><Clapperboard size={16} /> В очередь</button>
+              <button className="secondary" disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => renderStoryArc(workflowArc, false)}>Без субтитров</button>
+              <button className="secondary" onClick={() => synthesizeNarration(workflowArc)}><Volume2 size={16} /> WAV</button>
+            </div>
+          </> : <p className="empty">Создайте StoryArc, чтобы редактировать сезонный монтаж.</p>}
+        </div>
         <div className="workflow-block workflow-wide"><h3>Сегменты</h3>{workflowArc ? <div className="segment-editor">{workflowArc.segments.map((segment) => <article key={segment.id}><div className="segment-row"><button className="icon-button secondary" title="Выше" onClick={() => moveArcSegment(workflowArc.id, segment, -1)}>↑</button><button className="icon-button secondary" title="Ниже" onClick={() => moveArcSegment(workflowArc.id, segment, 1)}>↓</button><input type="number" min="0" step="0.1" value={segment.start_time} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { start_time: Number(event.target.value) })} /><input type="number" min="0" step="0.1" value={segment.end_time} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { end_time: Number(event.target.value) })} /><input value={segment.title} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { title: event.target.value })} /><input value={segment.role ?? ""} onChange={(event) => patchArcSegmentLocal(workflowArc.id, segment.id, { role: event.target.value || null })} /><button onClick={() => saveArcSegment(workflowArc.id, segment)}><Save size={16} /></button><button className="icon-button danger" title="Удалить" onClick={() => removeArcSegment(workflowArc.id, segment.id)}><Trash2 size={16} /></button></div><small>{segment.episode_file_name} · {segment.note}</small></article>)}</div> : <p className="empty">Сегменты появятся после создания плана.</p>}</div>
         <div className="workflow-block"><h3>Сценарий</h3>{workflowArc ? <><textarea rows={3} value={scriptPrompt} onChange={(event) => setScriptPrompt(event.target.value)} placeholder="Акцент для сценария: конфликт, развитие героя, быстрый пересказ…" /><button onClick={() => createVideoScriptForArc(workflowArc)}><FileText size={16} /> Создать сценарий</button></> : <small>Нужен StoryArc.</small>}<div className="script-list">{workflowScripts.map((script) => <details key={script.id}><summary>{script.title}</summary><pre>{script.script_text}</pre></details>)}</div></div>
         <div className="workflow-block"><h3>Публикация</h3>{workflowArc ? <button onClick={() => createPublishingPlanForArc(workflowArc)}><CalendarDays size={16} /> Создать план</button> : <small>Нужен StoryArc.</small>}<div className="publishing-list">{workflowPublishing.map((plan) => <article key={plan.id}><strong>{plan.title}</strong><small>{plan.platform} · {statusLabel(plan.status)}</small><p>{plan.description}</p><small>{plan.hashtags.join(" ")}</small><button className="text-button" disabled={!plan.story_arc_export_id} onClick={() => createPublishingPackageForPlan(plan)}>Собрать publishing.json</button></article>)}</div></div>
@@ -663,7 +703,7 @@ function App() {
       </div>
     </section>
 
-    <section className="panel section-gap"><div className="panel-title"><FolderOpen size={19} /><h2>Готовые ролики</h2><span className="badge">{exports.length}</span></div><div className="exports-grid">{exports.map((item) => <article className="export-card" key={item.id}>{item.cover_path ? <img src={`/api/exports/${item.id}/cover`} alt="Обложка клипа" /> : <div className="export-placeholder"><Clapperboard /></div>}<div><strong>Экспорт №{item.id}</strong><small>{item.preset_name} · {item.include_subtitles ? "с субтитрами" : "без субтитров"}</small><small title={item.output_path}>{item.output_path}</small></div><video controls preload="none" src={`/api/exports/${item.id}/file`} /><button onClick={() => api(`/api/exports/${item.id}/open-folder`, { method: "POST" })}><FolderOpen size={16} /> Открыть папку</button></article>)}{!exports.length && <p className="empty">После рендера готовые MP4 появятся здесь.</p>}</div></section>
+    <ExportsPanel exports={exports} />
 
     <section className="grid section-gap">
       <SystemPanel checks={checks} diagnostics={diagnostics} cacheInfo={cacheInfo} onRefresh={runSystemCheck} onClearCache={clearCache} />

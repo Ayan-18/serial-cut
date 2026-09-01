@@ -130,6 +130,7 @@ def _run_next_job_unlocked(
                     force_rerender=bool(payload.get("force_rerender", False)),
                     transition_style=str(payload.get("transition_style") or "cut"),
                     include_narration=bool(payload.get("include_narration", True)),
+                    narration_mode=str(payload.get("narration_mode") or "first_person"),
                     progress_callback=lambda current, total, _message: _update_render_progress(
                         session, job, current, total
                     ),

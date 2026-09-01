@@ -89,3 +89,16 @@ def test_failed_job_can_retry_from_selected_stage(session, tmp_path):
     assert stage3.status == JobStatus.QUEUED.value
     assert stage3.error_message is None
     assert auto_export.status == JobStatus.QUEUED.value
+
+
+def test_enqueue_episode_can_start_from_specific_stage(session, tmp_path):
+    season = tmp_path / "Сезон"
+    season.mkdir()
+    (season / "episode.mkv").write_bytes(b"video")
+    result = import_season(session, season)
+
+    job = enqueue_episode_analysis(session, result.episode_ids[0], payload={"resume_from_stage": "stage3_candidates"})
+
+    assert job.current_stage == "stage3_candidates"
+    assert job.payload == {"resume_from_stage": "stage3_candidates"}
+    assert job.progress == 0.45

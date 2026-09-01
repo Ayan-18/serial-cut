@@ -39,7 +39,8 @@ class QueueSnapshot:
     eta_seconds: float | None = None
 
 
-def enqueue_episode_analysis(session: Session, episode_id: int) -> Job:
+def enqueue_episode_analysis(session: Session, episode_id: int, payload: dict | None = None) -> Job:
+    payload = dict(payload or {})
     existing = session.scalar(
         select(Job).where(
             Job.episode_id == episode_id,
@@ -48,6 +49,14 @@ def enqueue_episode_analysis(session: Session, episode_id: int) -> Job:
         )
     )
     if existing is not None:
+        if payload and existing.status != JobStatus.RUNNING.value:
+            existing_payload = dict(existing.payload or {})
+            existing_payload.update(payload)
+            existing.payload = existing_payload
+            resume_from_stage = payload.get("resume_from_stage")
+            if resume_from_stage:
+                existing.current_stage = str(resume_from_stage)
+                existing.progress = _job_stage_progress(str(resume_from_stage))
         return existing
     episode = session.get(Episode, episode_id)
     if episode is None:
@@ -56,8 +65,10 @@ def enqueue_episode_analysis(session: Session, episode_id: int) -> Job:
         episode_id=episode_id,
         kind=JobKind.ANALYZE_EPISODE.value,
         status=JobStatus.QUEUED.value,
-        current_stage=episode.stage,
+        current_stage=str(payload.get("resume_from_stage") or episode.stage),
         stage_index=_stage_index(episode.stage),
+        progress=_job_stage_progress(str(payload.get("resume_from_stage") or "")),
+        payload=payload or None,
     )
     session.add(job)
     session.flush()

@@ -1,5 +1,35 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - Queue-First Runtime Hardening
+
+Implemented the selected project weaknesses 1, 3, 4, 5, 6, 7 and 8 without changing the launcher:
+
+- Added a process-local `X-SerialCuts-Token` requirement for unsafe local HTTP methods while keeping
+  GET/HEAD/OPTIONS and testclient flows lightweight. The React API helper fetches the token from the
+  same-origin backend and attaches it automatically.
+- Episode enqueue now accepts `resume_from_stage`, `auto`, threshold, max clip and NVENC payload
+  fields, so the UI can queue media-only, candidate-only and auto-export work instead of running
+  long media/LLM/render steps inside a blocking request.
+- Stage 2 speaker labeling is lazy and optional. If speaker clustering fails, the media pipeline
+  stores a `serialcuts_warnings` entry in `episode.probe_json` and returns the warning instead of
+  silently losing character-quality context.
+- Project diagnostics now detect the current Alembic head dynamically and surface episodes with
+  analysis warnings.
+- StoryArc narration has explicit `first_person`, `narrator` and `none` modes. First-person mode
+  falls back to narrator when no target character exists, and render fingerprints/metadata include
+  the effective narration mode.
+- Added a generated-media StoryArc smoke test that builds two tiny local MP4 sources, renders a
+  multi-source StoryArc, and verifies the resulting MP4 streams with ffprobe.
+- Moved the ready-export gallery into `frontend/src/components/ExportsPanel.tsx` and expanded the
+  StoryArc workflow block so narration controls are easier to maintain.
+
+Verification: focused backend hardening tests passed (`26 passed`, `3 skipped` where FFmpeg/ffprobe
+are unavailable in this environment); focused StoryArc/security/queue/media tests passed (`19 passed`,
+`3 skipped`); frontend production build passed; frontend Vitest passed (`7 tests`) when run outside
+the sandbox after an initial sandbox `spawn EPERM`; quality benchmark averaged `85/100`. The local
+live DB in this checkout is still on an older revision, so `tests/test_api_stage2.py` was not used
+for this verification to avoid migrating local laptop data.
+
 ## 2026-09-01 - Remaining Full-Audit Hardening
 
 Completed audit findings 1-4, 6, 12 and 13:

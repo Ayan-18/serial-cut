@@ -7,9 +7,12 @@ import shutil
 import pytest
 
 from app.application.narration import build_narration_timeline_args
+from app.application.story_arc_render import render_story_arc
 from app.application.story_arc_render import build_narration_mix_args
+from app.infrastructure.config import Settings
 from app.infrastructure.processes import run_process
 from app.media.rendering import render_clip
+from app.models.entities import ClipCandidate, Episode, Season, StoryArc, StoryArcSegment
 
 
 def test_generated_media_can_render_to_vertical_h264_aac(tmp_path: Path):
@@ -108,4 +111,103 @@ def test_narration_timeline_and_ducking_filters_run_in_ffmpeg(tmp_path: Path):
     probe = run_process([ffprobe, "-v", "error", "-show_streams", "-of", "json", str(mixed)], 30)
     assert probe.returncode == 0, probe.stderr
     streams = json.loads(probe.stdout)["streams"]
+    assert {item["codec_type"] for item in streams} == {"video", "audio"}
+
+
+def test_generated_story_arc_render_produces_playable_multi_source_mp4(session, tmp_path: Path):
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        pytest.skip("FFmpeg/ffprobe are not installed")
+    sources: list[Path] = []
+    for index, color in enumerate(("red", "green"), start=1):
+        source = tmp_path / f"source-{index}.mp4"
+        generated = run_process(
+            [
+                ffmpeg, "-hide_banner", "-y",
+                "-f", "lavfi", "-i", f"color=c={color}:size=640x360:rate=24",
+                "-f", "lavfi", "-i", f"sine=frequency={330 + index * 110}:sample_rate=48000",
+                "-t", "2", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(source),
+            ],
+            60,
+        )
+        assert generated.returncode == 0, generated.stderr
+        sources.append(source)
+
+    season = Season(title="Smoke Season", root_path=str(tmp_path))
+    session.add(season)
+    session.flush()
+    candidates: list[ClipCandidate] = []
+    for index, source in enumerate(sources, start=1):
+        episode = Episode(
+            season_id=season.id,
+            file_path=str(source),
+            file_name=source.name,
+            fingerprint=f"story-smoke-{index}",
+            size_bytes=source.stat().st_size,
+            modified_ns=source.stat().st_mtime_ns,
+            duration_seconds=2.0,
+            width=640,
+            height=360,
+            fps=24.0,
+            selected_audio_stream_index=1,
+        )
+        session.add(episode)
+        session.flush()
+        candidate = ClipCandidate(
+            episode_id=episode.id,
+            start_time=0.2,
+            end_time=1.7,
+            title=f"Part {index}",
+            description="Generated StoryArc smoke segment.",
+            moment_type="smoke",
+            score=90,
+            scores_json={},
+            rationale="Synthetic media check",
+            problems_json=[],
+        )
+        session.add(candidate)
+        candidates.append(candidate)
+    session.flush()
+    arc = StoryArc(
+        season_id=season.id,
+        title="Generated StoryArc Smoke",
+        prompt="",
+        plan_json={"narration": []},
+        total_duration_seconds=3.0,
+    )
+    session.add(arc)
+    session.flush()
+    for index, candidate in enumerate(candidates, start=1):
+        session.add(
+            StoryArcSegment(
+                story_arc_id=arc.id,
+                episode_id=candidate.episode_id,
+                candidate_id=candidate.id,
+                sort_order=index,
+                start_time=candidate.start_time,
+                end_time=candidate.end_time,
+                title=candidate.title,
+                note="",
+            )
+        )
+    session.flush()
+
+    result = render_story_arc(
+        session,
+        arc.id,
+        Settings(ffmpeg_path=ffmpeg, ffprobe_path=ffprobe, cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
+        include_subtitles=False,
+        include_narration=False,
+        transition_style="fade",
+        preset_name="preview",
+        use_nvenc=False,
+    )
+
+    probe = run_process([ffprobe, "-v", "error", "-show_streams", "-of", "json", result.output_path], 30)
+    assert probe.returncode == 0, probe.stderr
+    streams = json.loads(probe.stdout)["streams"]
+    assert result.segment_count == 2
+    assert Path(result.output_path).exists()
     assert {item["codec_type"] for item in streams} == {"video", "audio"}

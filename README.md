@@ -28,7 +28,9 @@ crossfade-переходы либо обычную склейку. Для аро
 локальная Qwen может связать части в один текст, а Windows TTS создаёт WAV. При включённой опции WAV
 раскладывается по началам сегментов, проверяется по длительности и смешивается с
 оригиналом через sidechain ducking: оригинальный звук становится тише только во время речи
-диктора. Это не voice cloning и не имитация голоса актёра.
+диктора. Доступны режимы `first_person`, `narrator` и `none`; если у StoryArc не выбран персонаж,
+режим от первого лица автоматически становится нейтральным диктором. Это не voice cloning и не
+имитация голоса актёра.
 
 Новый блок **Workflow сезона** добавляет сезонный поиск по кандидатам и транскриптам, ручной
 редактор StoryArc-сегментов, StoryArc-render через очередь, fade-переходы между кусками, генератор
@@ -37,7 +39,9 @@ crossfade-переходы либо обычную склейку. Для аро
 Правки кандидатов и StoryArc версионируются: после изменения границ, кадрирования или порядка старый
 рендер получает статус «нужно обновить» и не используется повторно. Ручные сегменты сохраняются при
 пересборке, границы внутри речи расширяются до полной реплики, а повтор кандидата не добавляется.
-Остановка queued-render завершает активный FFmpeg-процесс и оставляет задачу на паузе.
+Остановка queued-render завершает активный FFmpeg-процесс и оставляет задачу на паузе. Интерфейс
+ставит долгие действия в очередь: отдельный media-анализ, пересоздание кандидатов, auto-export и
+StoryArc-render не блокируют HTTP-запрос до завершения тяжёлого FFmpeg/Whisper/LLM шага.
 Первоначальные лимиты частей и длительности теперь сохраняются в плане и не сбрасываются после
 ручного удаления сегмента и пересборки.
 
@@ -114,8 +118,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
 precision, duplicate rate и invalid clips. Это базовый измеритель перед изменениями логики выбора
 моментов.
 
-Дополнительно `tests/test_media_smoke.py` генерирует короткий тестовый H.264/AAC-файл, рендерит его
-в вертикальный MP4 и проверяет потоки через ffprobe. Реальные серии для этой проверки не нужны.
+Дополнительно `tests/test_media_smoke.py` генерирует короткие тестовые H.264/AAC-файлы, рендерит
+обычный вертикальный MP4 и multi-source StoryArc MP4, затем проверяет потоки через ffprobe. Реальные
+серии для этой проверки не нужны.
 
 ## Улучшения Качества И Удобства
 
@@ -164,7 +169,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 
 ## Безопасность исходников
 
-Импорт открывает видео только для чтения. Оригинальные серии не копируются целиком, не изменяются и не удаляются. Кнопка очистки в UI работает только в выделенной папке с маркером `.serialcuts-cache`, проверяет защищённые пути, блокируется при незавершённых задачах и требует подтверждения. Готовые ролики и исходные серии она не затрагивает. HTTP API принимает запросы только с этого компьютера; запуск на `0.0.0.0` запрещён.
+Импорт открывает видео только для чтения. Оригинальные серии не копируются целиком, не изменяются и не удаляются. Кнопка очистки в UI работает только в выделенной папке с маркером `.serialcuts-cache`, проверяет защищённые пути, блокируется при незавершённых задачах и требует подтверждения. Готовые ролики и исходные серии она не затрагивает. HTTP API принимает запросы только с этого компьютера; запуск на `0.0.0.0` запрещён. Unsafe-запросы `POST` / `PUT` / `PATCH` / `DELETE` дополнительно требуют одноразовый локальный `X-SerialCuts-Token`, который штатный frontend получает сам через same-origin `GET /api/security-token`.
 
 ## Fingerprint
 
@@ -176,8 +181,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 - `POST /api/seasons/import` - импорт локальной папки сезона.
 - `GET /api/seasons` - список сезонов и серий.
 - `POST /api/episodes/{id}/probe` - ffprobe-метаданные серии.
-- `POST /api/episodes/{id}/stage2` - выполнить media-анализ: audio/proxy/transcript/scenes.
-- `POST /api/episodes/{id}/stage3` - построить outline и кандидаты.
+- `POST /api/episodes/{id}/stage2` - выполнить media-анализ напрямую; основной UI использует очередь.
+- `POST /api/episodes/{id}/stage3` - построить outline и кандидаты напрямую; основной UI использует очередь.
 - `GET /api/episodes/{id}/candidates` - список кандидатов серии.
 - `POST /api/candidates/{id}/review` - принять или отклонить кандидата, изменить границы/crop.
 - `POST /api/candidates/{id}/render` - экспортировать вертикальный MP4.
@@ -192,7 +197,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 - `PATCH /api/story-arcs/{id}` - изменить название, формат, статус и сценарную озвучку StoryArc.
 - `PATCH`, `DELETE /api/story-arcs/{id}/segments/{segment_id}` - править или удалить кусок плана.
 - `POST /api/story-arcs/{id}/segments` - добавить найденного кандидата в StoryArc вручную.
-- `POST /api/story-arcs/{id}/render` - склеить сохранённую арку в один MP4.
+- `POST /api/story-arcs/{id}/render` - склеить сохранённую арку в один MP4 напрямую; основной UI использует очередь.
 - `POST /api/story-arcs/{id}/render-job` - поставить StoryArc-render в фоновую очередь.
 - `GET /api/story-arcs/{id}/narration` - получить текст озвучки от лица героя или narrator fallback.
 - `POST /api/story-arcs/{id}/narration-audio` - создать локальный WAV через Windows TTS.
@@ -220,7 +225,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_system.ps1
 - `POST /api/queue/pause`, `POST /api/queue/resume` - управление очередью.
 - `POST /api/jobs/{id}/cancel`, `POST /api/jobs/{id}/retry` - отмена и повтор задачи.
 - `POST /api/episodes/{id}/auto-export` - принять и экспортировать кандидаты выше порога.
-- `POST /api/episodes/{id}/enqueue` - идемпотентная постановка анализа в очередь.
+- `POST /api/episodes/{id}/enqueue` - идемпотентная постановка анализа в очередь; можно передать
+  `resume_from_stage` для `stage2_media`, `stage3_candidates` или `auto_export`.
 - `POST /api/jobs/recover` - восстановление running-задач после рестарта.
 
 ## Media Pipeline MVP
