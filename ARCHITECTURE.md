@@ -12,7 +12,12 @@
 
 ## Модули
 
-- `app/api` - HTTP API для панели; очередь и поиск вынесены в отдельные routers.
+- `app/api` - HTTP API для панели. Доменные routers разделены по файлам:
+  `settings_and_diagnostics_routes.py`, `seasons_routes.py`, `episodes_routes.py`,
+  `candidates_routes.py`, `story_arcs_routes.py`, `characters_routes.py`,
+  `publishing_routes.py`, `exports_routes.py`, плюс отдельные `queue_routes.py` и
+  `search_routes.py`. Общие HTTP helper-функции лежат в `app/api/_shared.py`,
+  а `app/api/routes.py` оставлен тонким compatibility shim.
 - `app/application` - сценарии приложения: импорт сезона, system-check.
 - `app/domain` - статусы, константы, работа с путями.
 - `app/infrastructure` - конфиг, БД, процессы, fingerprint.

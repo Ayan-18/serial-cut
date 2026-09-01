@@ -1,5 +1,26 @@
 # SerialCuts Worklog
 
+## 2026-09-01 - API Router Split
+
+Completed prompt point 3:
+
+- Split the former 1486-line `app/api/routes.py` into domain routers:
+  `settings_and_diagnostics_routes.py`, `seasons_routes.py`, `episodes_routes.py`,
+  `candidates_routes.py`, `story_arcs_routes.py`, `characters_routes.py`,
+  `publishing_routes.py` and `exports_routes.py`.
+- Moved shared HTTP mappers and guard helpers into `app/api/_shared.py`.
+- Added `app/api/router.py` with the domain router registry and kept `app/api/routes.py`
+  as a compatibility shim for older imports.
+- Updated `app/main.py` to include the domain routers directly, plus the existing queue and
+  search routers.
+- Added `tests/test_api_router_structure.py` to check representative API paths and enforce
+  route module size, with `schemas.py` intentionally exempted by the prompt scope.
+
+Verification: `.\.venv\Scripts\python.exe -m pytest tests\test_api_router_structure.py
+tests\test_api_errors.py tests\test_logging_config.py tests\test_queue.py` passed (`11 passed`,
+one upstream Starlette deprecation warning). `.\.venv\Scripts\python.exe -m compileall -q app\api`
+passed. `git diff --check` passed with line-ending warnings only.
+
 ## 2026-09-01 - Runtime Logging Pass
 
 Completed prompt point 2:

@@ -6,9 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.api.router import domain_routers
 from app.api.errors import register_exception_handlers
 from app.api.loopback import LoopbackOnlyMiddleware
-from app.api.routes import router
 from app.api.queue_routes import router as queue_router
 from app.api.search_routes import router as search_router
 from app.infrastructure.config import get_settings
@@ -32,7 +32,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="SerialCuts", version="0.1.0", lifespan=lifespan)
     register_exception_handlers(app)
     app.add_middleware(LoopbackOnlyMiddleware)
-    app.include_router(router)
+    for domain_router in domain_routers:
+        app.include_router(domain_router)
     app.include_router(queue_router)
     app.include_router(search_router)
     static_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"

@@ -17,7 +17,7 @@ def test_stage2_endpoint_returns_pipeline_result(monkeypatch):
             scenes=2,
         )
 
-    monkeypatch.setattr("app.api.routes.run_stage2_media_analysis", fake_stage2)
+    monkeypatch.setattr("app.api.episodes_routes.run_stage2_media_analysis", fake_stage2)
 
     response = TestClient(app).post("/api/episodes/42/stage2")
 
@@ -26,4 +26,3 @@ def test_stage2_endpoint_returns_pipeline_result(monkeypatch):
     assert response.json()["stage"] == "scenes_detected"
     assert response.json()["transcript_segments"] == 1
     assert response.json()["scenes"] == 2
-
