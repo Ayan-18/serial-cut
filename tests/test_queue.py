@@ -3,7 +3,13 @@ from __future__ import annotations
 from app.application.importer import import_season
 from app.domain.enums import JobStatus
 from app.models.entities import JobStage
-from app.workers.queue import enqueue_episode_analysis, recover_interrupted_jobs, retry_job, retry_job_from_stage
+from app.workers.queue import (
+    enqueue_episode_analysis,
+    recover_interrupted_jobs,
+    request_cancel,
+    retry_job,
+    retry_job_from_stage,
+)
 
 
 def test_job_recovery_returns_running_job_to_queue(session, tmp_path):
@@ -39,6 +45,23 @@ def test_cancelled_job_can_be_retried_idempotently(session, tmp_path):
     assert job.error_message is None
     assert job.attempts == 1
     assert job.payload is None
+
+
+def test_queued_job_stops_immediately_and_can_be_continued(session, tmp_path):
+    season = tmp_path / "Сезон"
+    season.mkdir()
+    (season / "episode.mkv").write_bytes(b"video")
+    imported = import_season(session, season)
+    job = enqueue_episode_analysis(session, imported.episode_ids[0])
+
+    request_cancel(session, job.id)
+
+    assert job.status == JobStatus.PAUSED.value
+    assert job.cancel_requested is False
+    assert job.finished_at is not None
+    retry_job(session, job.id)
+    assert job.status == JobStatus.QUEUED.value
+    assert job.finished_at is None
 
 
 def test_failed_job_can_retry_from_selected_stage(session, tmp_path):

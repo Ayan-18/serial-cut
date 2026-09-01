@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from app.application.importer import import_season
 from app.application.stage2 import MediaPrepResult, run_stage2_media_analysis
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
+from app.infrastructure.processes import ProcessCancelledError
 from app.media.scenes import SceneInterval, StubSceneDetector, save_scenes
 from app.media.transcription import (
     FasterWhisperTranscriber,
@@ -112,4 +114,19 @@ def test_faster_whisper_auto_device_falls_back_to_cpu(monkeypatch, tmp_path: Pat
 
     assert transcriber.transcribe(tmp_path / "audio.wav") is expected
     assert calls == [("cuda", "int8_float16"), ("cuda", "int8"), ("cpu", "int8")]
+
+
+def test_faster_whisper_cancellation_does_not_restart_on_fallback_device(monkeypatch, tmp_path: Path):
+    transcriber = FasterWhisperTranscriber("small", "int8_float16", "int8", device="auto")
+    calls: list[tuple[str, str]] = []
+
+    def cancelled(device: str, compute_type: str, _audio_path: Path):
+        calls.append((device, compute_type))
+        raise ProcessCancelledError("остановлено")
+
+    monkeypatch.setattr(transcriber, "_transcribe_with", cancelled)
+
+    with pytest.raises(ProcessCancelledError, match="остановлено"):
+        transcriber.transcribe(tmp_path / "audio.wav")
+    assert calls == [("cuda", "int8_float16")]
 

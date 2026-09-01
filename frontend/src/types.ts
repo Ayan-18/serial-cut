@@ -1,7 +1,7 @@
 export type Episode = { id: number; file_name: string; file_path: string; stage: string; size_bytes: number; duration_seconds: number | null; width: number | null; height: number | null; fps: number | null };
 export type Season = { id: number; title: string; root_path: string; episodes: Episode[] };
 export type CheckItem = { name: string; ok: boolean; message: string };
-export type Job = { id: number; episode_id: number | null; kind: string; status: string; current_stage: string | null; progress: number; error_message: string | null; created_at: string; updated_at: string };
+export type Job = { id: number; episode_id: number | null; kind: string; status: string; current_stage: string | null; progress: number; progress_message: string | null; error_message: string | null; started_at: string | null; finished_at: string | null; created_at: string; updated_at: string };
 export type QueueData = { snapshot: { queued: number; running: number; failed: number; paused: boolean; eta_seconds: number | null }; items: Job[] };
 export type RuntimeSettings = {
   cache_dir: string; output_dir: string; quality_profile: "fast" | "balanced" | "quality";

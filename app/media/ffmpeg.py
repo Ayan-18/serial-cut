@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from app.infrastructure.atomic import replace_atomically, temp_sibling
-from app.infrastructure.processes import run_process
+from app.infrastructure.processes import ProcessResult, run_process
 
 
 def build_extract_audio_args(
@@ -51,12 +52,13 @@ def extract_audio(
     output_path: Path,
     audio_stream_index: int | None,
     timeout_seconds: int = 1800,
+    runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> Path:
     temp_path = temp_sibling(output_path).with_suffix(".wav")
     temp_path.parent.mkdir(parents=True, exist_ok=True)
-    result = run_process(
+    result = runner(
         build_extract_audio_args(ffmpeg_path, media_path, temp_path, audio_stream_index),
-        timeout_seconds=timeout_seconds,
+        timeout_seconds,
     )
     if result.returncode != 0:
         temp_path.unlink(missing_ok=True)
@@ -72,12 +74,13 @@ def create_proxy(
     width: int,
     crf: int,
     timeout_seconds: int = 1800,
+    runner: Callable[[list[str], int], ProcessResult] = run_process,
 ) -> Path:
     temp_path = temp_sibling(output_path).with_suffix(".mp4")
     temp_path.parent.mkdir(parents=True, exist_ok=True)
-    result = run_process(
+    result = runner(
         build_proxy_args(ffmpeg_path, media_path, temp_path, width, crf),
-        timeout_seconds=timeout_seconds,
+        timeout_seconds,
     )
     if result.returncode != 0:
         temp_path.unlink(missing_ok=True)

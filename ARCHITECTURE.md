@@ -10,7 +10,7 @@
 
 ## Модули
 
-- `app/api` - HTTP API для панели.
+- `app/api` - HTTP API для панели; очередь и поиск вынесены в отдельные routers.
 - `app/application` - сценарии приложения: импорт сезона, system-check.
 - `app/domain` - статусы, константы, работа с путями.
 - `app/infrastructure` - конфиг, БД, процессы, fingerprint.
@@ -48,7 +48,7 @@
 ## Следующие адаптеры
 
 - ASR: `faster-whisper`, русский язык, word timestamps, VAD, compute type `int8_float16` с fallback на `int8`.
-- LLM: локальный `llama.cpp` HTTP на `127.0.0.1`, строгий JSON через Pydantic.
+- LLM: локальный `llama.cpp` HTTP на loopback-адресе, строгий JSON через Pydantic; конфиг отклоняет внешние LLM URL.
 - VLM: опционально, только ключевые кадры верхних кандидатов.
 - Render: FFmpeg с NVENC при успешной диагностике, fallback `libx264`.
 
@@ -84,9 +84,9 @@ Audio/proxy не пересоздаются, если уже существую�
 - `analysis/quality.py` калибрует оценки по речи/сценам, проверяет границы фраз и удаляет почти одинаковые моменты из разных серий.
 - `media/rendering.py` поддерживает crop offset/scale, render presets, NVENC detect, export без субтитров и двухпроходный loudnorm helper.
 - Candidate/StoryArc revisions связывают ручные правки с производными экспортами; несовпавший render помечается `stale` и не переиспользуется.
-- `application/story_arc_render.py` рендерит источники отдельно, затем выполняет `xfade` + `acrossfade`, опционально смешивает локальную TTS-озвучку и сообщает прогресс очереди.
-- Длительные FFmpeg-процессы очереди используют cancellable runner. Итоговые MP4, JSON, ASS, cover и narration artifacts заменяются атомарно.
-- `analysis/text_similarity.py` даёт полностью локальный русский semantic fallback; при доступной Qwen планировщик дополнительно валидирует предложенный моделью порядок частей.
+- `application/story_arc_render.py` рендерит источники отдельно, затем выполняет `xfade` + `acrossfade` с выбранным preset/NVENC и смешивает разложенную по таймлайну TTS через sidechain ducking.
+- Длительные FFmpeg/Whisper/scene/LLM-этапы проверяют отмену и сообщают детальный прогресс; ETA берётся из реальных `started_at`/`finished_at`. Итоговые MP4, JSON, ASS, cover и narration artifacts заменяются атомарно.
+- `analysis/text_similarity.py` даёт полностью локальный русский semantic fallback; FTS5 ограничивает пул кандидатов/реплик для больших сезонов, а при доступной Qwen планировщик дополнительно валидирует предложенный моделью порядок частей.
 - `application/publishing.py` валидирует лимиты/статусы платформ и создаёт локальный manifest; внешняя публикация не входит в privacy-first MVP.
 - `application/project_diagnostics.py` проверяет миграцию, инструменты, свободное место, потерянные и устаревшие производные файлы.
 - UI показывает вертикальный preview, subtitle/crop editor, фильтры, живую очередь, историю экспортов, диагностику моделей и подтверждённую очистку только cache.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -17,18 +18,26 @@ from app.application.publishing import (
 )
 from app.application.review import save_candidate_edits
 from app.application.stage3 import run_stage3_candidate_analysis
-from app.application.story_arc_render import build_crossfade_args
-from app.application.story_arcs import StoryArcPlanRequest, create_story_arc_plan, rebuild_story_arc_plan
+from app.application.narration import build_narration_timeline_args
+from app.application.story_arc_render import build_crossfade_args, build_narration_mix_args
+from app.application.story_arcs import (
+    StoryArcPlanRequest,
+    create_story_arc_plan,
+    rebuild_story_arc_plan,
+    remove_story_arc_segment,
+)
 from app.application.video_scripts import VideoScriptRequest, create_video_script
 from app.analysis.local_text import generate_local_text
 from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessCancelledError
+from app.media.rendering import RENDER_PRESETS
 from app.media.voice_identity import VoiceEmbedding, merge_voice_profile, voice_profile_from_json
 from app.models.entities import (
     CandidateSubtitle,
     ClipCandidate,
     Episode,
     Export,
+    Job,
     Scene,
     StoryArc,
     StoryArcExport,
@@ -37,7 +46,7 @@ from app.models.entities import (
     WordTimestamp,
 )
 from app.workers.queue import enqueue_candidate_render
-from app.workers.runner import run_next_job
+from app.workers.runner import estimate_eta_seconds, run_next_job
 
 
 def _import_episode(session, tmp_path: Path) -> tuple[int, Path]:
@@ -136,6 +145,48 @@ def test_crossfade_uses_video_and_audio_transitions(tmp_path):
     assert "offset=9.750" in filters
 
 
+def test_crossfade_respects_nvenc_and_render_preset(tmp_path):
+    args = build_crossfade_args(
+        "ffmpeg",
+        [tmp_path / "one.mp4", tmp_path / "two.mp4"],
+        [10, 12],
+        tmp_path / "out.mp4",
+        preset=RENDER_PRESETS["instagram_reels"],
+        use_nvenc=True,
+    )
+
+    assert args[args.index("-c:v") + 1] == "h264_nvenc"
+    assert args[args.index("-b:v") + 1] == "10M"
+    assert args[args.index("-b:a") + 1] == "192k"
+
+
+def test_narration_is_scheduled_and_ducks_only_while_voice_is_present(tmp_path):
+    timeline = build_narration_timeline_args(
+        "ffmpeg",
+        [tmp_path / "one.wav", tmp_path / "two.wav"],
+        [{"start_time": 0.5}, {"start_time": 8.0}],
+        [2.0, 2.5],
+        15.0,
+        tmp_path / "timeline.wav",
+    )
+    filters = timeline[timeline.index("-filter_complex") + 1]
+    assert "adelay=500:all=1" in filters
+    assert "adelay=8000:all=1" in filters
+    assert "atrim=duration=15.000" in filters
+
+    mix = build_narration_mix_args(
+        "ffmpeg", tmp_path / "video.mp4", tmp_path / "timeline.wav", 15.0, tmp_path / "out.mp4"
+    )
+    mix_filters = mix[mix.index("-filter_complex") + 1]
+    assert "sidechaincompress=" in mix_filters
+    assert "amix=inputs=2:duration=first" in mix_filters
+
+    with pytest.raises(ValueError, match="не помещается"):
+        build_narration_timeline_args(
+            "ffmpeg", [tmp_path / "long.wav"], [{"start_time": 0.0}], [20.0], 5.0, tmp_path / "bad.wav"
+        )
+
+
 def test_semantic_search_matches_russian_synonyms(session, tmp_path):
     episode_id, _ = _import_episode(session, tmp_path)
     session.add(_candidate(episode_id, title="Скрытый секрет семьи"))
@@ -144,6 +195,75 @@ def test_semantic_search_matches_russian_synonyms(session, tmp_path):
     results = search_season(session, session.get(Episode, episode_id).season_id, "раскрытие правды")
 
     assert results and results[0].candidate_id is not None
+
+
+def test_search_fts_index_tracks_candidate_updates(session, tmp_path):
+    episode_id, _ = _import_episode(session, tmp_path)
+    candidate = _candidate(episode_id, title="Старое название")
+    session.add(candidate)
+    session.flush()
+    season_id = session.get(Episode, episode_id).season_id
+    assert search_season(session, season_id, "старое название")
+
+    candidate.title = "Синяя комета возвращается"
+    session.flush()
+
+    updated = search_season(session, season_id, "синяя комета")
+    assert updated and updated[0].candidate_id == candidate.id
+
+
+def test_story_arc_rebuild_keeps_original_limits_after_segment_removal(session, tmp_path):
+    episode_id, _ = _import_episode(session, tmp_path)
+    candidates = []
+    titles = ["Находка письма", "Ночная погоня", "Признание врага", "Спасение города"]
+    descriptions = [
+        "Письмо объясняет давнюю загадку.",
+        "Машины преследуют героя ночью.",
+        "Враг признаётся в подмене документов.",
+        "Команда останавливает аварию и спасает жителей.",
+    ]
+    for index, title in enumerate(titles):
+        candidate = _candidate(episode_id, title=title)
+        candidate.description = descriptions[index]
+        candidate.start_time = index * 25
+        candidate.end_time = index * 25 + 20
+        candidate.score = 90 - index
+        candidates.append(candidate)
+    session.add_all(candidates)
+    session.flush()
+    arc = create_story_arc_plan(
+        session,
+        StoryArcPlanRequest(
+            season_id=session.get(Episode, episode_id).season_id,
+            max_segments=3,
+            max_duration_seconds=65,
+        ),
+    )
+    removed_id = arc.segments[-1].id
+    remove_story_arc_segment(session, arc.id, removed_id)
+
+    rebuilt = rebuild_story_arc_plan(session, arc.id, Settings(llm_adapter="stub"))
+
+    assert rebuilt.plan_json["constraints"] == {"max_segments": 3, "max_duration_seconds": 65}
+    # The selector intentionally caps early plans at two clips per episode;
+    # after removing one it can still restore the original plan capacity.
+    assert len(rebuilt.segments) == 2
+    assert rebuilt.total_duration_seconds <= 65
+
+
+def test_eta_uses_real_job_durations_and_running_progress(session):
+    now = datetime.now(timezone.utc)
+    session.add_all(
+        [
+            Job(kind="analyze_episode", status="completed", started_at=now - timedelta(seconds=100), finished_at=now),
+            Job(kind="render_clip", status="completed", started_at=now - timedelta(seconds=40), finished_at=now),
+            Job(kind="analyze_episode", status="running", progress=0.25, started_at=now),
+            Job(kind="render_clip", status="queued", progress=0),
+        ]
+    )
+    session.flush()
+
+    assert estimate_eta_seconds(session) == pytest.approx(115.0)
 
 
 def test_publishing_package_is_local_validated_manifest(session, tmp_path):
@@ -217,6 +337,8 @@ def test_worker_marks_cancelled_render_as_paused(session, tmp_path, monkeypatch)
     assert result.status == "paused"
     assert job.status == "paused"
     assert job.stages[0].status == "paused"
+    assert job.progress_message == "Задача остановлена"
+    assert job.started_at is not None and job.finished_at is not None
 
 
 def test_local_llm_can_reorder_story_arc_and_write_script(session, tmp_path, monkeypatch):

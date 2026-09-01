@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from app.infrastructure.config import Settings
+from app.infrastructure.config import Settings, validate_loopback_http_url
 from app.models.entities import AppSetting
 
 
@@ -43,6 +43,11 @@ class RuntimeSettings(BaseModel):
         if value < min_value:
             raise ValueError("max_clip_seconds must be >= min_clip_seconds")
         return value
+
+    @field_validator("llm_base_url")
+    @classmethod
+    def local_llm_only(cls, value: str) -> str:
+        return validate_loopback_http_url(value)
 
 
 def runtime_settings_from_env(settings: Settings) -> RuntimeSettings:

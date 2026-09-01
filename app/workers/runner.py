@@ -22,8 +22,8 @@ from app.models.entities import Job, JobStage
 from app.workers.queue import next_queued_job
 
 
-Stage2Func = Callable[[Session, int, Settings], object]
-Stage3Func = Callable[[Session, int, Settings], object]
+Stage2Func = Callable[..., object]
+Stage3Func = Callable[..., object]
 
 
 _RUNNER_LOCK = Lock()
@@ -69,10 +69,15 @@ def _run_next_job_unlocked(
     if job.episode_id is None and job.kind != JobKind.RENDER_STORY_ARC.value:
         job.status = JobStatus.FAILED.value
         job.error_message = "У job нет episode_id"
+        job.progress_message = "Ошибка запуска"
+        job.finished_at = datetime.now(timezone.utc)
         return WorkerRunResult(True, job.id, job.status, job.error_message)
 
     job.status = JobStatus.RUNNING.value
     job.error_message = None
+    job.progress_message = "Запуск задачи"
+    job.started_at = datetime.now(timezone.utc)
+    job.finished_at = None
     payload = job.payload or {}
     resume_from_stage = str(payload.get("resume_from_stage") or "")
     job.progress = _resume_progress(resume_from_stage)
@@ -133,6 +138,8 @@ def _run_next_job_unlocked(
                 0.95,
             )
         else:
+            default_stage2 = stage2_func is None
+            default_stage3 = stage3_func is None
             if stage2_func is None or stage3_func is None:
                 from app.application.stage2 import run_stage2_media_analysis
                 from app.application.stage3 import run_stage3_candidate_analysis
@@ -143,10 +150,47 @@ def _run_next_job_unlocked(
                 raise ValueError(f"Неизвестный этап анализа: {resume_from_stage}")
             resume_stage = resume_from_stage or "stage2_media"
             if _should_run_analyze_stage("stage2_media", resume_stage):
-                _run_stage(session, job, "stage2_media", lambda: stage2_func(session, job.episode_id, settings), 0.45)
+                _run_stage(
+                    session,
+                    job,
+                    "stage2_media",
+                    (
+                        lambda: stage2_func(
+                            session,
+                            job.episode_id,
+                            settings,
+                            progress_callback=lambda value, message: _update_analysis_progress(
+                                session, job, 0.0, 0.45, value, message
+                            ),
+                            cancel_check=lambda: _job_cancel_requested(job.id),
+                            runner=cancellable_runner,
+                        )
+                        if default_stage2
+                        else lambda: stage2_func(session, job.episode_id, settings)
+                    ),
+                    0.45,
+                )
                 _raise_if_cancelled(session, job)
             if _should_run_analyze_stage("stage3_candidates", resume_stage):
-                _run_stage(session, job, "stage3_candidates", lambda: stage3_func(session, job.episode_id, settings), 0.75)
+                _run_stage(
+                    session,
+                    job,
+                    "stage3_candidates",
+                    (
+                        lambda: stage3_func(
+                            session,
+                            job.episode_id,
+                            settings,
+                            progress_callback=lambda value, message: _update_analysis_progress(
+                                session, job, 0.45, 0.75, value, message
+                            ),
+                            cancel_check=lambda: _job_cancel_requested(job.id),
+                        )
+                        if default_stage3
+                        else lambda: stage3_func(session, job.episode_id, settings)
+                    ),
+                    0.75,
+                )
                 _raise_if_cancelled(session, job)
             auto_enabled = bool(payload.get("auto", settings.auto_mode_enabled))
             if auto_enabled or resume_stage == "auto_export":
@@ -167,34 +211,48 @@ def _run_next_job_unlocked(
         job.status = JobStatus.COMPLETED.value
         job.progress = 1.0
         job.current_stage = "completed"
+        job.progress_message = "Задача завершена"
+        job.finished_at = datetime.now(timezone.utc)
         session.commit()
         elapsed = monotonic() - started
         return WorkerRunResult(True, job.id, job.status, f"Задача завершена за {elapsed:.1f} сек")
     except CancelledError as exc:
         job.status = JobStatus.PAUSED.value
         job.error_message = str(exc)
+        job.progress_message = "Задача остановлена"
+        job.finished_at = datetime.now(timezone.utc)
         session.commit()
         return WorkerRunResult(True, job.id, job.status, str(exc))
     except Exception as exc:
         job.status = JobStatus.FAILED.value
         job.error_message = str(exc)
+        job.progress_message = "Ошибка выполнения"
+        job.finished_at = datetime.now(timezone.utc)
         session.commit()
         return WorkerRunResult(True, job.id, job.status, str(exc))
 
 
 def estimate_eta_seconds(session: Session) -> float | None:
     completed = session.scalars(select(Job).where(Job.status == JobStatus.COMPLETED.value)).all()
-    durations = [
-        (job.updated_at - job.created_at).total_seconds()
-        for job in completed
-        if job.updated_at is not None and job.created_at is not None and job.updated_at > job.created_at
-    ]
+    durations_by_kind: dict[str, list[float]] = {}
+    for job in completed:
+        duration = _job_duration_seconds(job)
+        if duration is not None and duration > 0:
+            durations_by_kind.setdefault(job.kind, []).append(duration)
+    durations = [value for values in durations_by_kind.values() for value in values]
     if not durations:
         return None
-    queued = len(session.scalars(select(Job).where(Job.status == JobStatus.QUEUED.value)).all())
-    if queued == 0:
-        return 0.0
-    return (sum(durations) / len(durations)) * queued
+    fallback = sum(durations) / len(durations)
+    pending = session.scalars(
+        select(Job).where(Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]))
+    ).all()
+    eta = 0.0
+    for job in pending:
+        samples = durations_by_kind.get(job.kind) or []
+        expected = sum(samples) / len(samples) if samples else fallback
+        remaining = 1.0 - min(1.0, max(0.0, job.progress)) if job.status == JobStatus.RUNNING.value else 1.0
+        eta += expected * remaining
+    return eta
 
 
 class CancelledError(RuntimeError):
@@ -221,6 +279,7 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
     stage.status = JobStatus.RUNNING.value
     stage.started_at = datetime.now(timezone.utc).isoformat()
     job.current_stage = name
+    job.progress_message = _stage_start_message(name)
     session.commit()
     try:
         fn()
@@ -228,12 +287,14 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
         stage.status = JobStatus.PAUSED.value
         stage.finished_at = datetime.now(timezone.utc).isoformat()
         stage.error_message = str(exc)
+        job.progress_message = str(exc)
         session.commit()
         raise CancelledError(str(exc)) from exc
     except Exception as exc:
         stage.status = JobStatus.FAILED.value
         stage.finished_at = datetime.now(timezone.utc).isoformat()
         stage.error_message = str(exc)
+        job.progress_message = f"Ошибка: {exc}"
         session.commit()
         raise
     else:
@@ -241,6 +302,7 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
         stage.finished_at = datetime.now(timezone.utc).isoformat()
         stage.error_message = None
         job.progress = progress
+        job.progress_message = _stage_complete_message(name)
         session.commit()
 
 
@@ -272,5 +334,45 @@ def _update_render_progress(session: Session, job: Job, current: int, total: int
     if total <= 0:
         return
     job.progress = min(0.94, max(0.02, 0.02 + 0.92 * current / total))
+    job.progress_message = f"Рендер StoryArc: шаг {current} из {total}"
     session.commit()
+
+
+def _update_analysis_progress(
+    session: Session,
+    job: Job,
+    start: float,
+    end: float,
+    fraction: float,
+    message: str,
+) -> None:
+    job.progress = max(start, min(end, start + (end - start) * max(0.0, min(1.0, fraction))))
+    job.progress_message = message
+    session.commit()
+
+
+def _job_duration_seconds(job: Job) -> float | None:
+    if job.started_at is None or job.finished_at is None:
+        return None
+    started = _aware(job.started_at)
+    finished = _aware(job.finished_at)
+    return (finished - started).total_seconds() if finished > started else None
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _stage_start_message(name: str) -> str:
+    return {
+        "stage2_media": "Подготовка медиа",
+        "stage3_candidates": "Анализ сюжета и кандидатов",
+        "auto_export": "Автоматический экспорт",
+        "render_clip": "Рендер клипа",
+        "render_story_arc": "Рендер StoryArc",
+    }.get(name, name)
+
+
+def _stage_complete_message(name: str) -> str:
+    return f"Этап завершён: {_stage_start_message(name)}"
 

@@ -4,9 +4,10 @@ import json
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from typing import Callable
 
 from app.domain.enums import EpisodeStage, TrackKind
-from app.infrastructure.processes import run_process
+from app.infrastructure.processes import ProcessResult, run_process
 from app.models.entities import Episode, MediaTrack
 
 
@@ -32,8 +33,13 @@ def build_ffprobe_args(ffprobe_path: str, media_path: Path) -> list[str]:
     ]
 
 
-def probe_media(ffprobe_path: str, media_path: Path, timeout_seconds: int = 60) -> ProbeSummary:
-    result = run_process(build_ffprobe_args(ffprobe_path, media_path), timeout_seconds=timeout_seconds)
+def probe_media(
+    ffprobe_path: str,
+    media_path: Path,
+    timeout_seconds: int = 60,
+    runner: Callable[[list[str], int], ProcessResult] = run_process,
+) -> ProbeSummary:
+    result = runner(build_ffprobe_args(ffprobe_path, media_path), timeout_seconds)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "ffprobe завершился с ошибкой"
         raise RuntimeError(detail)

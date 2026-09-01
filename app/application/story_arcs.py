@@ -89,7 +89,7 @@ def create_story_arc_plan(
     session.flush()
     _replace_segments(session, arc, selected)
     arc.total_duration_seconds = round(sum(item.candidate.end_time - item.candidate.start_time for item in selected), 3)
-    arc.plan_json = _plan_json(arc, season, character, selected)
+    arc.plan_json = _plan_json(arc, season, character, selected, request)
     session.flush()
     return _load_arc(session, arc.id)
 
@@ -233,6 +233,10 @@ def rebuild_story_arc_plan(
     settings: Settings | None = None,
 ) -> StoryArc:
     arc = _load_arc(session, story_arc_id)
+    season = session.get(Season, arc.season_id)
+    if season is None:
+        raise ValueError("Сезон не найден")
+    constraints = dict((arc.plan_json or {}).get("constraints") or {})
     request = StoryArcPlanRequest(
         season_id=arc.season_id,
         title=arc.title,
@@ -240,8 +244,11 @@ def rebuild_story_arc_plan(
         arc_type=arc.arc_type,
         output_format=arc.output_format,
         target_character_id=arc.target_character_id,
-        max_segments=max(1, len(arc.segments)),
-        max_duration_seconds=max(15, round(arc.total_duration_seconds)),
+        max_segments=max(1, int(constraints.get("max_segments") or len(arc.segments))),
+        max_duration_seconds=max(
+            15,
+            int(constraints.get("max_duration_seconds") or round(arc.total_duration_seconds)),
+        ),
     )
     character = _target_character(session, request.target_character_id, arc.season_id)
     candidates = _rank_candidates(session, arc.season_id, request.prompt, character)
@@ -449,6 +456,7 @@ def _plan_json(
     season: Season,
     character: Character | None,
     items: list[StoryArcBuildItem],
+    request: StoryArcPlanRequest,
 ) -> dict:
     chapters = [
         {
@@ -469,6 +477,10 @@ def _plan_json(
         "arc": arc.title,
         "target_character": character.name if character else None,
         "format": arc.output_format,
+        "constraints": {
+            "max_segments": max(1, request.max_segments),
+            "max_duration_seconds": max(15, request.max_duration_seconds),
+        },
         "total_duration_seconds": round(sum(item["duration"] for item in chapters), 3),
         "chapters": chapters,
         "narration": _narration_plan(character, chapters),
@@ -651,6 +663,7 @@ def _narration_plan(character: Character | None, chapters: list[dict]) -> list[d
     if character is None:
         return []
     lines: list[dict] = []
+    elapsed = 0.0
     for chapter in chapters:
         role = chapter["role"]
         title = chapter["title"]
@@ -660,7 +673,15 @@ def _narration_plan(character: Character | None, chapters: list[dict]) -> list[d
             text = f"Именно так закончилась эта часть моей истории: {title}."
         else:
             text = f"После этого для меня стало важным: {title}."
-        lines.append({"order": chapter["order"], "voice": character.name, "text": text})
+        lines.append(
+            {
+                "order": chapter["order"],
+                "voice": character.name,
+                "text": text,
+                "start_time": round(elapsed + 0.35, 3),
+            }
+        )
+        elapsed += float(chapter.get("duration") or 0.0)
     return lines
 
 

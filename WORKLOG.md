@@ -2,6 +2,32 @@
 
 This file is the durable project memory for Codex sessions on the laptop and desktop. Update it after meaningful changes so a new task can continue without needing the full chat history.
 
+## 2026-09-01 - Audit Weaknesses 5, 7-11 And 14
+
+Hardened the selected findings from the full-project audit:
+
+- Enforced privacy at configuration boundaries: llama.cpp URLs must resolve to `localhost` or a
+  loopback IP and cannot contain credentials.
+- Rebuilt StoryArc narration as individually synthesized lines placed on the montage timeline,
+  rejected narration that cannot fit without excessive speed-up, and used sidechain compression so
+  source audio is ducked only while narration speaks.
+- StoryArc crossfades now preserve the chosen render bitrate/audio preset and NVENC preference, with
+  the existing CPU fallback. Final duration accounts for transition overlap.
+- Added persisted job messages and start/finish timestamps, real-history ETA per job kind, granular
+  Whisper/Qwen/scene/render progress, and responsive cancellation through FFmpeg and model loops.
+- Escaped ASS cue text and font fields while preserving generated line breaks/bold speaker labels.
+- Persisted StoryArc build constraints so rebuilds retain the original segment/duration limits.
+- Added SQLite FTS5 indexes with update/delete triggers and bounded semantic reranking for season
+  search. Split queue/search API routers and queue/system React panels out of monolithic files.
+- Added Alembic revision `0012_runtime_quality_hardening`; upgraded the live database from `0011`
+  to head after creating `data/serialcuts.db.bak-0011-20260901`.
+
+Verification: backend suite passed (`95 tests`, one upstream deprecation warning), including a real
+FFmpeg narration-timeline/ducking smoke; frontend Vitest
+passed (`6 tests`); frontend production build passed; migration reached
+`0012_runtime_quality_hardening`; OpenAPI contains the split queue/search routes. Original media was
+not modified and no external service was contacted.
+
 ## 2026-09-01 - Reliability And Narrative Quality Pass
 
 Completed the full improvement list from the repository review:

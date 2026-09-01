@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -129,10 +130,21 @@ def enqueue_story_arc_render(session: Session, story_arc_id: int, payload: dict)
 
 
 def recover_interrupted_jobs(session: Session) -> int:
-    jobs = session.scalars(select(Job).where(Job.status == JobStatus.RUNNING.value)).all()
+    jobs = session.scalars(
+        select(Job).where(Job.status.in_([JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value]))
+    ).all()
     for job in jobs:
-        job.status = JobStatus.QUEUED.value
-        job.error_message = "Задача восстановлена после перезапуска приложения"
+        if job.status == JobStatus.CANCEL_REQUESTED.value:
+            job.status = JobStatus.PAUSED.value
+            job.error_message = "Остановка завершена при перезапуске приложения"
+            job.progress_message = "Задача остановлена"
+            job.finished_at = datetime.now(timezone.utc)
+        else:
+            job.status = JobStatus.QUEUED.value
+            job.error_message = "Задача восстановлена после перезапуска приложения"
+            job.progress_message = "Ожидает повторного запуска после восстановления"
+            job.started_at = None
+            job.finished_at = None
     return len(jobs)
 
 
@@ -140,8 +152,15 @@ def request_cancel(session: Session, job_id: int) -> Job:
     job = _get_job(session, job_id)
     if job.status in {JobStatus.COMPLETED.value, JobStatus.FAILED.value}:
         return job
-    job.cancel_requested = True
-    job.status = JobStatus.CANCEL_REQUESTED.value
+    if job.status == JobStatus.QUEUED.value:
+        job.cancel_requested = False
+        job.status = JobStatus.PAUSED.value
+        job.progress_message = "Задача остановлена до запуска"
+        job.finished_at = datetime.now(timezone.utc)
+    elif job.status != JobStatus.PAUSED.value:
+        job.cancel_requested = True
+        job.status = JobStatus.CANCEL_REQUESTED.value
+        job.progress_message = "Остановка запрошена"
     return job
 
 
@@ -153,6 +172,9 @@ def retry_job(session: Session, job_id: int) -> Job:
     job.status = JobStatus.QUEUED.value
     job.cancel_requested = False
     job.error_message = None
+    job.progress_message = "Ожидает повторного запуска"
+    job.started_at = None
+    job.finished_at = None
     job.attempts += 1
     return job
 
@@ -170,6 +192,9 @@ def retry_job_from_stage(session: Session, job_id: int, stage_name: str) -> Job:
     job.status = JobStatus.QUEUED.value
     job.cancel_requested = False
     job.error_message = None
+    job.progress_message = "Ожидает повторного запуска выбранного этапа"
+    job.started_at = None
+    job.finished_at = None
     job.attempts += 1
     start_index = stages.index(stage_name)
     rows = session.scalars(select(JobStage).where(JobStage.job_id == job.id)).all()

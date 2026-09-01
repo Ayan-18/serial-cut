@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Protocol
+from typing import Callable, Protocol
 
 import httpx
 
@@ -15,6 +15,7 @@ from app.analysis.schemas import (
     parse_candidate_json,
 )
 from app.models.entities import Scene
+from app.infrastructure.processes import ProcessCancelledError
 
 
 class EpisodeAnalyzer(Protocol):
@@ -85,12 +86,22 @@ class StubEpisodeAnalyzer:
 
 
 class LlamaCppHttpAnalyzer:
-    def __init__(self, base_url: str, model_hint: str, timeout_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model_hint: str,
+        timeout_seconds: int = 180,
+        progress_callback: Callable[[float, str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model_hint = model_hint
         self.timeout_seconds = timeout_seconds
+        self.progress_callback = progress_callback
+        self.cancel_check = cancel_check
 
     def outline(self, transcript: str, context: AnalysisContext | None = None) -> EpisodeOutlinePayload:
+        self._raise_if_cancelled()
         entries = self._transcript_entries(transcript)
         if not entries:
             return EpisodeOutlinePayload(
@@ -136,7 +147,12 @@ class LlamaCppHttpAnalyzer:
         chunks = self._candidate_chunks(transcript, count=5 if context.candidate_mode == "story" else 3)
         all_candidates = []
         first_error: Exception | None = None
-        for chunk in chunks:
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            self._raise_if_cancelled()
+            self._report(
+                (chunk_index - 1) / max(1, len(chunks)),
+                f"Qwen: часть {chunk_index} из {len(chunks)}",
+            )
             entries = self._transcript_entries(chunk)
             if not entries:
                 continue
@@ -174,6 +190,10 @@ class LlamaCppHttpAnalyzer:
                 first_error = first_error or exc
                 continue
             all_candidates.extend(parsed.candidates[:1] if context.candidate_mode == "story" else parsed.candidates[:2])
+            self._report(
+                chunk_index / max(1, len(chunks)),
+                f"Qwen: обработана часть {chunk_index} из {len(chunks)}",
+            )
         if not all_candidates and first_error is not None:
             raise first_error
         return CandidateListPayload(candidates=sorted(all_candidates, key=lambda item: item.start_time)[:8])
@@ -192,6 +212,7 @@ class LlamaCppHttpAnalyzer:
         )
 
     def _complete_json(self, prompt: str, schema: dict, max_tokens: int) -> str:
+        self._raise_if_cancelled()
         try:
             response = httpx.post(
                 f"{self.base_url}/v1/chat/completions",
@@ -225,10 +246,19 @@ class LlamaCppHttpAnalyzer:
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(f"Локальная Qwen отклонила запрос: HTTP {exc.response.status_code}") from exc
         payload = response.json()
+        self._raise_if_cancelled()
         choices = payload.get("choices") or []
         if choices:
             return str((choices[0].get("message") or {}).get("content") or "")
         return str(payload.get("content") or payload.get("response") or "")
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_check is not None and self.cancel_check():
+            raise ProcessCancelledError("Анализ Qwen остановлен пользователем")
+
+    def _report(self, value: float, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(max(0.0, min(1.0, value)), message)
 
     @classmethod
     def _grammar_schema(cls, value):

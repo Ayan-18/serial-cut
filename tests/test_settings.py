@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from app.application.settings import effective_settings, get_runtime_settings, save_runtime_settings
 from app.infrastructure.config import Settings
 
@@ -62,3 +65,14 @@ def test_settings_parse_empty_and_csv_telegram_user_ids_from_dotenv(tmp_path: Pa
 
     assert Settings(_env_file=empty_env).telegram_allowed_user_ids == []
     assert Settings(_env_file=csv_env).telegram_allowed_user_ids == [111, 222]
+
+
+def test_llm_endpoint_is_limited_to_this_computer():
+    assert Settings(llm_base_url="http://localhost:8081/").llm_base_url == "http://localhost:8081"
+    assert Settings(llm_base_url="http://127.0.0.2:8081").llm_base_url == "http://127.0.0.2:8081"
+    assert Settings(llm_base_url="http://[::1]:8081").llm_base_url == "http://[::1]:8081"
+
+    with pytest.raises(ValidationError, match="localhost/loopback"):
+        Settings(llm_base_url="https://models.example.com/v1")
+    with pytest.raises(ValidationError, match="логин или пароль"):
+        Settings(llm_base_url="http://user:secret@127.0.0.1:8081")

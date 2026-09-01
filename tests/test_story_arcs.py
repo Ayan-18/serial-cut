@@ -132,6 +132,7 @@ def test_story_arc_render_builds_segments_and_concat_export(session, tmp_path, m
         Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
         runner=fake_runner,
         force_rerender=True,
+        transition_style="fade",
     )
 
     assert result.segment_count == 2
@@ -139,3 +140,14 @@ def test_story_arc_render_builds_segments_and_concat_export(session, tmp_path, m
     assert Path(result.metadata_path or "").read_text(encoding="utf-8")
     assert len(rendered_segments) == 2
     assert "file '" in concat_list_text(rendered_segments)
+    assert result.duration_seconds == 59.75
+
+    reused = render_story_arc(
+        session,
+        arc.id,
+        Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out"),
+        runner=fake_runner,
+        transition_style="fade",
+    )
+    assert reused.export_id == result.export_id
+    assert reused.duration_seconds == 59.75

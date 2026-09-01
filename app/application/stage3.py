@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from app.analysis.schemas import AnalysisContext
 from app.analysis.validation import adjust_candidate_boundaries, dedupe_candidates, transcript_text
 from app.domain.enums import EpisodeStage
 from app.infrastructure.config import Settings
+from app.infrastructure.processes import ProcessCancelledError
 from app.models.entities import (
     CandidateSubtitle,
     ClipCandidate,
@@ -40,7 +42,11 @@ def run_stage3_candidate_analysis(
     episode_id: int,
     settings: Settings,
     analyzer: EpisodeAnalyzer | None = None,
+    progress_callback: Callable[[float, str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> Stage3Result:
+    _report(progress_callback, 0.02, "Загрузка расшифровки и сцен")
+    _raise_if_cancelled(cancel_check)
     episode = session.get(Episode, episode_id)
     if episode is None:
         raise ValueError(f"Episode {episode_id} not found")
@@ -56,7 +62,13 @@ def run_stage3_candidate_analysis(
         .where(TranscriptSegment.episode_id == episode_id)
         .order_by(WordTimestamp.start_time)
     ).all()
-    analyzer = analyzer or _build_analyzer(settings)
+    analyzer = analyzer or _build_analyzer(
+        settings,
+        progress_callback=lambda value, message: _report(
+            progress_callback, 0.28 + value * 0.48, message
+        ),
+        cancel_check=cancel_check,
+    )
     text = transcript_text(segments)
     context = AnalysisContext(
         season_summary=episode.season.story_context,
@@ -68,7 +80,9 @@ def run_stage3_candidate_analysis(
     )
     session.commit()
 
+    _report(progress_callback, 0.12, "Построение карты серии")
     outline = analyzer.outline(text, context)
+    _raise_if_cancelled(cancel_check)
     existing_outline = session.scalar(select(EpisodeOutline).where(EpisodeOutline.episode_id == episode_id))
     if existing_outline is None:
         session.add(EpisodeOutline(episode_id=episode_id, summary_json=outline.model_dump()))
@@ -77,14 +91,24 @@ def run_stage3_candidate_analysis(
     episode.stage = EpisodeStage.OUTLINED.value
     session.commit()
 
+    _report(progress_callback, 0.28, "Поиск сюжетных кандидатов")
+    generated = analyzer.candidates(text, scenes, context, outline).candidates
+    _raise_if_cancelled(cancel_check)
     adjusted = []
-    for candidate in analyzer.candidates(text, scenes, context, outline).candidates:
+    for index, candidate in enumerate(generated, start=1):
+        _raise_if_cancelled(cancel_check)
         candidate = adjust_candidate_boundaries(
             candidate, words, scenes, settings.min_clip_seconds, settings.max_clip_seconds, segments
         )
         if candidate is not None:
             adjusted.append(calibrate_candidate(candidate, segments, scenes, words))
+        _report(
+            progress_callback,
+            0.76 + 0.12 * index / max(1, len(generated)),
+            f"Проверка границ: {index} из {len(generated)}",
+        )
     candidates = remove_cross_episode_duplicates(session, episode_id, dedupe_candidates(adjusted), segments)
+    _report(progress_callback, 0.90, "Сохранение проверенных кандидатов")
     previous_candidate_ids = list(
         session.scalars(select(ClipCandidate.id).where(ClipCandidate.episode_id == episode_id)).all()
     )
@@ -148,6 +172,7 @@ def run_stage3_candidate_analysis(
         session.execute(delete(ClipCandidate).where(ClipCandidate.id.in_(previous_candidate_ids)))
     episode.stage = EpisodeStage.CANDIDATES_GENERATED.value
     session.commit()
+    _report(progress_callback, 1.0, "Кандидаты готовы")
     return Stage3Result(
         episode_id=episode_id,
         stage=episode.stage,
@@ -156,10 +181,29 @@ def run_stage3_candidate_analysis(
     )
 
 
-def _build_analyzer(settings: Settings) -> EpisodeAnalyzer:
+def _build_analyzer(
+    settings: Settings,
+    progress_callback: Callable[[float, str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> EpisodeAnalyzer:
     if settings.llm_adapter == "stub":
         return StubEpisodeAnalyzer()
-    return LlamaCppHttpAnalyzer(settings.llm_base_url, settings.llm_model_hint)
+    return LlamaCppHttpAnalyzer(
+        settings.llm_base_url,
+        settings.llm_model_hint,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )
+
+
+def _report(callback: Callable[[float, str], None] | None, value: float, message: str) -> None:
+    if callback is not None:
+        callback(max(0.0, min(1.0, value)), message)
+
+
+def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise ProcessCancelledError("Анализ кандидатов остановлен пользователем")
 
 
 def _default_story_role(index: int, count: int) -> str:

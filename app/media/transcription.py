@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.infrastructure.processes import ProcessCancelledError
 from app.models.entities import TranscriptSegment, WordTimestamp
 
 
@@ -66,18 +67,26 @@ class FasterWhisperTranscriber:
         fallback_compute_type: str,
         device: str = "auto",
         language: str = "ru",
+        progress_callback: Callable[[float, str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self.model_name = model_name
         self.compute_type = compute_type
         self.fallback_compute_type = fallback_compute_type
         self.device = device
         self.language = language
+        self.progress_callback = progress_callback
+        self.cancel_check = cancel_check
 
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         last_error: RuntimeError | None = None
         for device, compute_type in self._attempts():
             try:
                 return self._transcribe_with(device, compute_type, audio_path)
+            except ProcessCancelledError:
+                # Cancellation is not a model/device failure: never restart the
+                # full transcription on the next CUDA/CPU fallback.
+                raise
             except RuntimeError as exc:
                 last_error = exc
         raise RuntimeError("Не удалось запустить faster-whisper на CUDA или CPU") from last_error
@@ -104,7 +113,10 @@ class FasterWhisperTranscriber:
             vad_filter=True,
         )
         chunks: list[TranscriptChunk] = []
+        duration = max(0.1, float(getattr(info, "duration", 0.0) or 0.0))
         for segment in segments:
+            if self.cancel_check is not None and self.cancel_check():
+                raise ProcessCancelledError("Распознавание речи остановлено пользователем")
             words = [
                 Word(float(word.start), float(word.end), word.word.strip())
                 for word in (segment.words or [])
@@ -118,6 +130,11 @@ class FasterWhisperTranscriber:
                     words=words,
                 )
             )
+            if self.progress_callback is not None:
+                fraction = min(0.99, float(segment.end) / duration) if duration > 0.1 else 0.5
+                self.progress_callback(fraction, f"Whisper: распознано до {float(segment.end):.0f} сек")
+        if self.progress_callback is not None:
+            self.progress_callback(1.0, "Whisper: расшифровка готова")
         return TranscriptResult(language=getattr(info, "language", self.language), segments=chunks)
 
 

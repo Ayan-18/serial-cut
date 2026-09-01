@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import wave
 
 from app.application.global_search import search_season
 from app.application.importer import import_season
@@ -113,7 +114,15 @@ def test_story_arc_narration_and_queue_render_job(session, tmp_path, monkeypatch
     assert "показывает важный этап" in narration.text
 
     def fake_runner(args: list[str], timeout: int) -> ProcessResult:
-        Path(args[-1]).write_bytes(b"wav")
+        output = Path(args[-1])
+        if "powershell" in args[0].lower():
+            with wave.open(str(output), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16_000)
+                handle.writeframes(b"\0\0" * 8_000)
+        else:
+            output.write_bytes(b"wav")
         return ProcessResult(args, 0, "", "")
 
     audio = synthesize_story_arc_narration(

@@ -48,6 +48,18 @@ def test_subtitle_safe_zones_change_ass_margins():
     assert ",45,45,160,1" in preview
 
 
+def test_ass_escapes_user_tags_and_style_fields_but_keeps_line_breaks():
+    ass = render_ass(
+        [SubtitleCue(0, 2, r"{\pos(1,1)} текст\Nвторая {\b1}строка{\b0}")],
+        font_name="Segoe UI,Injected\nStyle",
+    )
+
+    assert r"\{\\pos(1,1)\}" in ass
+    assert r"текст\Nвторая" in ass
+    assert r"{\b1}строка{\b0}" in ass
+    assert "Style: Default,Segoe UI Injected Style," in ass
+
+
 def test_word_subtitles_show_every_word_once_with_sequential_timing():
     words = [
         WordTimestamp(segment_id=1, start_time=index * 0.4, end_time=index * 0.4 + 0.3, word=word)

@@ -41,6 +41,17 @@ def token_features(value: str) -> set[str]:
     return features
 
 
+def semantic_query_terms(value: str) -> list[str]:
+    """Return bounded word roots suitable for a database full-text prefilter."""
+    stems = {_stem(word) for word in _words(value)}
+    expanded = set(stems)
+    for feature in stems:
+        for group in _SYNONYM_GROUPS:
+            if any(feature.startswith(item) or item.startswith(feature) for item in group):
+                expanded.update(group)
+    return sorted(item for item in expanded if len(item) >= 3)[:32]
+
+
 def char_features(value: str) -> set[str]:
     compact = " ".join(_words(value))
     return {compact[index : index + 3] for index in range(max(0, len(compact) - 2))}

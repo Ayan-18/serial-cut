@@ -39,10 +39,6 @@ from app.api.schemas import (
     CandidateQualityRead,
     EpisodeOutlineRead,
     EpisodeQualityRead,
-    JobStageRead,
-    JobStageRetryRequest,
-    QueueRunResponse,
-    QueueStateResponse,
     PreviewRenderResponse,
     RenderRequest,
     RenderResponse,
@@ -68,7 +64,6 @@ from app.api.schemas import (
     StoryArcSegmentUpdateRequest,
     StoryContextRead,
     StoryContextUpdate,
-    SearchResponse,
     VideoScriptCreateRequest,
     VideoScriptRead,
     VideoScriptUpdateRequest,
@@ -103,7 +98,7 @@ from app.application.publishing import (
     list_publishing_plans,
     update_publishing_plan,
 )
-from app.application.queue_control import get_queue_state, set_queue_paused
+from app.api.dependencies import get_session
 from app.application.quality_report import candidate_quality_report, episode_quality_report
 from app.application.review import review_candidate, save_candidate_edits
 from app.application.settings import RuntimeSettings, effective_settings, get_runtime_settings, save_runtime_settings
@@ -123,7 +118,6 @@ from app.application.story_arcs import (
     update_story_arc_segment,
 )
 from app.application.story_arc_render import render_story_arc
-from app.application.global_search import search_season
 from app.application.system_check import report_as_dict, run_system_check
 from app.application.video_scripts import (
     VideoScriptRequest,
@@ -132,7 +126,6 @@ from app.application.video_scripts import (
     update_video_script,
 )
 from app.domain.enums import JobStatus
-from app.infrastructure.database import SessionLocal
 from app.media.ffprobe import apply_probe_to_episode, probe_media
 from app.media.rendering import smooth_crop_keyframes
 from app.models.entities import (
@@ -142,7 +135,6 @@ from app.models.entities import (
     EpisodeOutline,
     Export,
     Job,
-    JobStage,
     PublishingPlan,
     Season,
     SpeakerIdentity,
@@ -158,13 +150,7 @@ from app.workers.queue import (
     enqueue_episode_analysis,
     enqueue_season_analysis,
     enqueue_story_arc_render,
-    queue_snapshot,
-    recover_interrupted_jobs,
-    request_cancel,
-    retry_job,
-    retry_job_from_stage,
 )
-from app.workers.runner import estimate_eta_seconds, run_next_job
 
 router = APIRouter(prefix="/api")
 
@@ -174,14 +160,6 @@ def run_stage2_media_analysis(session: Session, episode_id: int, settings):
     from app.application.stage2 import run_stage2_media_analysis as run_stage2
 
     return run_stage2(session, episode_id, settings)
-
-
-def get_session():
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 @router.get("/health")
@@ -478,18 +456,6 @@ def remove_story_arc(story_arc_id: int, session: Session = Depends(get_session))
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/seasons/{season_id}/search", response_model=SearchResponse)
-def search_season_endpoint(
-    season_id: int,
-    q: str,
-    limit: int = 30,
-    session: Session = Depends(get_session),
-):
-    if session.get(Season, season_id) is None:
-        raise HTTPException(status_code=404, detail="Сезон не найден")
-    return SearchResponse(query=q, results=search_season(session, season_id, q, max(1, min(limit, 100))))
 
 
 @router.get("/video-scripts", response_model=list[VideoScriptRead])
@@ -1248,86 +1214,6 @@ def auto_export_episode(episode_id: int, payload: AutoExportRequest, session: Se
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
-
-
-@router.post("/jobs/recover")
-def recover_jobs(session: Session = Depends(get_session)):
-    count = recover_interrupted_jobs(session)
-    session.commit()
-    return {"recovered": count}
-
-
-@router.post("/queue/run-next", response_model=QueueRunResponse)
-def run_queue_next(session: Session = Depends(get_session)):
-    result = run_next_job(session, effective_settings(session, get_settings()))
-    session.commit()
-    return result
-
-
-@router.post("/queue/pause", response_model=QueueStateResponse)
-def pause_queue(session: Session = Depends(get_session)):
-    state = set_queue_paused(session, True)
-    session.commit()
-    return {"state": state}
-
-
-@router.post("/queue/resume", response_model=QueueStateResponse)
-def resume_queue(session: Session = Depends(get_session)):
-    state = set_queue_paused(session, False)
-    session.commit()
-    return {"state": state}
-
-
-@router.post("/jobs/{job_id}/cancel", response_model=JobRead)
-def cancel_job(job_id: int, session: Session = Depends(get_session)):
-    job = request_cancel(session, job_id)
-    session.commit()
-    return job
-
-
-@router.post("/jobs/{job_id}/retry", response_model=JobRead)
-def retry_job_endpoint(job_id: int, session: Session = Depends(get_session)):
-    job = retry_job(session, job_id)
-    session.commit()
-    return job
-
-
-@router.post("/jobs/{job_id}/retry-stage", response_model=JobRead)
-def retry_job_from_stage_endpoint(
-    job_id: int,
-    payload: JobStageRetryRequest,
-    session: Session = Depends(get_session),
-):
-    try:
-        job = retry_job_from_stage(session, job_id, payload.stage_name)
-        session.commit()
-        return job
-    except Exception as exc:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/jobs")
-def jobs(session: Session = Depends(get_session)):
-    snapshot = queue_snapshot(session)
-    snapshot = snapshot.__class__(
-        queued=snapshot.queued,
-        running=snapshot.running,
-        failed=snapshot.failed,
-        paused=get_queue_state(session) == "paused",
-        eta_seconds=estimate_eta_seconds(session),
-    )
-    items = session.scalars(select(Job).order_by(Job.updated_at.desc())).all()
-    return {"snapshot": snapshot.__dict__, "items": items}
-
-
-@router.get("/jobs/{job_id}/stages", response_model=list[JobStageRead])
-def job_stages(job_id: int, session: Session = Depends(get_session)):
-    if session.get(Job, job_id) is None:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
-    return session.scalars(
-        select(JobStage).where(JobStage.job_id == job_id).order_by(JobStage.id)
-    ).all()
 
 
 def _get_export(session: Session, export_id: int) -> Export:

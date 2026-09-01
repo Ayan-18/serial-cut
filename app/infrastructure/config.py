@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -67,6 +69,31 @@ class Settings(BaseSettings):
         if value < min_value:
             raise ValueError("max_clip_seconds must be greater than or equal to min_clip_seconds")
         return value
+
+    @field_validator("llm_base_url")
+    @classmethod
+    def validate_llm_base_url(cls, value: str) -> str:
+        return validate_loopback_http_url(value)
+
+
+def validate_loopback_http_url(value: str) -> str:
+    """Keep transcript-bearing model requests on this computer."""
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("LLM URL должен быть полным HTTP(S)-адресом")
+    hostname = parsed.hostname.casefold()
+    if hostname != "localhost":
+        try:
+            if not ip_address(hostname).is_loopback:
+                raise ValueError("LLM URL должен вести только на localhost/loopback")
+        except ValueError as exc:
+            if "loopback" in str(exc):
+                raise
+            raise ValueError("LLM URL должен вести только на localhost/loopback") from exc
+    if parsed.username or parsed.password:
+        raise ValueError("LLM URL не должен содержать логин или пароль")
+    return normalized
 
 
 @lru_cache(maxsize=1)

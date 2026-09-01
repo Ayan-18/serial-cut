@@ -72,7 +72,10 @@ class JobRead(BaseModel):
     status: str
     current_stage: str | None
     progress: float
+    progress_message: str | None = None
     error_message: str | None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

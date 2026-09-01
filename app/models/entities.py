@@ -80,9 +80,12 @@ class Job(TimestampMixin, Base):
     stage_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    progress_message: Mapped[str | None] = mapped_column(Text)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
     payload: Mapped[dict | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     episode: Mapped[Episode | None] = relationship(back_populates="jobs")
     stages: Mapped[list["JobStage"]] = relationship(back_populates="job", cascade="all, delete-orphan")
