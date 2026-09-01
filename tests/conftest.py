@@ -46,12 +46,16 @@ def api_client():
         finally:
             db.close()
 
+    setup_session = factory()
     app.dependency_overrides[get_session] = override_get_session
     try:
         client = TestClient(app)
-        client.db = factory  # type: ignore[attr-defined]
+        # Shared connection (StaticPool): use client.db for test setup, then
+        # commit so the request-scoped session sees the rows.
+        client.db = setup_session  # type: ignore[attr-defined]
         yield client
     finally:
+        setup_session.close()
         app.dependency_overrides.pop(get_session, None)
         engine.dispose()
 

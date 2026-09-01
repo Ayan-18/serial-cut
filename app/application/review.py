@@ -144,6 +144,15 @@ def _apply_candidate_edits(
     if not boundary_changed and not visual_changed:
         return
 
+    from app.application.edit_history import record_candidate_snapshot
+
+    if boundary_changed and visual_changed:
+        record_candidate_snapshot(session, candidate, "boundaries", "Границы и кадр")
+    elif boundary_changed:
+        record_candidate_snapshot(session, candidate, "boundaries", "Границы клипа")
+    else:
+        record_candidate_snapshot(session, candidate, "crop", "Кадрирование")
+
     candidate.start_time = next_start
     candidate.end_time = next_end
     candidate.crop_mode = next_crop_mode

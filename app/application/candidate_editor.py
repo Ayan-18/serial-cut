@@ -119,6 +119,9 @@ def save_candidate_subtitles(
         if not item.text.strip():
             raise ValueError("Текст субтитров не может быть пустым")
         previous_end = item.end_time
+    from app.application.edit_history import record_candidate_snapshot
+
+    record_candidate_snapshot(session, candidate, "subtitles", "Субтитры")
     session.execute(delete(CandidateSubtitle).where(CandidateSubtitle.candidate_id == candidate_id))
     for index, item in enumerate(normalized):
         session.add(
@@ -200,6 +203,13 @@ def auto_split_candidate_subtitles(
 
 def reset_candidate_subtitles(session: Session, candidate_id: int) -> list[EditableSubtitle]:
     candidate = _candidate(session, candidate_id)
+    has_saved = session.scalar(
+        select(CandidateSubtitle.id).where(CandidateSubtitle.candidate_id == candidate_id).limit(1)
+    )
+    if has_saved:
+        from app.application.edit_history import record_candidate_snapshot
+
+        record_candidate_snapshot(session, candidate, "subtitles", "Сброс субтитров")
     result = session.execute(delete(CandidateSubtitle).where(CandidateSubtitle.candidate_id == candidate_id))
     if result.rowcount:
         _invalidate_after_subtitle_change(session, candidate)

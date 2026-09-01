@@ -127,6 +127,21 @@ class LogTailRead(BaseModel):
     entries: list[LogEntryRead]
 
 
+class CandidateSnapshotRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    candidate_id: int
+    edit_revision: int
+    kind: str
+    label: str
+    created_at: datetime
+    start_time: float
+    end_time: float
+    crop_mode: str
+    subtitle_rows: int
+
+
 class Stage2RunResponse(BaseModel):
     episode_id: int
     stage: str

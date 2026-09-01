@@ -323,6 +323,19 @@ class CandidateSubtitle(TimestampMixin, Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class CandidateEditSnapshot(TimestampMixin, Base):
+    """Restorable snapshot of a candidate's geometry and subtitles before an edit."""
+
+    __tablename__ = "candidate_edit_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("clip_candidates.id"), nullable=False, index=True)
+    edit_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    state_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
 class ReviewDecision(TimestampMixin, Base):
     __tablename__ = "review_decisions"
 
