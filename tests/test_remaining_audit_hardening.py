@@ -7,7 +7,13 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 
-from app.api.loopback import _has_valid_local_api_token, _is_loopback_client, _requires_local_api_token, local_api_token
+from app.api.loopback import (
+    _has_allowed_host,
+    _has_valid_local_api_token,
+    _is_loopback_client,
+    _requires_local_api_token,
+    local_api_token,
+)
 from app.application.cache import clear_cache, prepare_cache_directory
 from app.application.candidate_editor import EditableSubtitle, save_candidate_subtitles
 from app.application.derived_files import delete_derived_artifacts
@@ -181,6 +187,16 @@ def test_startup_requires_alembic_and_network_is_loopback_only():
     assert _is_loopback_client({"client": ("127.0.0.1", 1000)})
     assert _is_loopback_client({"client": ("testclient", 1000)})
     assert not _is_loopback_client({"client": ("192.168.1.20", 1000)})
+
+    def _host_scope(host: bytes) -> dict:
+        return {"type": "http", "headers": [(b"host", host)]}
+
+    assert _has_allowed_host(_host_scope(b"127.0.0.1:8090"))
+    assert _has_allowed_host(_host_scope(b"localhost:5173"))
+    assert _has_allowed_host(_host_scope(b"[::1]:8090"))
+    assert _has_allowed_host({"type": "http", "headers": []})  # missing Host -> handled by client check
+    assert not _has_allowed_host(_host_scope(b"attacker.example.com"))
+    assert not _has_allowed_host(_host_scope(b"serialcuts.evil.test:8090"))
     unsafe_scope = {"type": "http", "method": "POST", "client": ("127.0.0.1", 1000), "headers": []}
     assert _requires_local_api_token(unsafe_scope)
     assert not _has_valid_local_api_token(unsafe_scope)

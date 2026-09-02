@@ -10,6 +10,9 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 LOCAL_API_TOKEN_HEADER = b"x-serialcuts-token"
 _LOCAL_API_TOKEN = token_urlsafe(32)
 _SAFE_METHODS = {b"GET", b"HEAD", b"OPTIONS"}
+# Only these hostnames may appear in the Host header. Blocks DNS-rebinding: an
+# attacker page whose domain resolves to 127.0.0.1 still sends its own host here.
+_ALLOWED_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "testserver", "testclient"}
 
 
 class LoopbackOnlyMiddleware:
@@ -24,6 +27,12 @@ class LoopbackOnlyMiddleware:
                 await send({"type": "websocket.close", "code": 1008, "reason": "Loopback only"})
                 return
             await _send_forbidden(send, "SerialCuts доступен только с этого компьютера")
+            return
+        if scope["type"] in {"http", "websocket"} and not _has_allowed_host(scope):
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008, "reason": "Host not allowed"})
+                return
+            await _send_forbidden(send, "Недопустимый Host — SerialCuts принимает только локальные адреса")
             return
         if scope["type"] == "http" and _requires_local_api_token(scope) and not _has_valid_local_api_token(scope):
             await _send_forbidden(send, "Нужен локальный SerialCuts API token")
@@ -44,6 +53,29 @@ def _is_loopback_client(scope: Scope) -> bool:
         return True
     try:
         return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _has_allowed_host(scope: Scope) -> bool:
+    header = b""
+    for name, value in scope.get("headers") or []:
+        if bytes(name).lower() == b"host":
+            header = bytes(value)
+            break
+    if not header:
+        # Non-browser clients (HTTP/1.0, some tools) may omit Host; the loopback
+        # client check already covers them.
+        return True
+    raw = header.decode("latin-1", errors="ignore").strip().casefold()
+    if raw.startswith("["):  # [::1]:8090
+        hostname = raw[1 : raw.find("]")] if "]" in raw else raw[1:]
+    else:
+        hostname = raw.rsplit(":", 1)[0] if raw.rsplit(":", 1)[-1].isdigit() else raw
+    if hostname in _ALLOWED_HOSTS:
+        return True
+    try:
+        return ip_address(hostname).is_loopback
     except ValueError:
         return False
 
