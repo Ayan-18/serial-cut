@@ -682,6 +682,16 @@ Done in the 2026-09-02 batch: model installation assistant, keyframe-thumbnail c
 progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo, batch
 candidate operations, in-UI log viewer, generated API docs, bootstrap script.
 
+## 2026-09-02 - Follow-ups (loopback Host allowlist, frontend lint)
+
+- `LoopbackOnlyMiddleware` now rejects requests whose `Host` header is not a local
+  address (any port), closing the DNS-rebinding gap. `_has_allowed_host` + tests.
+- Frontend gets flat-config ESLint 10 (typescript-eslint, react-hooks, react-refresh)
+  and a `typecheck` script; both added to CI. Pruned 18 unused names from the
+  `AppView` controller destructure and 3 dead imports found by the new lint.
+  The React-19 `set-state-in-effect` rule is off (deliberate existing patterns);
+  two `exhaustive-deps` warnings remain, non-blocking.
+
 Still open:
 
 - Install Silero on the main computer: `pip install -e ".[tts]"` + `scripts/install_tts_model.ps1`;
@@ -689,9 +699,7 @@ Still open:
 - Optional: number-to-words normalization for Russian digits before TTS.
 - Recreate the local `.venv` on Python 3.11 and re-pin dev extras that are only in `dependencies`.
 - Split `useSerialCutsController.ts` (750+ lines) into per-domain hooks.
-- Add eslint + `tsc --noEmit` to frontend CI.
 - Tighten the ruff/mypy ignore lists now that the router split has settled.
-- `Host`-header allowlist in `LoopbackOnlyMiddleware` (DNS-rebind hardening).
 - Persistent background queue loop option, while keeping `run-next` for testability.
 - Progress streaming (SSE) for long model downloads and season imports.
 

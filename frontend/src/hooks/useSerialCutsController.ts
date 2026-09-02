@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api, jsonHeaders } from "../api";
-import { useCandidates, type CandidateFilter, type CandidateSort } from "./useCandidates";
+import { useCandidates } from "./useCandidates";
 import type { BatchOutcome, CacheInfo, Candidate, CandidateQuality, Character, CheckItem, Episode, EpisodeOutline, EpisodeQuality, ExportItem, ImportResult, Job, JobStage, ModelDiagnostics, PreviewRender, ProjectDiagnostics, PublishingPlan, QueueData, RuntimeSettings, SearchResult, Season, SpeakerIdentity, StoryArc, StoryArcSegment, StoryContext, Subtitle, SubtitleQuality, VideoScript } from "../types";
-import { editFromCandidate, errorMessage, fileDataUrl, formatElapsed, splitLines, stageLabel } from "../utils";
+import { editFromCandidate, errorMessage, fileDataUrl, formatElapsed, stageLabel } from "../utils";
 
 export function useSerialCutsController() {
   const [rootPath, setRootPath] = useState("");
