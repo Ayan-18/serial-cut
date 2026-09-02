@@ -89,6 +89,19 @@ class JobRead(BaseModel):
     updated_at: datetime
 
 
+class QueueSnapshotRead(BaseModel):
+    queued: int
+    running: int
+    failed: int
+    paused: bool
+    eta_seconds: float | None = None
+
+
+class QueueDataRead(BaseModel):
+    snapshot: QueueSnapshotRead
+    items: list[JobRead]
+
+
 class LocalApiTokenRead(BaseModel):
     token: str
 

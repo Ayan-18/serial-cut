@@ -82,6 +82,12 @@ def extract_audio(
         temp_path.unlink(missing_ok=True)
         logger.warning("FFmpeg audio extraction failed: returncode=%s media=%s", result.returncode, media_path)
         raise RuntimeError(result.stderr.strip() or "FFmpeg не смог извлечь аудио")
+    if not temp_path.exists():
+        logger.warning("FFmpeg audio extraction produced no file: media=%s output=%s", media_path, output_path)
+        raise RuntimeError(
+            "FFmpeg завершился без WAV-файла. Частая причина на Windows — слишком длинный путь "
+            "(MAX_PATH 260): используйте более короткую папку кэша или включите поддержку длинных путей."
+        )
     replace_atomically(temp_path, output_path)
     logger.info("Audio extraction completed: output=%s", output_path)
     return output_path
@@ -108,6 +114,12 @@ def create_proxy(
         temp_path.unlink(missing_ok=True)
         logger.warning("FFmpeg proxy creation failed: returncode=%s media=%s", result.returncode, media_path)
         raise RuntimeError(result.stderr.strip() or "FFmpeg не смог создать proxy")
+    if not temp_path.exists():
+        logger.warning("FFmpeg proxy creation produced no file: media=%s output=%s", media_path, output_path)
+        raise RuntimeError(
+            "FFmpeg завершился без proxy-файла. Частая причина на Windows — слишком длинный путь "
+            "(MAX_PATH 260): используйте более короткую папку кэша или включите поддержку длинных путей."
+        )
     replace_atomically(temp_path, output_path)
     logger.info("Proxy video created: output=%s", output_path)
     return output_path

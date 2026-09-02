@@ -682,6 +682,23 @@ Done in the 2026-09-02 batch: model installation assistant, keyframe-thumbnail c
 progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo, batch
 candidate operations, in-UI log viewer, generated API docs, bootstrap script.
 
+## 2026-09-02 - End-to-end simulation, two live bugs fixed
+
+Ran the real app against a synthetic 3-episode season (stub ASR/LLM/TTS, real
+FFmpeg) through import -> analyze -> candidates -> edit/keyframes/history ->
+approve -> render -> StoryArc -> narration -> publishing.json. The clip and
+StoryArc both rendered as real 1080x1920 H.264/AAC MP4s and served through the
+path guard. Two real bugs surfaced and were fixed:
+
+- `GET /api/jobs` returned HTTP 400 ("Unable to serialize unknown type: Job")
+  because it returned raw ORM objects with no `response_model` — the entire
+  queue panel was dead. Added `QueueDataRead`/`QueueSnapshotRead` + an
+  integration test.
+- `extract_audio` / `create_proxy` surfaced a bare `WinError 3` when FFmpeg
+  exited 0 without writing the output file (long path / MAX_PATH). They now
+  raise a clear message pointing at the cache path / long-path setting; tests
+  added.
+
 ## 2026-09-02 - Follow-ups (loopback Host allowlist, frontend lint)
 
 - `LoopbackOnlyMiddleware` now rejects requests whose `Host` header is not a local

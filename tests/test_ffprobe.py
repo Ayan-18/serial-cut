@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.media.ffmpeg import build_extract_audio_args, build_proxy_args
+import pytest
+
+from app.infrastructure.processes import ProcessResult
+from app.media.ffmpeg import build_extract_audio_args, build_proxy_args, create_proxy, extract_audio
 from app.media.ffprobe import build_ffprobe_args, summarize_probe
 
 
@@ -68,3 +71,19 @@ def test_proxy_command_uses_selected_audio_and_scaled_h264_output():
     assert "libx264" in args
     assert args[-1] == r"C:\cache\proxy.mp4"
 
+
+
+def test_extract_audio_raises_clear_error_when_ffmpeg_writes_nothing(tmp_path: Path):
+    def silent_runner(args, timeout):
+        return ProcessResult(list(args), 0, "", "")  # rc 0 but no output file
+
+    with pytest.raises(RuntimeError, match="без WAV-файла|MAX_PATH"):
+        extract_audio("ffmpeg", tmp_path / "in.mkv", tmp_path / "out.wav", None, runner=silent_runner)
+
+
+def test_create_proxy_raises_clear_error_when_ffmpeg_writes_nothing(tmp_path: Path):
+    def silent_runner(args, timeout):
+        return ProcessResult(list(args), 0, "", "")
+
+    with pytest.raises(RuntimeError, match="без proxy-файла|MAX_PATH"):
+        create_proxy("ffmpeg", tmp_path / "in.mkv", tmp_path / "out.mp4", 640, 28, runner=silent_runner)

@@ -3692,9 +3692,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Jobs Api Jobs Get"
+                  "$ref": "#/components/schemas/QueueDataRead"
                 }
               }
             }
@@ -6190,6 +6188,26 @@
         "type": "object",
         "title": "PublishingPlanUpdateRequest"
       },
+      "QueueDataRead": {
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/QueueSnapshotRead"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobRead"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshot",
+          "items"
+        ],
+        "title": "QueueDataRead"
+      },
       "QueueHealthRead": {
         "properties": {
           "state": {
@@ -6252,6 +6270,45 @@
           "message"
         ],
         "title": "QueueRunResponse"
+      },
+      "QueueSnapshotRead": {
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "title": "Queued"
+          },
+          "running": {
+            "type": "integer",
+            "title": "Running"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queued",
+          "running",
+          "failed",
+          "paused"
+        ],
+        "title": "QueueSnapshotRead"
       },
       "QueueStateResponse": {
         "properties": {

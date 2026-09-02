@@ -3,7 +3,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_session
-from app.api.schemas import JobRead, JobStageRead, JobStageRetryRequest, QueueRunResponse, QueueStateResponse
+from app.api.schemas import (
+    JobRead,
+    JobStageRead,
+    JobStageRetryRequest,
+    QueueDataRead,
+    QueueRunResponse,
+    QueueStateResponse,
+)
 from app.application.queue_control import get_queue_state, set_queue_paused
 from app.application.settings import effective_settings
 from app.infrastructure.config import get_settings
@@ -78,18 +85,20 @@ def retry_job_from_stage_endpoint(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/jobs")
-def jobs(session: Session = Depends(get_session)) -> dict:
+@router.get("/jobs", response_model=QueueDataRead)
+def jobs(session: Session = Depends(get_session)):
     snapshot = queue_snapshot(session)
-    snapshot = snapshot.__class__(
-        queued=snapshot.queued,
-        running=snapshot.running,
-        failed=snapshot.failed,
-        paused=get_queue_state(session) == "paused",
-        eta_seconds=estimate_eta_seconds(session),
-    )
     items = session.scalars(select(Job).order_by(Job.updated_at.desc())).all()
-    return {"snapshot": snapshot.__dict__, "items": items}
+    return {
+        "snapshot": {
+            "queued": snapshot.queued,
+            "running": snapshot.running,
+            "failed": snapshot.failed,
+            "paused": get_queue_state(session) == "paused",
+            "eta_seconds": estimate_eta_seconds(session),
+        },
+        "items": items,
+    }
 
 
 @router.get("/jobs/{job_id}/stages", response_model=list[JobStageRead])
