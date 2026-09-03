@@ -33,7 +33,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_models.ps1
 - Alembic: `1.19.1`.
 - PySceneDetect: `0.7.1`, пакет `scenedetect-headless`.
 - faster-whisper: `1.2.0`.
-- CTranslate2: `4.6.0`; актуальная GPU-ветка требует CUDA 12 и cuDNN 9.
+- CTranslate2: `4.6.3`; `4.6.0` падал на Windows с `No module named 'pkg_resources'` при
+  setuptools ≥ 81 — `4.6.3` определяет каталог DLL через `importlib.resources`. Актуальная
+  GPU-ветка требует CUDA 12 и cuDNN 9.
 - React: `19.2.8`.
 - Vite: `8.1.0`.
 - TypeScript: `5.9.2`.

@@ -20,7 +20,7 @@ dependencies = [
   "numpy==2.4.6",
   "opencv-python-headless==5.0.0.93",
   "faster-whisper==1.2.0",
-  "ctranslate2==4.6.0",
+  "ctranslate2==4.6.3",
   "scenedetect-headless==0.7.1",
   "httpx==0.28.1",
   "python-telegram-bot==22.3",
@@ -34,9 +34,9 @@ dev = [
   "pytest-cov==6.2.1",
 ]
 # Local neural narration voice (Silero v4_ru). CPU-only is enough.
-# Pin the exact resolved torch version after first install on the target machine.
+# Resolved to torch 2.14.0 (CPU, win_amd64) on the target machine 2026-09-03.
 tts = [
-  "torch>=2.2,<3",
+  "torch==2.14.0",
 ]
 
 [tool.setuptools.packages.find]
