@@ -123,3 +123,11 @@ Audio/proxy не пересоздаются, если уже существую�
   запуск вне `.venv`, длинные пути Windows) через набор `OPTIONAL_CHECKS`.
 - `scripts/dump_openapi.py` генерирует `docs/openapi.json` и `docs/API.md` из живого приложения;
   тест падает при расхождении. `scripts/bootstrap.ps1` — проверка окружения и установка.
+- `application/deletion.py` удаляет серию или сезон целиком: собирает все зависимые строки
+  (кандидаты и их субтитры/снимки/решения/экспорты, транскрипт и слова, сцены, outline, дорожки,
+  привязки говорящих, задачи и их этапы) и производные каталоги по `fingerprint`, чистит StoryArc
+  через `prune_episode_from_story_arcs`, затем удаляет файлы только в пределах
+  `output_dir`/`cache_dir`/`characters_dir`. Активная задача в очереди (`ResourceBusyError` → 409)
+  блокирует удаление. `workers/queue.py::delete_job` убирает задачу и её `job_stages`
+  (`JobBusyError` → 409 для выполняющейся). Эндпоинты: `DELETE /api/episodes/{id}`,
+  `DELETE /api/seasons/{id}`, `DELETE /api/jobs/{id}`.

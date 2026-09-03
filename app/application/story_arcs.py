@@ -232,6 +232,34 @@ def remove_story_arc_segment(session: Session, story_arc_id: int, segment_id: in
     return _load_arc(session, arc.id)
 
 
+def prune_episode_from_story_arcs(session: Session, episode_id: int) -> None:
+    """Drop every StoryArc segment that points at ``episode_id`` and refresh the
+    affected plans so a deleted series cannot leave dangling montage rows."""
+    arc_ids = list(
+        session.scalars(
+            select(StoryArcSegment.story_arc_id)
+            .where(StoryArcSegment.episode_id == episode_id)
+            .distinct()
+        ).all()
+    )
+    if not arc_ids:
+        return
+    session.execute(delete(StoryArcSegment).where(StoryArcSegment.episode_id == episode_id))
+    session.flush()
+    for arc_id in arc_ids:
+        arc = session.scalar(
+            select(StoryArc)
+            .options(selectinload(StoryArc.segments), selectinload(StoryArc.exports))
+            .where(StoryArc.id == arc_id)
+        )
+        if arc is None:
+            continue
+        _normalize_segment_order(arc)
+        refresh_story_arc_plan(session, arc)
+        _touch_arc(session, arc)
+    session.flush()
+
+
 def add_candidate_to_story_arc(session: Session, story_arc_id: int, candidate_id: int) -> StoryArc:
     arc = _load_arc(session, story_arc_id)
     candidate = session.get(ClipCandidate, candidate_id)

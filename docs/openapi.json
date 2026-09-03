@@ -425,6 +425,43 @@
         }
       }
     },
+    "/api/seasons/{season_id}": {
+      "delete": {
+        "summary": "Delete Season Endpoint",
+        "operationId": "delete_season_endpoint_api_seasons__season_id__delete",
+        "parameters": [
+          {
+            "name": "season_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Season Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/episodes/{episode_id}/story-context": {
       "get": {
         "summary": "Read Story Context",
@@ -2117,6 +2154,43 @@
         }
       }
     },
+    "/api/episodes/{episode_id}": {
+      "delete": {
+        "summary": "Delete Episode Endpoint",
+        "operationId": "delete_episode_endpoint_api_episodes__episode_id__delete",
+        "parameters": [
+          {
+            "name": "episode_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Episode Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/episodes/{episode_id}/enqueue": {
       "post": {
         "summary": "Enqueue Episode",
@@ -3663,6 +3737,46 @@
                 "schema": {
                   "$ref": "#/components/schemas/JobRead"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "delete": {
+        "tags": [
+          "queue"
+        ],
+        "summary": "Delete Job Endpoint",
+        "operationId": "delete_job_endpoint_api_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },

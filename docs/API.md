@@ -48,6 +48,7 @@
 
 | Метод | Путь | Описание |
 | --- | --- | --- |
+| `DELETE` | `/api/episodes/{episode_id}` | Delete Episode Endpoint |
 | `POST` | `/api/episodes/{episode_id}/auto-export` | Auto Export Episode |
 | `GET` | `/api/episodes/{episode_id}/candidates` | List Episode Candidates |
 | `POST` | `/api/episodes/{episode_id}/candidates/batch-review` | Batch Review |
@@ -86,6 +87,7 @@
 | --- | --- | --- |
 | `GET` | `/api/jobs` | Jobs |
 | `POST` | `/api/jobs/recover` | Recover Jobs |
+| `DELETE` | `/api/jobs/{job_id}` | Delete Job Endpoint |
 | `POST` | `/api/jobs/{job_id}/cancel` | Cancel Job |
 | `POST` | `/api/jobs/{job_id}/retry` | Retry Job Endpoint |
 | `POST` | `/api/jobs/{job_id}/retry-stage` | Retry Job From Stage Endpoint |
@@ -139,6 +141,7 @@
 | --- | --- | --- |
 | `GET` | `/api/seasons` | List Seasons |
 | `POST` | `/api/seasons/import` | Import Season Endpoint |
+| `DELETE` | `/api/seasons/{season_id}` | Delete Season Endpoint |
 | `GET` | `/api/seasons/{season_id}/characters` | List Characters |
 | `POST` | `/api/seasons/{season_id}/characters` | Create Character |
 | `POST` | `/api/seasons/{season_id}/enqueue` | Enqueue Season |

@@ -25,6 +25,22 @@ def probe_episode(episode_id: int, session: Session = Depends(get_session)):
     return {"ok": True, "stage": episode.stage}
 
 
+@router.delete("/episodes/{episode_id}")
+def delete_episode_endpoint(episode_id: int, session: Session = Depends(get_session)):
+    settings = effective_settings(session, get_settings())
+    try:
+        artifacts = delete_episode(session, episode_id, settings)
+        session.commit()
+    except ResourceBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    purge_artifacts(artifacts, settings)
+    return {"deleted": True}
+
+
 @router.post("/episodes/{episode_id}/enqueue", response_model=JobRead)
 def enqueue_episode(
     episode_id: int,

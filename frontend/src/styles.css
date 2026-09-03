@@ -175,7 +175,7 @@ button:disabled {
 }
 
 .episode {
-  grid-template-columns: minmax(180px, 1fr) 140px 110px 140px auto auto auto auto;
+  grid-template-columns: minmax(180px, 1fr) 140px 110px 140px repeat(6, auto);
 }
 
 .season span,
@@ -674,7 +674,7 @@ button {
 }
 
 .season {
-  grid-template-columns: minmax(160px, 1fr) auto auto;
+  grid-template-columns: minmax(160px, 1fr) auto auto auto;
 }
 
 .season div,
@@ -779,7 +779,7 @@ button.danger {
 }
 
 .episode {
-  grid-template-columns: minmax(190px, 1fr) 90px 120px repeat(5, auto);
+  grid-template-columns: minmax(190px, 1fr) 90px 120px repeat(6, auto);
 }
 
 .workspace {

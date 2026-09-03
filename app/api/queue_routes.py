@@ -16,6 +16,8 @@ from app.application.settings import effective_settings
 from app.infrastructure.config import get_settings
 from app.models.entities import Job, JobStage
 from app.workers.queue import (
+    JobBusyError,
+    delete_job,
     queue_snapshot,
     recover_interrupted_jobs,
     request_cancel,
@@ -83,6 +85,20 @@ def retry_job_from_stage_endpoint(
     except ValueError as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/jobs/{job_id}")
+def delete_job_endpoint(job_id: int, session: Session = Depends(get_session)):
+    try:
+        delete_job(session, job_id)
+        session.commit()
+    except JobBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": True}
 
 
 @router.get("/jobs", response_model=QueueDataRead)

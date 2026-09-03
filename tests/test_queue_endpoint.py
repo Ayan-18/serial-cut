@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.domain.enums import JobKind, JobStatus
-from app.models.entities import Episode, Job, Season
+from app.models.entities import Episode, Job, JobStage, Season
 
 
 def _episode(session) -> int:
@@ -58,3 +58,37 @@ def test_jobs_endpoint_is_empty_without_jobs(api_client):
         "snapshot": {"queued": 0, "running": 0, "failed": 0, "paused": False, "eta_seconds": None},
         "items": [],
     }
+
+
+def test_delete_job_removes_it_and_its_stages(api_client):
+    session = api_client.db
+    episode_id = _episode(session)
+    job = Job(episode_id=episode_id, kind=JobKind.ANALYZE_EPISODE.value, status=JobStatus.FAILED.value)
+    session.add(job)
+    session.flush()
+    session.add(JobStage(job_id=job.id, name="stage2_media", status=JobStatus.FAILED.value))
+    session.commit()
+
+    response = api_client.delete(f"/api/jobs/{job.id}")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"deleted": True}
+    assert api_client.get("/api/jobs").json()["items"] == []
+    assert session.get(JobStage, 1) is None
+
+
+def test_delete_job_rejects_a_running_job(api_client):
+    session = api_client.db
+    episode_id = _episode(session)
+    job = Job(episode_id=episode_id, kind=JobKind.ANALYZE_EPISODE.value, status=JobStatus.RUNNING.value)
+    session.add(job)
+    session.commit()
+
+    response = api_client.delete(f"/api/jobs/{job.id}")
+
+    assert response.status_code == 409
+    assert session.get(Job, job.id) is not None
+
+
+def test_delete_missing_job_returns_404(api_client):
+    assert api_client.delete("/api/jobs/999").status_code == 404

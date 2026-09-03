@@ -1,5 +1,45 @@
 # SerialCuts Worklog
 
+## 2026-09-03 - Fix ctranslate2 pkg_resources crash, pin torch
+
+- `ctranslate2 4.6.0` → `4.6.3`. On Windows `ctranslate2/__init__.py` located its DLL folder via
+  `pkg_resources`, which `setuptools ≥ 81` no longer ships — every «медиа и речь» job died with
+  `No module named 'pkg_resources'`. `4.6.3` uses `importlib.resources.files` instead. Patch
+  release, still `faster-whisper 1.2.0`-compatible.
+- `[tts]` extra pinned `torch>=2.2,<3` → `torch==2.14.0` (CPU `win_amd64`, resolved on the target
+  machine). Silero `v4_ru` narration verified end to end (48 kHz WAV, voice `eugene`).
+- `MODEL_SETUP.md` updated.
+
+## 2026-09-03 - Delete seasons, episodes and queue jobs from the panel
+
+The Сезоны, Серии and Очередь lists were append-only. Added explicit deletion so a wrong import
+or a dead job can be cleared without editing SQLite by hand.
+
+- `app/application/deletion.py` — `delete_episode` / `delete_season` collect every dependent row
+  (candidates + subtitles/snapshots/review/exports, transcript segments + word timestamps, scenes,
+  outline, media tracks, speaker identities, jobs + job stages) and the derived trees
+  (`cache/episodes|previews|keyframes/<fingerprint>`, `output/<fingerprint>`), then remove the DB
+  rows in FK-safe order. `delete_season` also runs `delete_story_arc` per arc, drops season-level
+  publishing plans and collects character photo paths. `ResourceBusyError` (HTTP 409) blocks
+  deletion while a queue job for the series is queued/running/paused. `purge_artifacts` unlinks the
+  collected files only inside `output_dir` / `cache_dir` / `characters_dir`.
+- `app/application/story_arcs.py::prune_episode_from_story_arcs` — drops StoryArc segments that
+  point at a deleted episode and refreshes the affected plans (`_normalize_segment_order` +
+  `refresh_story_arc_plan` + `_touch_arc`), so a removed series cannot leave dangling montage rows.
+- `app/workers/queue.py::delete_job` — removes a job and its `job_stages`; `JobBusyError`
+  (HTTP 409) refuses a running / cancel-requested job.
+- API: `DELETE /api/episodes/{id}`, `DELETE /api/seasons/{id}`, `DELETE /api/jobs/{id}`, each
+  returning `{"deleted": true}`. `docs/openapi.json` + `docs/API.md` regenerated.
+- Frontend: red trash control on every season and episode row, «Удалить» on every non-running
+  queue job; `window.confirm` first, then `refresh()` / `refreshActivity()`. Selection state is
+  cleared when the open episode is deleted.
+- Tests: `tests/test_deletion.py` (row cascade, busy guard, arc pruning, season cascade, purge
+  stays inside managed roots) and three job-delete cases in `tests/test_queue_endpoint.py`.
+
+Verification: `pytest` 170 passed; `npm run test` (10) + `npm run build` + `tsc --noEmit` clean;
+`alembic` unchanged (no schema change); manual smoke — real `DELETE /api/jobs/8` on a failed job
+in the running app removed it and its stages.
+
 ## 2026-09-02 - Neural StoryArc Narration (Silero)
 
 Replaced the flat Windows SAPI narration with a pluggable TTS layer so the hero's voiceover can

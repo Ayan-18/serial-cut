@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import delete, exists, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.domain.enums import EpisodeStage, JobKind, JobStatus
@@ -229,6 +229,20 @@ def retry_job_from_stage(session: Session, job_id: int, stage_name: str) -> Job:
             stage.finished_at = None
             stage.error_message = None
     return job
+
+
+class JobBusyError(RuntimeError):
+    """Raised when a job cannot be removed because it is still executing."""
+
+
+def delete_job(session: Session, job_id: int) -> None:
+    job = _get_job(session, job_id)
+    if job.status in {JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value}:
+        raise JobBusyError(
+            f"Задача №{job_id} выполняется. Сначала остановите её, затем удалите."
+        )
+    session.execute(delete(JobStage).where(JobStage.job_id == job_id))
+    session.delete(job)
 
 
 def queue_snapshot(session: Session) -> QueueSnapshot:

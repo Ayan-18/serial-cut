@@ -417,6 +417,35 @@ export function useSerialCutsController() {
     setMessage("Монтажный план удалён");
   }
   
+  async function deleteEpisode(episode: Episode) {
+    if (!window.confirm(`Удалить серию «${episode.file_name}» из списка? Её кандидаты, субтитры, готовые ролики и кэш будут удалены безвозвратно. Исходный видеофайл не тронут.`)) return;
+    try {
+      await api(`/api/episodes/${episode.id}`, { method: "DELETE" });
+      if (selectedEpisodeId === episode.id) { setSelectedEpisodeId(null); setSelectedCandidate(null); }
+      setMessage(`Серия «${episode.file_name}» удалена`);
+      await refresh();
+    } catch (error) { setMessage(`Не удалось удалить серию: ${errorMessage(error)}`); }
+  }
+
+  async function deleteSeason(season: Season) {
+    if (!window.confirm(`Удалить сезон «${season.title}» со всеми сериями (${season.episodes.length}), кандидатами, монтажными планами и персонажами? Исходные видеофайлы не тронуты.`)) return;
+    try {
+      await api(`/api/seasons/${season.id}`, { method: "DELETE" });
+      if (arcSeasonId === season.id) setArcSeasonId(null);
+      setMessage(`Сезон «${season.title}» удалён`);
+      await refresh();
+    } catch (error) { setMessage(`Не удалось удалить сезон: ${errorMessage(error)}`); }
+  }
+
+  async function deleteJob(jobId: number) {
+    if (!window.confirm(`Удалить задачу №${jobId} из очереди вместе с историей её этапов?`)) return;
+    try {
+      await api(`/api/jobs/${jobId}`, { method: "DELETE" });
+      setMessage(`Задача №${jobId} удалена`);
+      await refreshActivity();
+    } catch (error) { setMessage(`Не удалось удалить задачу: ${errorMessage(error)}`); }
+  }
+
   async function renderStoryArc(arc: StoryArc, includeSubtitles: boolean) {
     setArcRenderBusy(arc.id);
     setMessage(`Ставим монтажный план «${arc.title}» в очередь…`);
@@ -733,6 +762,9 @@ export function useSerialCutsController() {
     importSeason,
     enqueueSeason,
     enqueueEpisode,
+    deleteEpisode,
+    deleteSeason,
+    deleteJob,
     runQueueNext,
     setPaused,
     cancelJob,

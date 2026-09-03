@@ -11,10 +11,11 @@ type QueuePanelProps = {
   onCancel: (jobId: number) => void;
   onRetry: (jobId: number) => void;
   onRetryStage: (jobId: number, stageName: string) => void;
+  onDelete: (jobId: number) => void;
 };
 
 export function QueuePanel({
-  queue, jobStages, onRunNext, onSetPaused, onLoadStages, onCancel, onRetry, onRetryStage,
+  queue, jobStages, onRunNext, onSetPaused, onLoadStages, onCancel, onRetry, onRetryStage, onDelete,
 }: QueuePanelProps) {
   return <div className="panel">
     <div className="panel-title"><Server size={19} /><h2>Очередь</h2><span className={queue?.snapshot.paused ? "badge warn" : "badge ok"}>{queue?.snapshot.paused ? "пауза" : "авто"}</span></div>
@@ -29,7 +30,7 @@ export function QueuePanel({
       <div className={`progress ${job.status === "running" ? "active" : ""}`}><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
       {job.progress_message && <small>{job.progress_message}</small>}
       {job.error_message && <small className="error-text">{job.error_message}</small>}
-      <div className="job-actions"><button className="text-button" onClick={() => onLoadStages(job.id)}>Этапы</button>{["queued", "running", "cancel_requested"].includes(job.status) && <button className="text-button danger" onClick={() => onCancel(job.id)}>Остановить</button>}{["failed", "paused"].includes(job.status) && <button className="text-button" onClick={() => onRetry(job.id)}>{job.status === "paused" ? "Продолжить" : "Повторить"}</button>}</div>
+      <div className="job-actions"><button className="text-button" onClick={() => onLoadStages(job.id)}>Этапы</button>{["queued", "running", "cancel_requested"].includes(job.status) && <button className="text-button danger" onClick={() => onCancel(job.id)}>Остановить</button>}{["failed", "paused"].includes(job.status) && <button className="text-button" onClick={() => onRetry(job.id)}>{job.status === "paused" ? "Продолжить" : "Повторить"}</button>}{!["running", "cancel_requested"].includes(job.status) && <button className="text-button danger" onClick={() => onDelete(job.id)}>Удалить</button>}</div>
       {jobStages[job.id] && <ol className="job-timeline">{jobStages[job.id].map((stage) => <li key={stage.id}><span className={`dot ${stage.status === "completed" ? "ok" : stage.status === "failed" ? "fail" : ""}`} /><strong>{stageLabel(stage.name)}</strong><small>{statusLabel(stage.status)}{stage.error_message ? ` · ${stage.error_message}` : ""}</small><button className="text-button" disabled={["queued", "running", "cancel_requested"].includes(job.status)} onClick={() => onRetryStage(job.id, stage.name)}>Отсюда</button></li>)}</ol>}
     </article>)}</div>
   </div>;

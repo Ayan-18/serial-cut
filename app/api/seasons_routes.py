@@ -28,6 +28,22 @@ def list_seasons(session: Session = Depends(get_session)):
     return seasons
 
 
+@router.delete("/seasons/{season_id}")
+def delete_season_endpoint(season_id: int, session: Session = Depends(get_session)):
+    settings = effective_settings(session, get_settings())
+    try:
+        artifacts = delete_season(session, season_id, settings)
+        session.commit()
+    except ResourceBusyError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    purge_artifacts(artifacts, settings)
+    return {"deleted": True}
+
+
 @router.get("/episodes/{episode_id}/story-context", response_model=StoryContextRead)
 def read_story_context(episode_id: int, session: Session = Depends(get_session)):
     episode = _get_episode(session, episode_id)
