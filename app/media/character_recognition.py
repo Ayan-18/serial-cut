@@ -43,7 +43,11 @@ class FaceObservation:
 
 
 class LocalFaceRecognizer:
-    """YuNet + SFace when local ONNX weights exist, with a deterministic offline fallback."""
+    """YuNet + SFace face identification, active only when the local ONNX weights exist.
+
+    OpenCV 5 headless ships no Haar cascade, so without the neural weights there is
+    no face detection at all and the pipeline falls back to voice-only identity.
+    """
 
     def __init__(self, detector_model: Path | None = None, recognizer_model: Path | None = None):
         import cv2
@@ -51,7 +55,6 @@ class LocalFaceRecognizer:
         self.cv2 = cv2
         self.detector = None
         self.recognizer = None
-        self.cascade = None
         if detector_model and recognizer_model and detector_model.exists() and recognizer_model.exists():
             try:
                 self.detector = cv2.FaceDetectorYN.create(
@@ -61,8 +64,6 @@ class LocalFaceRecognizer:
             except cv2.error:
                 self.detector = None
                 self.recognizer = None
-        if self.detector is None or self.recognizer is None:
-            self.cascade = _load_haar_cascade(cv2)
 
     @property
     def neural(self) -> bool:
@@ -70,25 +71,19 @@ class LocalFaceRecognizer:
 
     @property
     def can_detect(self) -> bool:
-        """Whether this build can find faces at all (neural weights or Haar)."""
-        return self.neural or self.cascade is not None
+        """Whether this build can find faces at all (i.e. the neural weights loaded)."""
+        return self.neural
 
     @property
     def model_name(self) -> str:
         if self.neural:
             return "YuNet + SFace"
-        if self.cascade is not None:
-            return "Haar + DCT (резервный режим)"
         return "Только голос (лица не распознаются без YuNet/SFace)"
 
     def detect(self, frame: np.ndarray) -> list[FaceObservation]:
-        if frame is None or frame.size == 0:
+        if frame is None or frame.size == 0 or not self.neural:
             return []
-        if self.neural:
-            return self._detect_neural(frame)
-        if self.cascade is None:
-            return []
-        return self._detect_fallback(frame)
+        return self._detect_neural(frame)
 
     def _detect_neural(self, frame: np.ndarray) -> list[FaceObservation]:
         assert self.detector is not None and self.recognizer is not None
@@ -123,42 +118,6 @@ class LocalFaceRecognizer:
                 )
             )
         return observations
-
-    def _detect_fallback(self, frame: np.ndarray) -> list[FaceObservation]:
-        gray = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-        faces = self.cascade.detectMultiScale(
-            gray, scaleFactor=1.12, minNeighbors=5, minSize=(36, 36)
-        )
-        observations: list[FaceObservation] = []
-        for x, y, width, height in faces:
-            crop = frame[y : y + height, x : x + width]
-            observations.append(
-                FaceObservation(
-                    int(x),
-                    int(y),
-                    int(width),
-                    int(height),
-                    1.0,
-                    face_signature(crop, self.cv2),
-                )
-            )
-        return observations
-
-
-def _load_haar_cascade(cv2_module):
-    """Legacy Haar detector, when this OpenCV build still ships it.
-
-    OpenCV 5 headless drops ``CascadeClassifier``; without YuNet/SFace weights the
-    recognizer then works from voice only and never crashes on a missing symbol.
-    """
-    if not hasattr(cv2_module, "CascadeClassifier") or not hasattr(cv2_module, "data"):
-        return None
-    cascade_path = Path(cv2_module.data.haarcascades) / "haarcascade_frontalface_default.xml"
-    if not cascade_path.exists():
-        return None
-    cascade = cv2_module.CascadeClassifier(str(cascade_path))
-    return cascade if not cascade.empty() else None
-
 
 def recognize_speaker_clusters(
     video_path: Path,
@@ -195,7 +154,7 @@ def recognize_speaker_clusters(
                 )
                 if selected_face is None or lip_score < 0.012:
                     continue
-                match = best_character_match(selected_face.embedding, reference_vectors, engine.neural)
+                match = best_character_match(selected_face.embedding, reference_vectors)
                 if match is not None:
                     matches.append((*match, lip_score))
             suggestion = _majority_suggestion(source_label, matches, engine.model_name)
@@ -229,7 +188,6 @@ def build_reference_vectors(
 def best_character_match(
     vector: np.ndarray,
     references: list[tuple[int, str, np.ndarray]],
-    neural: bool,
     character_id: int | None = None,
 ) -> tuple[int, str, float] | None:
     best_by_character: dict[int, tuple[int, str, float]] = {}
@@ -241,8 +199,8 @@ def best_character_match(
         if current is None or score > current[2]:
             best_by_character[reference_character_id] = (reference_character_id, name, score)
     scores = sorted(best_by_character.values(), key=lambda item: item[2], reverse=True)
-    threshold = 0.43 if neural else 0.86
-    margin = 0.07 if neural else 0.04
+    threshold = 0.43  # SFace cosine similarity
+    margin = 0.07
     if not scores or scores[0][2] < threshold:
         return None
     if character_id is None and len(scores) > 1 and scores[0][2] - scores[1][2] < margin:
@@ -300,15 +258,6 @@ def mouth_motion_score(
     return float(np.mean(np.abs(current - previous)))
 
 
-def face_signature(image: np.ndarray, cv2_module=None) -> np.ndarray:
-    if cv2_module is None:
-        import cv2 as cv2_module
-    gray = image if image.ndim == 2 else cv2_module.cvtColor(image, cv2_module.COLOR_BGR2GRAY)
-    normalized = cv2_module.resize(gray, (96, 96), interpolation=cv2_module.INTER_AREA)
-    normalized = cv2_module.equalizeHist(normalized)
-    dct = cv2_module.dct(normalized.astype(np.float32) / 255.0)
-    vector = dct[:20, :20].reshape(-1)[1:]
-    return _normalized(vector)
 
 
 def _mouth_crop(frame: np.ndarray, face: FaceObservation, cv2_module) -> np.ndarray | None:

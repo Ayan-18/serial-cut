@@ -23,7 +23,7 @@ from app.application.quality_report import candidate_quality_report, episode_qua
 from app.infrastructure.config import Settings
 from app.infrastructure.database import make_engine
 from app.media.rendering import build_render_args
-from app.media.character_recognition import FaceObservation, face_signature, select_lip_active_face
+from app.media.character_recognition import FaceObservation, select_lip_active_face
 from app.media.voice_identity import VoiceEmbedding, merge_voice_profile, voice_signature
 from app.models.entities import Character, ClipCandidate, Episode, JobStage, TranscriptSegment, WordTimestamp
 from app.workers.queue import enqueue_candidate_render
@@ -190,15 +190,6 @@ def test_duplicate_characters_can_be_merged_without_losing_links(session, tmp_pa
     assert merged.id == target.id
     assert "Маша" in merged.aliases_json
     assert "b.jpg" in merged.photos_json
-
-
-def test_face_signature_is_deterministic_for_the_same_crop():
-    image = np.arange(96 * 96, dtype=np.uint8).reshape(96, 96)
-
-    first = face_signature(image)
-    second = face_signature(image.copy())
-
-    assert np.allclose(first, second)
 
 
 def test_lip_motion_selects_the_face_whose_mouth_changed():

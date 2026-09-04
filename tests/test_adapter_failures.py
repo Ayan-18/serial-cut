@@ -124,18 +124,12 @@ def test_failed_telegram_export_is_not_cached_and_can_be_retried(session, monkey
 # --- Face recognizer: graceful fallback when YuNet/SFace weights are missing ------
 
 
-_FALLBACK_MODEL_NAMES = {
-    "Haar + DCT (резервный режим)",
-    "Только голос (лица не распознаются без YuNet/SFace)",
-}
-
-
 def test_face_recognizer_falls_back_without_onnx_weights(tmp_path: Path):
     engine = LocalFaceRecognizer(tmp_path / "missing_yunet.onnx", tmp_path / "missing_sface.onnx")
 
     assert engine.neural is False
-    assert engine.model_name in _FALLBACK_MODEL_NAMES
-    # No crash regardless of whether this OpenCV build still ships CascadeClassifier.
+    assert engine.can_detect is False
+    assert engine.model_name == "Только голос (лица не распознаются без YuNet/SFace)"
     assert engine.detect(np.zeros((240, 320, 3), dtype=np.uint8)) == []
 
 
@@ -151,10 +145,7 @@ def test_face_recognizer_falls_back_when_weights_are_corrupt(tmp_path: Path):
 
 
 def test_face_tracking_reports_unavailable_without_a_detector(tmp_path: Path, monkeypatch):
-    from app.media import character_recognition, face_tracking
-
-    # Force the "no neural weights, no Haar" state regardless of the test machine.
-    monkeypatch.setattr(character_recognition, "_load_haar_cascade", lambda cv2_module: None)
+    from app.media import face_tracking
 
     result = face_tracking.estimate_face_offset(
         tmp_path / "missing.mp4",
@@ -240,4 +231,4 @@ def test_recognize_speaker_clusters_returns_fallback_model_name_with_no_profiles
     )
 
     assert suggestions == []
-    assert model_name in _FALLBACK_MODEL_NAMES
+    assert model_name == "Только голос (лица не распознаются без YuNet/SFace)"

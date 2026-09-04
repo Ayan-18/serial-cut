@@ -111,7 +111,7 @@ def estimate_face_offset(
             selected_character_id = -1
             if active is not None and active.character_id is not None and references:
                 selected, identity_score = _face_for_character(
-                    current_faces, references, engine.neural, active.character_id
+                    current_faces, references, active.character_id
                 )
                 if selected is not None:
                     selected_character_id = active.character_id
@@ -209,12 +209,11 @@ def _active_speech(timestamp: float, ranges: list[SpeechRange]) -> SpeechRange |
 def _face_for_character(
     faces: list[FaceObservation],
     references: list[tuple[int, str, np.ndarray]],
-    neural: bool,
     character_id: int,
 ) -> tuple[FaceObservation | None, float]:
     matches: list[tuple[FaceObservation, float]] = []
     for face in faces:
-        match = best_character_match(face.embedding, references, neural, character_id=character_id)
+        match = best_character_match(face.embedding, references, character_id=character_id)
         if match is not None:
             matches.append((face, match[2]))
     if not matches:
