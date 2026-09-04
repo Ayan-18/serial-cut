@@ -1,5 +1,18 @@
 # SerialCuts Worklog
 
+## 2026-09-04 - Cover the thin-tested media and worker code
+
+- `tests/test_face_tracking.py`: `_smooth_keyframes` step-clamp/easing, `_active_speech`
+  shortest-identified-range, `_prefetch_frames` single forward decode (fake capture with
+  real cv2 grab/retrieve semantics), and `estimate_face_offset` end-to-end with a fake
+  engine following a face L→R. face_tracking.py 21% → 75%.
+- `tests/test_speakers.py`: `_kmeans` cluster separation, `_read_mono_pcm` 16-bit round-trip
+  and non-16-bit rejection, `_voice_features` shape/determinism, `assign_speaker_labels`
+  splitting a low vs bright voice. speakers.py 23% → 95%.
+- `tests/test_background_queue.py`: the `BackgroundQueue` loop — notifies on completion,
+  stays quiet on idle, does nothing while disabled. background.py 36% → 90%.
+- Total coverage 73.8% → 75.5%.
+
 ## 2026-09-04 - Split schemas.py into a package
 
 - `app/api/schemas.py` (803 lines, 89 flat Pydantic models) → `app/api/schemas/` with
