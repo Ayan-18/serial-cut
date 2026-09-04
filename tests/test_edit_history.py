@@ -133,6 +133,23 @@ def test_history_endpoints_list_and_restore(api_client):
     assert restored.json()["start_time"] == 10.0
 
 
+def test_auto_follow_trajectory_survives_a_crop_offset_tweak(session, tmp_path: Path):
+    candidate = _candidate(session, tmp_path)
+    candidate.crop_mode = "auto-follow"
+    candidate.crop_keyframes_json = [{"time": 0.0, "offset": -0.3}, {"time": 5.0, "offset": 0.4}]
+    session.flush()
+
+    # Pure offset nudge, same mode, same boundaries -> keep the trajectory.
+    save_candidate_edits(session, candidate.id, crop_mode="auto-follow", crop_offset_x=0.1)
+    session.flush()
+    assert session.get(ClipCandidate, candidate.id).crop_keyframes_json
+
+    # Switching away from auto-follow drops it.
+    save_candidate_edits(session, candidate.id, crop_mode="center-crop")
+    session.flush()
+    assert session.get(ClipCandidate, candidate.id).crop_keyframes_json == []
+
+
 def test_restore_rejects_snapshot_from_a_different_candidate(session, tmp_path: Path):
     first = _candidate(session, tmp_path / "a")
     second = _candidate(session, tmp_path / "b")

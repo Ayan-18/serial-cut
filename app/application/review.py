@@ -153,12 +153,21 @@ def _apply_candidate_edits(
     else:
         record_candidate_snapshot(session, candidate, "crop", "Кадрирование")
 
+    # The auto-follow trajectory is indexed to the clip's time range, so keep it
+    # across pure crop tweaks (offset/scale) and only drop it when the boundaries
+    # move or the user leaves auto-follow.
+    keeps_trajectory = (
+        not boundary_changed
+        and next_crop_mode == "auto-follow"
+        and candidate.crop_mode == "auto-follow"
+    )
     candidate.start_time = next_start
     candidate.end_time = next_end
     candidate.crop_mode = next_crop_mode
     candidate.crop_offset_x = next_offset
     candidate.crop_scale = next_scale
-    candidate.crop_keyframes_json = []
+    if not keeps_trajectory:
+        candidate.crop_keyframes_json = []
     candidate.thumbnail_path = None
     candidate.edit_revision += 1
     if candidate.status == "rendered":

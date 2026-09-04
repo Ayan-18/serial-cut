@@ -319,12 +319,27 @@ export function useSerialCutsController() {
     setMessage(decision === "approve" ? "Кандидат принят и правки сохранены" : "Кандидат отклонён"); await loadCandidates(candidate.episode_id);
   }
   
+  function chooseCrop(candidate: Candidate, mode: Candidate["crop_mode"]) {
+    // "По лицам" only tracks if a trajectory exists — compute it on selection.
+    if (mode === "auto-follow" && !(candidate.crop_keyframes_json?.length)) {
+      void autoCrop(candidate);
+      return;
+    }
+    setCandidateEdit(candidate.id, { crop: mode });
+  }
+
   async function autoCrop(candidate: Candidate) {
     setMessage("Ищем активного говорящего по персонажу и движению губ…");
-    const data = await api<{ crop_offset_x: number; faces_detected: number; keyframes: { time: number; offset: number }[]; active_speaker_frames: number; identified_speaker_frames: number; lip_motion_frames: number; face_model: string; held_frames: number; largest_face_frames: number; average_confidence: number }>(`/api/candidates/${candidate.id}/auto-crop`, { method: "POST" });
-    setCandidateEdit(candidate.id, { crop: "auto-follow", offset: data.crop_offset_x });
-    await loadCandidates(candidate.episode_id, false);
-    setMessage(data.faces_detected ? `Траектория: ${data.keyframes.length} точек · уверенность ${Math.round(data.average_confidence * 100)}% · персонаж: ${data.identified_speaker_frames} · губы: ${data.lip_motion_frames} · удержано: ${data.held_frames}` : "Лица не найдены, оставлен центр кадра");
+    try {
+      const data = await api<{ crop_offset_x: number; faces_detected: number; keyframes: { time: number; offset: number }[]; active_speaker_frames: number; identified_speaker_frames: number; lip_motion_frames: number; face_model: string; held_frames: number; largest_face_frames: number; average_confidence: number }>(`/api/candidates/${candidate.id}/auto-crop`, { method: "POST" });
+      setCandidateEdit(candidate.id, { crop: "auto-follow", offset: data.crop_offset_x });
+      await loadCandidates(candidate.episode_id, false);
+      setMessage(data.keyframes.length
+        ? `Траектория: ${data.keyframes.length} точек · ${data.face_model} · персонаж: ${data.identified_speaker_frames} · губы: ${data.lip_motion_frames} · удержано: ${data.held_frames}`
+        : "В этом отрывке лица не найдены — оставлен центр кадра");
+    } catch (error) {
+      setMessage(`Найти лица: ${errorMessage(error)}`);
+    }
   }
   
   async function saveSubtitles() {
@@ -787,6 +802,7 @@ export function useSerialCutsController() {
     openCandidate,
     reviewCandidate,
     autoCrop,
+    chooseCrop,
     saveSubtitles,
     resetSubtitles,
     autoSplitSubtitles,

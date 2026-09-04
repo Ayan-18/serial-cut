@@ -69,6 +69,11 @@ class LocalFaceRecognizer:
         return self.detector is not None and self.recognizer is not None
 
     @property
+    def can_detect(self) -> bool:
+        """Whether this build can find faces at all (neural weights or Haar)."""
+        return self.neural or self.cascade is not None
+
+    @property
     def model_name(self) -> str:
         if self.neural:
             return "YuNet + SFace"

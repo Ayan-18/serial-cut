@@ -150,6 +150,86 @@ def test_face_recognizer_falls_back_when_weights_are_corrupt(tmp_path: Path):
     assert engine.neural is False
 
 
+def test_face_tracking_reports_unavailable_without_a_detector(tmp_path: Path, monkeypatch):
+    from app.media import character_recognition, face_tracking
+
+    # Force the "no neural weights, no Haar" state regardless of the test machine.
+    monkeypatch.setattr(character_recognition, "_load_haar_cascade", lambda cv2_module: None)
+
+    result = face_tracking.estimate_face_offset(
+        tmp_path / "missing.mp4",
+        0.0,
+        10.0,
+        detector_model=tmp_path / "no_yunet.onnx",
+        recognizer_model=tmp_path / "no_sface.onnx",
+    )
+
+    assert result.face_detection_available is False
+    assert result.offset_x == 0.0
+    assert result.keyframes == []
+
+
+def test_auto_crop_endpoint_returns_422_when_face_models_are_missing(api_client, monkeypatch):
+    from app.media.face_tracking import FaceTrackingResult
+    from app.models.entities import ClipCandidate, Episode, Season
+
+    def no_detector(*args, **kwargs):
+        return FaceTrackingResult(
+            offset_x=0.0,
+            faces_detected=0,
+            frames_sampled=0,
+            keyframes=[],
+            active_speaker_frames=0,
+            identified_speaker_frames=0,
+            lip_motion_frames=0,
+            face_model="Только голос (лица не распознаются без YuNet/SFace)",
+            held_frames=0,
+            largest_face_frames=0,
+            average_confidence=0.0,
+            face_detection_available=False,
+        )
+
+    monkeypatch.setattr("app.media.face_tracking.estimate_face_offset", no_detector)
+
+    session = api_client.db
+    season = Season(title="S", root_path="C:/face-demo")
+    session.add(season)
+    session.flush()
+    episode = Episode(
+        season_id=season.id,
+        file_path="C:/face-demo/e.mkv",
+        file_name="e.mkv",
+        fingerprint="fp-face-crop",
+        size_bytes=1,
+        modified_ns=1,
+        proxy_path="C:/face-demo/proxy.mp4",
+        duration_seconds=60.0,
+    )
+    session.add(episode)
+    session.flush()
+    candidate = ClipCandidate(
+        episode_id=episode.id,
+        start_time=1.0,
+        end_time=20.0,
+        title="M",
+        description="d",
+        moment_type="другое",
+        score=80,
+        scores_json={},
+        rationale="r",
+        problems_json=[],
+    )
+    session.add(candidate)
+    session.commit()
+
+    response = api_client.post(f"/api/candidates/{candidate.id}/auto-crop")
+
+    assert response.status_code == 422
+    assert "YuNet/SFace" in response.json()["detail"]
+    # The candidate crop mode must be left untouched.
+    assert session.get(ClipCandidate, candidate.id).crop_mode == "blurred-background"
+
+
 def test_recognize_speaker_clusters_returns_fallback_model_name_with_no_profiles(tmp_path: Path):
     suggestions, model_name = recognize_speaker_clusters(
         tmp_path / "episode.mp4",

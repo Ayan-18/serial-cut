@@ -722,6 +722,27 @@ Done in the 2026-09-02 batch: model installation assistant, keyframe-thumbnail c
 progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo, batch
 candidate operations, in-UI log viewer, generated API docs, bootstrap script.
 
+## 2026-09-02 - Face tracking: fix silent "just centers"
+
+Root cause of "трекинг по лицу не работает, просто центрирует": with OpenCV 5
+(no `CascadeClassifier`) and no YuNet/SFace weights installed, the recognizer
+finds zero faces, `estimate_face_offset` returns no keyframes, and
+`_crop_filter` silently degrades auto-follow to a constant centre crop.
+Verified the rest of the chain is sound: YuNet/SFace load and detect once the
+weights exist, and a real ffmpeg render with a synthetic trajectory pans
+correctly (two sampled frames differ).
+
+- `LocalFaceRecognizer.can_detect`; `estimate_face_offset` returns
+  `face_detection_available=False` early when nothing can detect.
+- `auto-crop` now returns HTTP 422 with an install hint instead of pretending
+  it worked; extracted the route body into `app/application/auto_crop.py`.
+- Selecting "По лицам" in the crop dropdown now runs the tracker
+  (`chooseCrop`), so the option always means "tracked", not "centred".
+- `_apply_candidate_edits` keeps the auto-follow trajectory across pure
+  offset/scale tweaks (it is time-indexed to the clip, only boundary changes
+  or leaving auto-follow invalidate it).
+- The 39 MB YuNet/SFace weights install fine via the in-app catalog button.
+
 ## 2026-09-02 - End-to-end simulation, two live bugs fixed
 
 Ran the real app against a synthetic 3-episode season (stub ASR/LLM/TTS, real

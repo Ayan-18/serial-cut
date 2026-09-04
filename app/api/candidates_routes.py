@@ -92,83 +92,21 @@ def auto_split_subtitles(candidate_id: int, session: Session = Depends(get_sessi
 
 @router.post("/candidates/{candidate_id}/auto-crop", response_model=AutoCropResponse)
 def auto_crop_candidate(candidate_id: int, session: Session = Depends(get_session)):
-    from app.media.character_recognition import CharacterProfile
-    from app.media.face_tracking import SpeechRange, estimate_face_offset
+    from app.application.auto_crop import FaceDetectionUnavailableError, auto_crop_candidate as run_auto_crop
 
     candidate = session.get(ClipCandidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="Кандидат не найден")
-    episode = session.get(Episode, candidate.episode_id)
-    if episode is None:
-        raise HTTPException(status_code=404, detail="Серия не найдена")
     try:
         settings = effective_settings(session, get_settings())
-        _ensure_episode_not_enqueued(session, episode.id)
-        identity_map = {
-            item.source_label: item.character_id
-            for item in session.scalars(
-                select(SpeakerIdentity).where(SpeakerIdentity.episode_id == episode.id)
-            ).all()
-        }
-        segments = session.scalars(
-            select(TranscriptSegment).where(
-                TranscriptSegment.episode_id == episode.id,
-                TranscriptSegment.end_time >= candidate.start_time,
-                TranscriptSegment.start_time <= candidate.end_time,
-            )
-        ).all()
-        speech_ranges = [
-            SpeechRange(
-                item.start_time,
-                item.end_time,
-                item.speaker_label,
-                identity_map.get(item.speaker_label) if item.speaker_label else None,
-            )
-            for item in segments
-        ]
-        characters = session.scalars(
-            select(Character).where(Character.season_id == episode.season_id)
-        ).all()
-        profiles = [
-            CharacterProfile(item.id, item.name, [Path(path) for path in item.photos_json or []])
-            for item in characters
-            if item.photos_json
-        ]
-        session.commit()
+        _ensure_episode_not_enqueued(session, candidate.episode_id)
         with processing_guard():
-            result = estimate_face_offset(
-                Path(episode.proxy_path or episode.file_path),
-                candidate.start_time,
-                candidate.end_time,
-                speech_ranges=speech_ranges,
-                character_profiles=profiles,
-                detector_model=settings.face_detector_model,
-                recognizer_model=settings.face_recognizer_model,
-                audio_path=Path(episode.audio_path) if episode.audio_path else None,
-            )
-        save_candidate_edits(
-            session,
-            candidate.id,
-            crop_mode="auto-follow",
-            crop_offset_x=result.offset_x,
-        )
-        candidate = session.get(ClipCandidate, candidate.id)
-        candidate.crop_keyframes_json = smooth_crop_keyframes(result.keyframes)
+            result = run_auto_crop(session, candidate_id, settings)
         session.commit()
-        return AutoCropResponse(
-            candidate_id=candidate.id,
-            crop_offset_x=candidate.crop_offset_x,
-            faces_detected=result.faces_detected,
-            frames_sampled=result.frames_sampled,
-            keyframes=candidate.crop_keyframes_json,
-            active_speaker_frames=result.active_speaker_frames,
-            identified_speaker_frames=result.identified_speaker_frames,
-            lip_motion_frames=result.lip_motion_frames,
-            face_model=result.face_model,
-            held_frames=result.held_frames,
-            largest_face_frames=result.largest_face_frames,
-            average_confidence=result.average_confidence,
-        )
+        return AutoCropResponse(**result.__dict__)
+    except FaceDetectionUnavailableError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ProcessingBusyError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc

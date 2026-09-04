@@ -37,6 +37,7 @@ class FaceTrackingResult:
     held_frames: int
     largest_face_frames: int
     average_confidence: float
+    face_detection_available: bool = True
 
 
 def estimate_face_offset(
@@ -53,6 +54,23 @@ def estimate_face_offset(
     import cv2
 
     engine = LocalFaceRecognizer(detector_model, recognizer_model)
+    if not engine.can_detect:
+        # No YuNet/SFace weights and this OpenCV build has no Haar fallback:
+        # there is nothing to track, so say so instead of silently centering.
+        return FaceTrackingResult(
+            offset_x=0.0,
+            faces_detected=0,
+            frames_sampled=0,
+            keyframes=[],
+            active_speaker_frames=0,
+            identified_speaker_frames=0,
+            lip_motion_frames=0,
+            face_model=engine.model_name,
+            held_frames=0,
+            largest_face_frames=0,
+            average_confidence=0.0,
+            face_detection_available=False,
+        )
     references = build_reference_vectors(engine, character_profiles or [])
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
