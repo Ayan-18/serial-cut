@@ -13,6 +13,7 @@ from app.application.narration_voice import resolve_narration_voice
 from app.infrastructure.config import Settings
 from app.infrastructure.atomic import replace_atomically, temp_sibling, write_text_atomically
 from app.infrastructure.processes import ProcessResult, run_process
+from app.media.ru_numbers import normalize_numbers
 from app.media.tts import DEFAULT_NARRATOR_VOICE, TtsSynthesizer, build_synthesizer
 from app.models.entities import StoryArc
 
@@ -111,8 +112,9 @@ def synthesize_story_arc_narration(
         part_audio = parts_dir / f"line-{index:02}.wav"
         temp_part = temp_sibling(part_audio).with_suffix(".wav")
         line_voice = str(line.get("voice_id") or voice_id)
+        spoken = normalize_numbers(str(line["text"]))
         try:
-            synthesizer.synthesize(str(line["text"]), temp_part, line_voice)
+            synthesizer.synthesize(spoken, temp_part, line_voice)
         except RuntimeError:
             temp_part.unlink(missing_ok=True)
             raise

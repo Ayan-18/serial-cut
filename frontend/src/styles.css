@@ -1552,3 +1552,5 @@ button.danger {
 .character-voice { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
 .character-voice span { color: #667085; font-size: 11px; }
 .character-voice select { padding: 6px 8px; }
+
+.narration-audio { width: 100%; margin-top: 8px; height: 34px; }

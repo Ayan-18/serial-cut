@@ -202,6 +202,21 @@ def create_story_arc_narration_audio(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/story-arcs/{story_arc_id}/narration-audio-file")
+def story_arc_narration_audio_file(story_arc_id: int, session: Session = Depends(get_session)):
+    try:
+        arc = get_story_arc(session, story_arc_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    settings = effective_settings(session, get_settings())
+    return safe_file_response(
+        settings,
+        (arc.plan_json or {}).get("narration_audio_path"),
+        media_type="audio/wav",
+        missing_detail="Озвучка ещё не создана",
+    )
+
+
 @router.get("/story-arc-exports/{export_id}/file")
 def story_arc_export_file(export_id: int, session: Session = Depends(get_session)):
     export = _get_story_arc_export(session, export_id)

@@ -1182,6 +1182,43 @@
         }
       }
     },
+    "/api/story-arcs/{story_arc_id}/narration-audio-file": {
+      "get": {
+        "summary": "Story Arc Narration Audio File",
+        "operationId": "story_arc_narration_audio_file_api_story_arcs__story_arc_id__narration_audio_file_get",
+        "parameters": [
+          {
+            "name": "story_arc_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Story Arc Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/story-arc-exports/{export_id}/file": {
       "get": {
         "summary": "Story Arc Export File",

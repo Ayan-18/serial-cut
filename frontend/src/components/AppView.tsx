@@ -124,7 +124,7 @@ export function AppView({ controller }: AppViewProps) {
             <div className="arc-actions">
               <button disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => enqueueStoryArcRender(workflowArc, true)}><Clapperboard size={16} /> В очередь</button>
               <button className="secondary" disabled={arcRenderBusy === workflowArc.id || !workflowArc.segments.length} onClick={() => renderStoryArc(workflowArc, false)}>Без субтитров</button>
-              <button className="secondary" onClick={() => synthesizeNarration(workflowArc)}><Volume2 size={16} /> WAV</button>
+              <button className="secondary" onClick={() => synthesizeNarration(workflowArc)}><Volume2 size={16} /> WAV</button>{typeof workflowArc.plan_json.narration_audio_path === "string" && <audio className="narration-audio" controls preload="none" src={`/api/story-arcs/${workflowArc.id}/narration-audio-file`} />}
             </div>
           </> : <p className="empty">Создайте StoryArc, чтобы редактировать сезонный монтаж.</p>}
         </div>

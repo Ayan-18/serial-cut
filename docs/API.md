@@ -178,6 +178,7 @@
 | `DELETE` | `/api/story-arcs/{story_arc_id}` | Remove Story Arc |
 | `GET` | `/api/story-arcs/{story_arc_id}/narration` | Read Story Arc Narration |
 | `POST` | `/api/story-arcs/{story_arc_id}/narration-audio` | Create Story Arc Narration Audio |
+| `GET` | `/api/story-arcs/{story_arc_id}/narration-audio-file` | Story Arc Narration Audio File |
 | `POST` | `/api/story-arcs/{story_arc_id}/rebuild` | Rebuild Story Arc |
 | `POST` | `/api/story-arcs/{story_arc_id}/render` | Render Story Arc Endpoint |
 | `POST` | `/api/story-arcs/{story_arc_id}/render-job` | Enqueue Story Arc Render Endpoint |
