@@ -197,6 +197,9 @@ precision, duplicate rate и invalid clips. Это базовый измерит
   FFmpeg (кэш по ревизии правок); в редакторе кадра клик по миниатюре перематывает превью.
 - Импорт сезона возвращает число просканированных файлов и список нечитаемых (заблокированных
   антивирусом/проводником) — импорт не прерывается на одном файле.
+- `GET /api/events` — SSE-поток очереди и задач: фронтенд подписывается на него вместо опроса
+  `GET /api/jobs` каждые 2.5 с, поэтому прогресс обновляется сразу и без рывков. Если поток
+  недоступен, UI автоматически откатывается на короткий опрос.
 - `GET /api/system-check` добавил необязательные проверки Node, `llama-server`, запуска вне
   `.venv` и поддержки длинных путей Windows.
 - `DELETE /api/episodes/{id}`, `DELETE /api/seasons/{id}`, `DELETE /api/jobs/{id}` убирают ошибочный
@@ -302,6 +305,7 @@ GitHub Actions CI повторяет backend `ruff`, `mypy` и `pytest`, а та
 - `POST /api/queue/run-next` - выполнить следующую задачу очереди.
 - `POST /api/queue/pause`, `POST /api/queue/resume` - управление очередью.
 - `POST /api/jobs/{id}/cancel`, `POST /api/jobs/{id}/retry` - отмена и повтор задачи.
+- `GET /api/events` - SSE-поток изменений очереди и задач (замена опроса `GET /api/jobs`).
 - `POST /api/episodes/{id}/auto-export` - принять и экспортировать кандидаты выше порога.
 - `POST /api/episodes/{id}/enqueue` - идемпотентная постановка анализа в очередь; можно передать
   `resume_from_stage` для `stage2_media`, `stage3_candidates` или `auto_export`.

@@ -66,6 +66,12 @@
 | `GET` | `/api/episodes/{episode_id}/story-context` | Read Story Context |
 | `PUT` | `/api/episodes/{episode_id}/story-context` | Update Story Context |
 
+## events
+
+| Метод | Путь | Описание |
+| --- | --- | --- |
+| `GET` | `/api/events` | Events |
+
 ## exports
 
 | Метод | Путь | Описание |

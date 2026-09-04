@@ -1,5 +1,19 @@
 # SerialCuts Worklog
 
+## 2026-09-04 - Live queue updates over SSE
+
+- `GET /api/events` streams `text/event-stream`: a fresh short-lived session every ~1.5 s builds
+  the same `{snapshot, items}` payload as `GET /api/jobs` (shared `build_queue_data` helper) and
+  emits an `event: queue` frame only when the serialized payload changes, with a `: ping` comment
+  every 20 s to keep the connection warm. The generator bails out on `request.is_disconnected()`.
+- GET is a safe method, so the loopback middleware lets the stream through without the local API
+  token; the Host allowlist still applies.
+- Frontend: the `useSerialCutsController` effect now opens an `EventSource("/api/events")` instead
+  of `setInterval(refreshActivity, 2500)`. It updates the queue straight from each frame and only
+  re-fetches exports/candidates when a run finishes (running -> idle edge). If the stream errors,
+  it falls back to a 4 s poll and cancels the poll again on reconnect.
+- Tests: `tests/test_events_stream.py` covers the payload serializer and that the route is wired.
+
 ## 2026-09-04 - E2E simulation, face tracking and silent-failure hardening
 
 A full run of the real app (synthetic 3-episode season, stub ASR/LLM/TTS, real FFmpeg,
@@ -794,13 +808,14 @@ face-tracking + silent-degradation hardening.
 
 Still open:
 
-- Number-to-words normalization for Russian digits before TTS (Silero reads "2024" poorly).
 - Recreate the local `.venv` on Python 3.11 and re-pin dev extras that live only in `dependencies`.
-- Split `useSerialCutsController.ts` (750+ lines) into per-domain hooks.
-- Tighten the ruff/mypy ignore lists (`from _shared import *`, 8 disabled mypy codes).
+- Split `useSerialCutsController.ts` (850+ lines) into per-domain hooks.
+- Tighten the remaining mypy ignore list (6 disabled codes: arg-type, assignment, attr-defined,
+  list-item, misc, union-attr).
 - Persistent background queue loop option, while keeping `run-next` for testability.
-- Progress streaming (SSE) for long model downloads and season imports.
+- Per-file SSE progress for long model downloads (queue/job SSE already shipped).
 - VLM keyframe analysis for top candidates (declared in ARCHITECTURE, not built).
+- Semantic candidate search via a local sentence-transformer (new ~90 MB dependency).
 
 ## Useful Commands
 

@@ -678,7 +678,29 @@ export function useSerialCutsController() {
   
   useEffect(() => { setBatchSelection([]); }, [selectedEpisodeId]);
   useEffect(() => { refresh().catch((error) => setMessage(errorMessage(error))); runSystemCheck().catch((error) => setMessage(errorMessage(error))); }, []);
-  useEffect(() => { const timer = window.setInterval(() => refreshActivity().catch(() => undefined), 2500); return () => window.clearInterval(timer); }, [selectedEpisodeId]);
+  useEffect(() => {
+    // Live queue updates via SSE; fall back to polling only while the stream is down.
+    let fallback: number | null = null;
+    let hadRunning = false;
+    const startFallback = () => { if (fallback === null) fallback = window.setInterval(() => refreshActivity().catch(() => undefined), 4000); };
+    const stopFallback = () => { if (fallback !== null) { window.clearInterval(fallback); fallback = null; } };
+    const applyQueue = (data: QueueData) => {
+      setQueue(data);
+      const running = data.items.some((job) => job.status === "running");
+      if (hadRunning && !running) refreshActivity().catch(() => undefined);
+      hadRunning = running;
+    };
+    let source: EventSource | null = null;
+    try {
+      source = new EventSource("/api/events");
+      source.addEventListener("queue", (event) => {
+        try { applyQueue(JSON.parse((event as MessageEvent).data) as QueueData); } catch { /* skip malformed frame */ }
+      });
+      source.onopen = () => stopFallback();
+      source.onerror = () => startFallback();
+    } catch { startFallback(); }
+    return () => { source?.close(); stopFallback(); };
+  }, [selectedEpisodeId]);
   useEffect(() => {
     const seasonId = selectedArcSeasonId();
     if (!seasonId) { setAvailableArcCharacters([]); return; }

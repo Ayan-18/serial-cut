@@ -101,20 +101,27 @@ def delete_job_endpoint(job_id: int, session: Session = Depends(get_session)):
     return {"deleted": True}
 
 
-@router.get("/jobs", response_model=QueueDataRead)
-def jobs(session: Session = Depends(get_session)):
+def build_queue_data(session: Session) -> QueueDataRead:
+    """Shared queue+jobs payload used by GET /api/jobs and the SSE stream."""
     snapshot = queue_snapshot(session)
     items = session.scalars(select(Job).order_by(Job.updated_at.desc())).all()
-    return {
-        "snapshot": {
-            "queued": snapshot.queued,
-            "running": snapshot.running,
-            "failed": snapshot.failed,
-            "paused": get_queue_state(session) == "paused",
-            "eta_seconds": estimate_eta_seconds(session),
-        },
-        "items": items,
-    }
+    return QueueDataRead.model_validate(
+        {
+            "snapshot": {
+                "queued": snapshot.queued,
+                "running": snapshot.running,
+                "failed": snapshot.failed,
+                "paused": get_queue_state(session) == "paused",
+                "eta_seconds": estimate_eta_seconds(session),
+            },
+            "items": items,
+        }
+    )
+
+
+@router.get("/jobs", response_model=QueueDataRead)
+def jobs(session: Session = Depends(get_session)):
+    return build_queue_data(session)
 
 
 @router.get("/jobs/{job_id}/stages", response_model=list[JobStageRead])
