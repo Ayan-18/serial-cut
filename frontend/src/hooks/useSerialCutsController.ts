@@ -290,10 +290,17 @@ export function useSerialCutsController() {
     if (!selectedEpisodeId) return;
     setMessage("Сравниваем лица, движение губ и локальные голосовые профили…");
     try {
-      const result = await api<{ assigned_labels: number; face_model: string; voice_profiles_used: number }>(`/api/episodes/${selectedEpisodeId}/identify-characters`, { method: "POST" });
+      const result = await api<{ analyzed_labels: number; assigned_labels: number; face_model: string; voice_profiles_used: number }>(`/api/episodes/${selectedEpisodeId}/identify-characters`, { method: "POST" });
       await loadEpisodeDetails(selectedEpisodeId);
       if (selectedCandidate) setSubtitles(await api<Subtitle[]>(`/api/candidates/${selectedCandidate.id}/subtitles`));
-      setMessage(result.assigned_labels ? `Определено голосов: ${result.assigned_labels} · ${result.face_model} · голосовых профилей: ${result.voice_profiles_used}` : "Надёжных совпадений лиц, губ и голосов не найдено — имена не назначены");
+      if (result.assigned_labels) {
+        setMessage(`Определено голосов: ${result.assigned_labels} · ${result.face_model} · голосовых профилей: ${result.voice_profiles_used}`);
+      } else if (!result.analyzed_labels) {
+        setMessage("Нет меток «Говорящий N» — сначала выполните медиа-анализ серии");
+      } else {
+        const facePart = result.face_model.includes("YuNet") ? "" : ` (${result.face_model})`;
+        setMessage(`Надёжных совпадений не найдено — имена не назначены${facePart}. Проверьте фото персонажей и модели YuNet/SFace.`);
+      }
     } catch (error) { setMessage(`Распознавание персонажей: ${errorMessage(error)}`); }
   }
   

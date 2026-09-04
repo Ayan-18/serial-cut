@@ -94,6 +94,25 @@ def test_stub_synthesizer_writes_a_real_wav(tmp_path: Path):
         assert handle.getnframes() > 0
 
 
+def test_windows_sapi_script_bails_out_without_a_russian_voice():
+    from app.media.tts import powershell_tts_script
+
+    script = powershell_tts_script()
+    assert "exit 3" in script
+    assert "GetInstalledVoices($culture)" in script
+
+
+def test_windows_sapi_synthesizer_raises_on_nonzero_runner(tmp_path: Path):
+    from app.infrastructure.processes import ProcessResult
+
+    synth = WindowsSapiSynthesizer(
+        tmp_path,
+        runner=lambda args, timeout: ProcessResult(args, 3, "", "нет русского голоса"),
+    )
+    with pytest.raises(RuntimeError, match="русского голоса"):
+        synth.synthesize("Привет", tmp_path / "out.wav", "windows")
+
+
 def test_windows_sapi_synthesizer_invokes_powershell(tmp_path: Path):
     calls: list[list[str]] = []
 

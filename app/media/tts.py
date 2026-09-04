@@ -54,8 +54,12 @@ Add-Type -AssemblyName System.Speech
 $culture = [System.Globalization.CultureInfo]::GetCultureInfo("ru-RU")
 $text = Get-Content -LiteralPath $TextPath -Raw -Encoding UTF8
 $speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$voice = $speaker.GetInstalledVoices($culture) | Select-Object -First 1
-if ($voice) { $speaker.SelectVoice($voice.VoiceInfo.Name) }
+$voice = $speaker.GetInstalledVoices($culture) | Where-Object { $_.Enabled } | Select-Object -First 1
+if (-not $voice) {
+  [Console]::Error.WriteLine("В Windows нет русского голоса (ru-RU). Параметры -> Время и язык -> Речь.")
+  exit 3
+}
+$speaker.SelectVoice($voice.VoiceInfo.Name)
 $speaker.Rate = 0
 $speaker.Volume = 100
 $speaker.SetOutputToWaveFile($OutputPath)

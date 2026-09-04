@@ -722,6 +722,24 @@ Done in the 2026-09-02 batch: model installation assistant, keyframe-thumbnail c
 progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo, batch
 candidate operations, in-UI log viewer, generated API docs, bootstrap script.
 
+## 2026-09-02 - Audit of silent-degradation features (like face tracking)
+
+Reviewed every feature for the same failure class as face tracking (gated on a
+missing model/dep, silently degrades to a no-op without telling the user).
+Fixed the closest siblings:
+
+- `identify-characters` («Лица + губы + голоса») now distinguishes "no
+  «Говорящий N» labels — run media analysis first" and "no YuNet/SFace / check
+  photos" from a plain "no matches" in the UI message.
+- Windows SAPI narration exits with an error when Windows has no ru-RU voice
+  instead of silently reading Russian text with an English voice.
+
+Still known (reported, not yet changed): narration text falls back to generic
+template lines when Qwen is unavailable; cover-frame selection is not
+face-aware on OpenCV 5 (no crash, just sharpness/brightness); stage-2 speaker
+clustering failures surface only as a buried episode warning; loudnorm
+two-pass silently drops to single-pass on a bad analysis pass.
+
 ## 2026-09-02 - Face tracking: fix silent "just centers"
 
 Root cause of "трекинг по лицу не работает, просто центрирует": with OpenCV 5
