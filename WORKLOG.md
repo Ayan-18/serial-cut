@@ -1,5 +1,14 @@
 # SerialCuts Worklog
 
+## 2026-09-04 - Split schemas.py into a package
+
+- `app/api/schemas.py` (803 lines, 89 flat Pydantic models) → `app/api/schemas/` with
+  `common`, `season`, `candidate`, `story_arc`, `character`, `catalog` modules and an
+  `__init__` that re-exports every name, so all `from app.api.schemas import X` sites are
+  unchanged. Only `JobRead` crosses a module boundary (common → candidate/story_arc), no
+  cycles. `docs/openapi.json` regenerates byte-identical.
+- `test_api_route_modules_stay_small` now also caps each `schemas/*.py` at 300 lines.
+
 ## 2026-09-04 - Telegram bot becomes a real remote; drop dead Haar code
 
 - `bot/callbacks.py` `render`/`export` no longer runs FFmpeg inside the bot's async loop —

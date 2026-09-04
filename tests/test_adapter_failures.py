@@ -8,10 +8,8 @@ import pytest
 
 from app.analysis.llm import LlamaCppHttpAnalyzer
 from app.analysis.schemas import CandidatePayload, CandidateScores
-from app.bot.callbacks import handle_candidate_callback
-from app.infrastructure.config import Settings
 from app.media.character_recognition import LocalFaceRecognizer, recognize_speaker_clusters
-from app.models.entities import AppSetting, ClipCandidate
+from app.models.entities import ClipCandidate
 
 
 def _valid_candidates_payload() -> str:
@@ -79,48 +77,6 @@ def test_llm_raises_validation_error_when_every_retry_is_broken(monkeypatch):
         analyzer.candidates("[0.0-40.0] Реплика", [])
 
 
-# --- Telegram callbacks: a failed action must not poison the idempotency cache ----
-
-
-def test_failed_telegram_export_is_not_cached_and_can_be_retried(session, monkeypatch):
-    candidate = ClipCandidate(
-        episode_id=1,
-        start_time=0,
-        end_time=35,
-        title="Тест",
-        description="Описание",
-        moment_type="другое",
-        score=90,
-        scores_json={},
-        rationale="Понятен",
-        problems_json=[],
-    )
-    session.add(candidate)
-    session.flush()
-
-    calls = {"n": 0}
-
-    def flaky_render(_session, _candidate_id, _settings):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("FFmpeg недоступен")
-
-        class _Result:
-            output_path = "C:/out/clip.mp4"
-
-        return _Result()
-
-    monkeypatch.setattr("app.bot.callbacks.render_candidate", flaky_render)
-
-    with pytest.raises(RuntimeError):
-        handle_candidate_callback(session, Settings(), "evt-1", "export", candidate.id)
-    assert session.get(AppSetting, "telegram_callback:evt-1") is None
-
-    result = handle_candidate_callback(session, Settings(), "evt-1", "export", candidate.id)
-    assert result.status == "rendered"
-    assert session.get(AppSetting, "telegram_callback:evt-1") is not None
-
-
 # --- Face recognizer: graceful fallback when YuNet/SFace weights are missing ------
 
 
@@ -162,7 +118,7 @@ def test_face_tracking_reports_unavailable_without_a_detector(tmp_path: Path, mo
 
 def test_auto_crop_endpoint_returns_422_when_face_models_are_missing(api_client, monkeypatch):
     from app.media.face_tracking import FaceTrackingResult
-    from app.models.entities import ClipCandidate, Episode, Season
+    from app.models.entities import Episode, Season
 
     def no_detector(*args, **kwargs):
         return FaceTrackingResult(

@@ -23,10 +23,13 @@ def test_domain_routers_expose_expected_api_paths():
 
 def test_api_route_modules_stay_small():
     api_dir = Path(__file__).resolve().parents[1] / "app" / "api"
-    # `schemas.py` holds every Pydantic model; `_shared.py` holds the shared
-    # HTTP helpers and their explicit imports. Neither defines routes.
-    allowed_large_modules = {"schemas.py", "_shared.py"}
+    # Pydantic models live in the `schemas/` package (per-domain files); `_shared.py`
+    # holds the shared HTTP helpers and their explicit imports. Neither defines routes.
+    allowed_large_modules = {"_shared.py"}
     for path in api_dir.glob("*.py"):
         if path.name in allowed_large_modules:
             continue
         assert len(path.read_text(encoding="utf-8").splitlines()) <= 300, path.name
+
+    for path in (api_dir / "schemas").glob("*.py"):
+        assert len(path.read_text(encoding="utf-8").splitlines()) <= 300, f"schemas/{path.name}"
