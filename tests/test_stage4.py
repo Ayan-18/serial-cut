@@ -266,7 +266,7 @@ def test_review_and_render_are_idempotent(session, tmp_path: Path, monkeypatch):
         out.write_bytes(b"mp4")
         meta.write_text("{}", encoding="utf-8")
         sub.write_text("ass", encoding="utf-8")
-        return type("Artifacts", (), {"output_path": out, "metadata_path": meta, "subtitle_path": sub, "cover_path": None})()
+        return type("Artifacts", (), {"output_path": out, "metadata_path": meta, "subtitle_path": sub, "cover_path": None, "warnings": []})()
 
     monkeypatch.setattr("app.application.stage4.render_clip", fake_render_clip)
     first_render = render_candidate(session, candidate.id, Settings(output_dir=tmp_path / "out"))

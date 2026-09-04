@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -22,6 +22,7 @@ class RenderedArtifacts:
     metadata_path: Path
     subtitle_path: Path | None
     cover_path: Path | None
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -197,7 +198,9 @@ def render_clip(
     extra_video_filters: list[str] | None = None,
     runner: Callable[[list[str], int], ProcessResult] = run_process,
     audio_stream_index: int | None = None,
+    face_detector_model: Path | None = None,
 ) -> RenderedArtifacts:
+    warnings: list[str] = []
     logger.info(
         "Rendering clip: input=%s slug=%s start=%.3f end=%.3f preset=%s nvenc=%s subtitles=%s",
         input_path,
@@ -228,10 +231,12 @@ def render_clip(
             ),
             1800,
         )
-        if analysis.returncode == 0:
-            loudnorm_filter = loudnorm_second_pass_filter(parse_loudnorm_stats(analysis.stderr))
+        stats = parse_loudnorm_stats(analysis.stderr) if analysis.returncode == 0 else None
+        if stats is not None:
+            loudnorm_filter = loudnorm_second_pass_filter(stats)
         else:
             logger.warning("loudnorm analysis failed, using single-pass loudnorm: slug=%s", slug)
+            warnings.append("Двухпроходный loudnorm не дал результат — применён обычный одно­проходный.")
     def run_video_render(enable_nvenc: bool) -> ProcessResult:
         return runner(
             build_render_args(
@@ -267,7 +272,7 @@ def render_clip(
         replace_atomically(temp_output, output_path)
     cover_path = output_dir / f"{slug}.jpg"
     temp_cover = temp_sibling(cover_path).with_suffix(".jpg")
-    cover_at = select_cover_timestamp(input_path, start_time, end_time)
+    cover_at = select_cover_timestamp(input_path, start_time, end_time, face_detector_model)
     cover_result = runner(build_cover_args(ffmpeg_path, input_path, temp_cover, cover_at), 300)
     if cover_result.returncode == 0 and temp_cover.exists():
         replace_atomically(temp_cover, cover_path)
@@ -278,10 +283,15 @@ def render_clip(
     metadata_path = output_dir / f"{slug}.json"
     write_text_atomically(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
     logger.info("Clip rendered: output=%s metadata=%s cover=%s", output_path, metadata_path, cover_path)
-    return RenderedArtifacts(output_path, metadata_path, subtitle_path, cover_path)
+    return RenderedArtifacts(output_path, metadata_path, subtitle_path, cover_path, warnings)
 
 
-def select_cover_timestamp(input_path: Path, start_time: float, end_time: float) -> float:
+def select_cover_timestamp(
+    input_path: Path,
+    start_time: float,
+    end_time: float,
+    face_detector_model: Path | None = None,
+) -> float:
     duration = max(0.1, end_time - start_time)
     fallback = min(end_time - 0.05, start_time + min(1.0, duration / 2))
     try:
@@ -290,13 +300,12 @@ def select_cover_timestamp(input_path: Path, start_time: float, end_time: float)
         capture = cv2.VideoCapture(str(input_path))
         if not capture.isOpened():
             return fallback
-        cascade = None
-        if hasattr(cv2, "CascadeClassifier") and hasattr(cv2, "data"):
-            cascade = cv2.CascadeClassifier(
-                str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
-            )
-            if cascade.empty():
-                cascade = None
+        detector = None
+        if face_detector_model is not None and Path(face_detector_model).exists():
+            try:
+                detector = cv2.FaceDetectorYN.create(str(face_detector_model), "", (320, 320), 0.7, 0.3, 5000)
+            except cv2.error:
+                detector = None
         best: tuple[float, float] | None = None
         try:
             for index in range(7):
@@ -313,12 +322,14 @@ def select_cover_timestamp(input_path: Path, start_time: float, end_time: float)
                 sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
                 brightness = float(gray.mean())
                 exposure = max(0.0, 1.0 - abs(brightness - 125.0) / 125.0)
-                faces = (
-                    cascade.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(40, 40))
-                    if cascade is not None
-                    else []
-                )
-                face_bonus = max((w * h for _, _, w, h in faces), default=0) / max(1, gray.size) * 5000
+                face_areas: list[float] = []
+                if detector is not None:
+                    detector.setInputSize((frame.shape[1], frame.shape[0]))
+                    _, found = detector.detect(frame)
+                    if found is not None:
+                        for row in found:  # cv2 return is untyped
+                            face_areas.append(float(row[2]) * float(row[3]))  # type: ignore[index]
+                face_bonus = (max(face_areas, default=0.0) / max(1, gray.size)) * 5000
                 edge_penalty = min(index, 6 - index) * 2
                 score = sharpness + exposure * 35 + face_bonus + edge_penalty
                 if best is None or score > best[0]:

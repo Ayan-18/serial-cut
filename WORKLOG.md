@@ -722,6 +722,21 @@ Done in the 2026-09-02 batch: model installation assistant, keyframe-thumbnail c
 progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo, batch
 candidate operations, in-UI log viewer, generated API docs, bootstrap script.
 
+## 2026-09-02 - Fix the "semi-visible" degradation cases
+
+- Narration text: `NarrationScript.source` (`llm` / `template` / `manual`),
+  stored in `plan_json.narration_source`. The arc card and the "WAV" action now
+  say "заглушка (Qwen недоступна)" when the text is templated.
+- Cover frame: `select_cover_timestamp` uses YuNet when the model is present
+  (it was relying on the dead OpenCV-5 Haar path); falls back to
+  sharpness/brightness only when there is no detector.
+- Any pipeline stage result with a `.warnings` list is now surfaced by
+  `_run_stage` on the completed `JobStage` (as a note, status stays COMPLETED)
+  and in `job.progress_message`. This covers stage-2 speaker-clustering
+  failures and the two-pass-loudnorm-fell-back-to-single-pass case.
+- `EpisodeQualityReport.media_warnings` reads `probe_json.serialcuts_warnings`
+  and the candidate panel's quality strip shows them.
+
 ## 2026-09-02 - Audit of silent-degradation features (like face tracking)
 
 Reviewed every feature for the same failure class as face tracking (gated on a

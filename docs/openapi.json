@@ -4974,6 +4974,13 @@
             },
             "type": "array",
             "title": "Top Problems"
+          },
+          "media_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Media Warnings"
           }
         },
         "type": "object",
@@ -5940,6 +5947,11 @@
             "title": "Mode",
             "default": "first_person"
           },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "template"
+          },
           "tts_notice": {
             "type": "string",
             "title": "Tts Notice",
@@ -6522,6 +6534,13 @@
               }
             ],
             "title": "Cover Path"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
           }
         },
         "type": "object",

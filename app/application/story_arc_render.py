@@ -198,6 +198,7 @@ def render_story_arc(
             loudnorm_two_pass=resolved_loudnorm,
             runner=runner,
             audio_stream_index=episode.selected_audio_stream_index,
+            face_detector_model=settings.face_detector_model,
         )
         segment_paths.append(artifacts.output_path)
         segment_durations.append(segment.end_time - segment.start_time)

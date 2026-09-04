@@ -392,6 +392,7 @@ class NarrationRead(BaseModel):
     text: str
     lines: list[dict]
     mode: str = "first_person"
+    source: str = "template"
     tts_notice: str = "Локальная TTS-озвучка не имитирует голос актёра или персонажа."
 
 
@@ -646,6 +647,7 @@ class RenderResponse(BaseModel):
     output_path: str
     subtitle_path: str | None
     cover_path: str | None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class PreviewRenderResponse(BaseModel):
@@ -731,6 +733,7 @@ class EpisodeQualityRead(BaseModel):
     average_score: int
     problem_candidates: int
     top_problems: list[str]
+    media_warnings: list[str] = Field(default_factory=list)
 
 
 class ExportRead(BaseModel):

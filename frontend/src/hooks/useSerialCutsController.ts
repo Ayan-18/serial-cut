@@ -580,9 +580,17 @@ export function useSerialCutsController() {
   }
   
   async function synthesizeNarration(arc: StoryArc) {
-    const audio = await api<{ audio_path: string }>(`/api/story-arcs/${arc.id}/narration-audio?narration_mode=${arcNarrationMode}`, { method: "POST" });
-    setMessage(`WAV озвучки создан: ${audio.audio_path}`);
-    setStoryArcs(await api<StoryArc[]>("/api/story-arcs"));
+    try {
+      const audio = await api<{ audio_path: string }>(`/api/story-arcs/${arc.id}/narration-audio?narration_mode=${arcNarrationMode}`, { method: "POST" });
+      const arcs = await api<StoryArc[]>("/api/story-arcs");
+      setStoryArcs(arcs);
+      const source = arcs.find((item) => item.id === arc.id)?.plan_json?.narration_source;
+      setMessage(source === "template"
+        ? `WAV создан, но Qwen недоступна — текст по шаблону. Запустите llama-server и повторите: ${audio.audio_path}`
+        : `WAV озвучки создан: ${audio.audio_path}`);
+    } catch (error) {
+      setMessage(`Озвучка не создана: ${errorMessage(error)}`);
+    }
   }
   
   async function createPublishingPlanForArc(arc: StoryArc) {

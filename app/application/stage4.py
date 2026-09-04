@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from typing import Callable
@@ -26,6 +26,7 @@ class RenderResult:
     output_path: str
     subtitle_path: str | None
     cover_path: str | None
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,7 @@ def render_candidate(
         loudnorm_two_pass=resolved_loudnorm,
         runner=runner,
         audio_stream_index=episode.selected_audio_stream_index,
+        face_detector_model=settings.face_detector_model,
     )
     export = Export(candidate_id=candidate.id, output_path=str(artifacts.output_path))
     export.metadata_path = str(artifacts.metadata_path)
@@ -176,7 +178,9 @@ def render_candidate(
     candidate.status = "rendered"
     episode.stage = EpisodeStage.RENDERED.value
     session.commit()
-    return RenderResult(candidate.id, export.id, export.output_path, export.subtitle_path, export.cover_path)
+    return RenderResult(
+        candidate.id, export.id, export.output_path, export.subtitle_path, export.cover_path, artifacts.warnings
+    )
 
 
 def render_candidate_preview(
@@ -239,6 +243,7 @@ def render_candidate_preview(
         loudnorm_two_pass=False,
         runner=runner,
         audio_stream_index=episode.selected_audio_stream_index,
+        face_detector_model=settings.face_detector_model,
     )
     return PreviewRenderResult(
         candidate.id,

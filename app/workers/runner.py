@@ -317,7 +317,7 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
     session.commit()
     logger.info("Stage started: job_id=%s stage=%s", job_id, name)
     try:
-        fn()
+        result = fn()
     except ProcessCancelledError as exc:
         _record_stage_terminal(session, job_id, name, JobStatus.PAUSED.value, str(exc))
         logger.info("Stage paused after cancellation: job_id=%s stage=%s error=%s", job_id, name, exc)
@@ -329,11 +329,22 @@ def _run_stage(session: Session, job: Job, name: str, fn: Callable[[], object], 
     else:
         stage.status = JobStatus.COMPLETED.value
         stage.finished_at = datetime.now(timezone.utc).isoformat()
-        stage.error_message = None
         job.progress = progress
-        job.progress_message = _stage_complete_message(name)
+        message = _stage_complete_message(name)
+        stage_warnings = [str(item) for item in (getattr(result, "warnings", None) or [])]
+        if stage_warnings:
+            joined = "; ".join(stage_warnings)
+            # Keep the stage COMPLETED, but surface the note in the job timeline
+            # and the queue line.
+            stage.error_message = f"⚠ {joined}"
+            message = f"{message} · внимание: {joined}"
+        else:
+            stage.error_message = None
+        job.progress_message = message
         session.commit()
-        logger.info("Stage completed: job_id=%s stage=%s", job_id, name)
+        logger.info(
+            "Stage completed: job_id=%s stage=%s warnings=%s", job_id, name, bool(stage_warnings)
+        )
 
 
 def _get_or_create_stage(session: Session, job: Job, name: str) -> JobStage:

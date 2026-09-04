@@ -69,3 +69,32 @@ def test_worker_respects_pause_and_runs_queued_job(session, tmp_path):
     assert session.get(type(jobs[0]), jobs[0].id).status == JobStatus.COMPLETED.value
     assert len(session.scalars(select(JobStage)).all()) == 2
 
+
+def test_stage_warnings_are_surfaced_on_the_completed_job(session, tmp_path):
+    season = tmp_path / "Сезон"
+    season.mkdir()
+    (season / "e.mkv").write_bytes(b"video")
+    imported = import_season(session, season)
+    jobs = enqueue_season_analysis(session, imported.season.id)
+    session.commit()
+
+    class _Result:
+        warnings = ["Кластеризация говорящих пропущена: нет WAV"]
+
+    result = run_next_job(
+        session,
+        Settings(),
+        stage2_func=lambda *args: _Result(),
+        stage3_func=lambda *args: None,
+    )
+    session.commit()
+
+    assert result.ran is True
+    job = session.get(type(jobs[0]), jobs[0].id)
+    assert job.status == JobStatus.COMPLETED.value
+    stage2 = session.scalar(
+        select(JobStage).where(JobStage.job_id == job.id, JobStage.name == "stage2_media")
+    )
+    assert stage2.status == JobStatus.COMPLETED.value
+    assert "Кластеризация говорящих пропущена" in (stage2.error_message or "")
+

@@ -147,3 +147,23 @@ def test_story_arc_narration_and_queue_render_job(session, tmp_path, monkeypatch
     assert job.kind == JobKind.RENDER_STORY_ARC.value
     assert result.status == "completed"
     assert calls == [arc.id]
+
+
+def test_narration_source_flags_template_fallback(session, tmp_path):
+    from app.application.narration import story_arc_narration
+    from app.application.story_arcs import StoryArcPlanRequest, create_story_arc_plan
+
+    imported = _season_with_candidates(session, tmp_path)
+    arc = create_story_arc_plan(
+        session,
+        StoryArcPlanRequest(season_id=imported.season.id, max_segments=2, max_duration_seconds=120),
+    )
+    # No stored narration lines yet -> template.
+    assert story_arc_narration(session, arc.id).source == "template"
+
+    plan = dict(arc.plan_json)
+    plan["narration"] = [{"order": 1, "voice": "narrator", "text": "Реальный закадровый текст."}]
+    plan["narration_source"] = "llm"
+    arc.plan_json = plan
+    session.flush()
+    assert story_arc_narration(session, arc.id).source == "llm"

@@ -36,6 +36,7 @@ class EpisodeQualityReport:
     average_score: int
     problem_candidates: int
     top_problems: list[str]
+    media_warnings: list[str]
 
 
 def candidate_quality_report(session: Session, candidate_id: int) -> CandidateQualityReport:
@@ -89,6 +90,11 @@ def episode_quality_report(session: Session, episode_id: int) -> EpisodeQualityR
         average_score=round(sum(scores) / len(scores)) if scores else 0,
         problem_candidates=sum(1 for candidate in candidates if candidate.problems_json),
         top_problems=_top_items(problems),
+        media_warnings=[
+            str(item.get("message") or item.get("code") or "")
+            for item in (episode.probe_json or {}).get("serialcuts_warnings") or []
+            if item.get("message") or item.get("code")
+        ],
     )
 
 

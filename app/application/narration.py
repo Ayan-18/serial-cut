@@ -23,6 +23,9 @@ class NarrationScript:
     text: str
     lines: list[dict]
     mode: str = "first_person"
+    # "llm" - written by local Qwen; "template" - generic fallback (Qwen was
+    # unavailable); "manual" - user-edited draft.
+    source: str = "template"
     tts_notice: str = "Локальная TTS-озвучка не имитирует голос актёра или персонажа."
 
 
@@ -38,12 +41,16 @@ def story_arc_narration(session: Session, story_arc_id: int, narration_mode: str
     if arc is None:
         raise ValueError("Арка не найдена")
     mode = _effective_narration_mode(arc, narration_mode)
-    lines = list((arc.plan_json or {}).get("narration", []))
+    plan = arc.plan_json or {}
+    lines = list(plan.get("narration", []))
     if mode == "narrator":
         lines = [_as_narrator_line(item) for item in lines]
-    if not lines:
+    if lines:
+        source = "manual" if plan.get("narration_custom") else str(plan.get("narration_source") or "llm")
+    else:
         lines = _fallback_lines(arc, mode)
-    return NarrationScript(story_arc_id=arc.id, text=_join_lines(lines), lines=lines, mode=mode)
+        source = "template"
+    return NarrationScript(story_arc_id=arc.id, text=_join_lines(lines), lines=lines, mode=mode, source=source)
 
 
 def synthesize_story_arc_narration(
@@ -63,6 +70,7 @@ def synthesize_story_arc_narration(
         raise ValueError("Озвучка выключена для этого StoryArc")
     narration = story_arc_narration(session, story_arc_id, mode)
     plan = dict(arc.plan_json or {})
+    source = "manual" if plan.get("narration_custom") else "template"
     if not plan.get("narration_custom"):
         generated = generate_local_text(settings, _narration_prompt(arc, mode), max_tokens=900)
         if generated:
@@ -72,6 +80,7 @@ def synthesize_story_arc_narration(
                 if line.strip(" -•\t")
             ]
             if generated_lines:
+                source = "llm"
                 narration = NarrationScript(arc.id, _join_lines(generated_lines), generated_lines, mode=mode)
     target_duration = max(1.0, float(target_duration_seconds or arc.total_duration_seconds))
     timed_lines = _timed_lines(
@@ -138,6 +147,7 @@ def synthesize_story_arc_narration(
     plan["narration_duration_seconds"] = round(target_duration, 3)
     plan["narration_mode"] = mode
     plan["narration_voice"] = voice_id
+    plan["narration_source"] = source
     plan["narration"] = timed_lines
     arc.plan_json = plan
     session.flush()
