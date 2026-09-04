@@ -163,6 +163,7 @@ def loudnorm_second_pass_filter(stats: dict | None) -> str:
 
 
 def build_cover_args(ffmpeg_path: str, input_path: Path, output_path: Path, at_seconds: float) -> list[str]:
+    # input is the already-vertical rendered clip; just grab one frame.
     return [
         ffmpeg_path,
         "-hide_banner",
@@ -173,8 +174,8 @@ def build_cover_args(ffmpeg_path: str, input_path: Path, output_path: Path, at_s
         str(input_path),
         "-frames:v",
         "1",
-        "-vf",
-        _crop_filter("blurred-background", width=1080, height=1920),
+        "-q:v",
+        "3",
         str(output_path),
     ]
 
@@ -272,8 +273,11 @@ def render_clip(
         replace_atomically(temp_output, output_path)
     cover_path = output_dir / f"{slug}.jpg"
     temp_cover = temp_sibling(cover_path).with_suffix(".jpg")
-    cover_at = select_cover_timestamp(input_path, start_time, end_time, face_detector_model)
-    cover_result = runner(build_cover_args(ffmpeg_path, input_path, temp_cover, cover_at), 300)
+    # Pick the cover from the finished vertical clip: it is already cropped/tracked
+    # and small, so this is one cheap decode instead of a second pass over the source.
+    clip_duration = max(0.1, end_time - start_time)
+    cover_at = select_cover_timestamp(output_path, 0.0, clip_duration, face_detector_model)
+    cover_result = runner(build_cover_args(ffmpeg_path, output_path, temp_cover, cover_at), 120)
     if cover_result.returncode == 0 and temp_cover.exists():
         replace_atomically(temp_cover, cover_path)
     else:

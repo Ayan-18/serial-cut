@@ -31,8 +31,10 @@ jobs:
         run: |
           python -m alembic downgrade base
           python -m alembic upgrade head
+      - name: Schema matches models
+        run: python scripts/check_migrations.py
       - name: Test
-        run: python -m pytest
+        run: python -m pytest --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=70
 
   frontend:
     runs-on: ubuntu-latest

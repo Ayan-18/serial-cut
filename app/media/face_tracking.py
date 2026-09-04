@@ -88,11 +88,13 @@ def estimate_face_offset(
     largest_face_frames = 0
     last_center: float | None = None
     last_offset: float | None = None
+    sample_times = [start_time + duration * (index + 0.5) / samples for index in range(samples)]
+    wanted = sample_times + [max(start_time, t - 0.12) for t in sample_times]
+    frames = _prefetch_frames(capture, wanted, cv2)
     try:
-        for index in range(samples):
-            timestamp = start_time + duration * (index + 0.5) / samples
-            current = _read_frame(capture, timestamp, cv2)
-            previous = _read_frame(capture, max(start_time, timestamp - 0.12), cv2)
+        for timestamp in sample_times:
+            current = frames.get(round(timestamp, 2))
+            previous = frames.get(round(max(start_time, timestamp - 0.12), 2))
             if current is None:
                 continue
             frames_sampled += 1
@@ -248,13 +250,47 @@ def _smooth_keyframes(
     return smoothed
 
 
-def _read_frame(capture, timestamp: float, cv2_module):
-    capture.set(cv2_module.CAP_PROP_POS_MSEC, max(0.0, timestamp) * 1000)
-    ok, frame = capture.read()
-    if not ok:
-        return None
+def _downscale720(frame, cv2_module):
     height, width = frame.shape[:2]
     if width > 720:
         scale = 720 / width
-        frame = cv2_module.resize(frame, (720, max(1, round(height * scale))))
+        return cv2_module.resize(frame, (720, max(1, round(height * scale))))
     return frame
+
+
+def _prefetch_frames(capture, timestamps: list[float], cv2_module) -> dict[float, object]:
+    """One sequential decode over the sampled window instead of ~2N keyframe seeks.
+
+    `CAP_PROP_POS_MSEC` seeking re-decodes from the nearest keyframe every call,
+    which is slow on long-GOP H.264. Here we seek once to the first wanted
+    timestamp and read forward, `retrieve()`-ing only the frames we need.
+    """
+    wanted = sorted({round(t, 2) for t in timestamps})
+    if not wanted:
+        return {}
+    fps = float(capture.get(cv2_module.CAP_PROP_FPS) or 0.0) or 25.0
+    # Track position by frame index (increments reliably on grab() on every
+    # backend, unlike CAP_PROP_POS_MSEC).
+    capture.set(cv2_module.CAP_PROP_POS_FRAMES, max(0, int(wanted[0] * fps)))
+    frame_no = int(capture.get(cv2_module.CAP_PROP_POS_FRAMES) or 0)  # where the seek actually landed
+    start_frame = frame_no
+    wanted_frames = [max(0, int(round(t * fps))) for t in wanted]
+    out: dict[float, object] = {}
+    index = 0
+    guard = 0
+    max_reads = (wanted_frames[-1] - start_frame) + len(wanted) + 64
+    while index < len(wanted) and guard < max_reads:
+        guard += 1
+        if not capture.grab():
+            break
+        if frame_no < wanted_frames[index]:
+            frame_no += 1
+            continue
+        ok, frame = capture.retrieve()
+        scaled = _downscale720(frame, cv2_module) if ok and frame is not None else None
+        while index < len(wanted) and frame_no >= wanted_frames[index]:
+            if scaled is not None:
+                out[wanted[index]] = scaled
+            index += 1
+        frame_no += 1
+    return out

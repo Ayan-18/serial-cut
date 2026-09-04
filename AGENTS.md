@@ -25,6 +25,9 @@ The product promise is privacy-first local processing:
 - Product features already added: auto mode, persisted UI settings, season enqueue, queue controls, ETA, render presets, NVENC detection, export with/without subtitles, optional two-pass loudnorm.
 - Operability: `/api/health` + `/api/version` + `/api/logs`, in-UI log viewer, `/api/model-catalog` with in-app face-model install, candidate edit history/undo (`CandidateEditSnapshot`, migration 0014), batch candidate review/render, keyframe-thumbnail crop strip, generated `docs/API.md` (`scripts/dump_openapi.py`), `resolve_within` path guard on file endpoints, `scripts/bootstrap.ps1`.
 - After adding or changing an endpoint, run `scripts/dump_openapi.py` and commit `docs/`.
+- After a model change, `scripts/check_migrations.py` must stay green (CI runs it) — generate the
+  Alembic revision if it reports drift. CI also enforces `--cov-fail-under=70`.
+- `scripts/clean.ps1` removes local scratch files (throwaway DBs, pytest temp, `__pycache__`).
 - StoryArc narration TTS is pluggable (`app/media/tts.py`): default `silero` (local neural, needs `.[tts]` extra + `data/models/tts/v4_ru.pt`), plus `windows-sapi` and `stub`. Per-character voice via `Character.narration_voice` (migration 0015) or auto by gender. Synthetic voice only — never actor cloning.
 
 ## Important Files

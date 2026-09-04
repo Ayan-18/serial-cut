@@ -336,6 +336,8 @@ export function useSerialCutsController() {
   }
 
   async function autoCrop(candidate: Candidate) {
+    const previousCrop = (edits[candidate.id] ?? editFromCandidate(candidate)).crop;
+    setCandidateEdit(candidate.id, { crop: "auto-follow" });  // optimistic: dropdown follows the click
     setMessage("Ищем активного говорящего по персонажу и движению губ…");
     try {
       const data = await api<{ crop_offset_x: number; faces_detected: number; keyframes: { time: number; offset: number }[]; active_speaker_frames: number; identified_speaker_frames: number; lip_motion_frames: number; face_model: string; held_frames: number; largest_face_frames: number; average_confidence: number }>(`/api/candidates/${candidate.id}/auto-crop`, { method: "POST" });
@@ -345,6 +347,7 @@ export function useSerialCutsController() {
         ? `Траектория: ${data.keyframes.length} точек · ${data.face_model} · персонаж: ${data.identified_speaker_frames} · губы: ${data.lip_motion_frames} · удержано: ${data.held_frames}`
         : "В этом отрывке лица не найдены — оставлен центр кадра");
     } catch (error) {
+      setCandidateEdit(candidate.id, { crop: previousCrop });  // revert on failure (e.g. 422 no models)
       setMessage(`Найти лица: ${errorMessage(error)}`);
     }
   }
