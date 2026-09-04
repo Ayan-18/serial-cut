@@ -47,6 +47,7 @@ export type Health = { ok: boolean; service: string; version: string; commit: st
 export type LogEntry = { timestamp: string | null; level: string; logger: string; message: string };
 export type LogTail = { path: string; exists: boolean; size_bytes: number; returned: number; entries: LogEntry[] };
 export type ModelCatalogEntry = { key: string; title: string; purpose: string; approx_size_mb: number; target_dir: string; installed: boolean; files_present: string[]; files_missing: string[]; installable_in_app: boolean; install_command: string };
+export type ModelInstallProgress = { key: string; status: "idle" | "running" | "done" | "error"; received_bytes: number; total_bytes: number; detail: string };
 export type CandidateSnapshot = { id: number; candidate_id: number; edit_revision: number; kind: string; label: string; created_at: string; start_time: number; end_time: number; crop_mode: string; subtitle_rows: number };
 export type KeyframeStripData = { candidate_id: number; edit_revision: number; start_time: number; end_time: number; frames: { index: number; time: number; url: string }[] };
 export type BatchOutcome = { requested: number; succeeded: number[]; skipped: { candidate_id: number; reason: string }[]; job_ids: number[] };

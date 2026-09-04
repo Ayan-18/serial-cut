@@ -111,6 +111,7 @@
 | --- | --- | --- |
 | `GET` | `/api/model-catalog` | Get Model Catalog |
 | `POST` | `/api/model-catalog/{key}/install` | Install Catalog Model |
+| `GET` | `/api/model-catalog/{key}/install-progress` | Model Install Progress |
 
 ## model-diagnostics
 

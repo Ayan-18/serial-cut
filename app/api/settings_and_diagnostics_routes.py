@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.api._shared import _cache_protected_paths, _ensure_no_active_jobs, _is_legacy_default_cache
 from app.api.dependencies import get_session
 from app.api.loopback import local_api_token
-from app.api.schemas import CacheClearRequest, CacheRead, HealthRead, LocalApiTokenRead, LogTailRead, ModelCatalogEntryRead, ModelDiagnosticsRead, ModelInstallRequest, ProjectDiagnosticsRead, RuntimeSettingsRead, VersionRead
+from app.api.schemas import CacheClearRequest, CacheRead, HealthRead, LocalApiTokenRead, LogTailRead, ModelCatalogEntryRead, ModelDiagnosticsRead, ModelInstallProgressRead, ModelInstallRequest, ProjectDiagnosticsRead, RuntimeSettingsRead, VersionRead
 from app.application.cache import cache_summary, clear_cache, prepare_cache_directory
 from app.application.model_diagnostics import check_models
 from app.application.processing_guard import ProcessingBusyError
@@ -14,7 +14,7 @@ from app.application.settings import RuntimeSettings, effective_settings, get_ru
 from app.application.system_check import report_as_dict, run_system_check
 from app.infrastructure.config import get_settings
 from app.application.log_reader import read_log_tail
-from app.application.model_install import install_model, model_catalog
+from app.application.model_install import get_model_install_progress, model_catalog, start_model_install
 from app.application.runtime_info import health_report, version_report
 
 router = APIRouter(prefix="/api")
@@ -54,14 +54,21 @@ def get_model_catalog():
     return model_catalog()
 
 
-@router.post("/model-catalog/{key}/install", response_model=ModelCatalogEntryRead)
+@router.post("/model-catalog/{key}/install", response_model=ModelInstallProgressRead)
 def install_catalog_model(key: str, payload: ModelInstallRequest):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="Подтвердите загрузку (confirm=true)")
     try:
-        return install_model(key, confirm=payload.confirm)
+        return start_model_install(key, confirm=payload.confirm)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except (OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=502, detail=f"Не удалось скачать модель: {exc}") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/model-catalog/{key}/install-progress", response_model=ModelInstallProgressRead)
+def model_install_progress(key: str):
+    return get_model_install_progress(key)
 
 
 @router.get("/cache", response_model=CacheRead)

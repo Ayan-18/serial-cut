@@ -1,17 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Download, HardDriveDownload } from "lucide-react";
 
 import { api, jsonHeaders } from "../api";
-import type { ModelCatalogEntry } from "../types";
+import type { ModelCatalogEntry, ModelInstallProgress } from "../types";
 
 function sizeLabel(mb: number) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} ГБ` : `${mb} МБ`;
 }
 
+function bytesLabel(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} МБ` : `${(bytes / 1024).toFixed(0)} КБ`;
+}
+
 export function ModelCatalogPanel() {
   const [entries, setEntries] = useState<ModelCatalogEntry[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ModelInstallProgress | null>(null);
   const [message, setMessage] = useState("");
+  const pollRef = useRef<number | null>(null);
 
   async function load() {
     try {
@@ -23,11 +29,34 @@ export function ModelCatalogPanel() {
 
   useEffect(() => {
     load();
+    return () => {
+      if (pollRef.current !== null) window.clearInterval(pollRef.current);
+    };
   }, []);
+
+  function watch(key: string) {
+    if (pollRef.current !== null) window.clearInterval(pollRef.current);
+    pollRef.current = window.setInterval(async () => {
+      try {
+        const state = await api<ModelInstallProgress>(`/api/model-catalog/${key}/install-progress`);
+        setProgress(state);
+        if (state.status === "done" || state.status === "error") {
+          window.clearInterval(pollRef.current!);
+          pollRef.current = null;
+          setBusy(null);
+          setMessage(state.status === "done" ? `${state.detail}` : `Ошибка: ${state.detail}`);
+          await load();
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+    }, 800);
+  }
 
   async function install(entry: ModelCatalogEntry) {
     if (!window.confirm(`Скачать «${entry.title}» (~${sizeLabel(entry.approx_size_mb)}) в ${entry.target_dir}?`)) return;
     setBusy(entry.key);
+    setProgress({ key: entry.key, status: "running", received_bytes: 0, total_bytes: 0, detail: entry.title });
     setMessage(`Скачиваю ${entry.title}…`);
     try {
       await api(`/api/model-catalog/${entry.key}/install`, {
@@ -35,12 +64,11 @@ export function ModelCatalogPanel() {
         headers: jsonHeaders,
         body: JSON.stringify({ confirm: true }),
       });
-      setMessage(`${entry.title}: готово`);
-      await load();
+      watch(entry.key);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не удалось скачать");
-    } finally {
       setBusy(null);
+      setProgress(null);
+      setMessage(error instanceof Error ? error.message : "Не удалось начать загрузку");
     }
   }
 
@@ -51,6 +79,15 @@ export function ModelCatalogPanel() {
         <h2>Локальные модели</h2>
       </div>
       {message && <p className="notice" role="status">{message}</p>}
+      {progress?.status === "running" && (
+        <div className="model-progress">
+          <progress value={progress.total_bytes ? progress.received_bytes : undefined} max={progress.total_bytes || undefined} />
+          <small>
+            {progress.detail}: {bytesLabel(progress.received_bytes)}
+            {progress.total_bytes ? ` / ${bytesLabel(progress.total_bytes)}` : ""}
+          </small>
+        </div>
+      )}
       <div className="model-catalog">
         {entries.map((entry) => (
           <article className="model-entry" key={entry.key}>
@@ -65,7 +102,7 @@ export function ModelCatalogPanel() {
               </small>
             </div>
             {entry.installable_in_app && !entry.installed ? (
-              <button disabled={busy === entry.key} onClick={() => install(entry)}>
+              <button disabled={busy !== null} onClick={() => install(entry)}>
                 <Download size={15} /> Скачать
               </button>
             ) : (

@@ -1,5 +1,18 @@
 # SerialCuts Worklog
 
+## 2026-09-04 - Model-download progress in the panel
+
+- `model_install.py`: `_download_verified`/`_download_silero` now take an `on_progress(delta,
+  content_length)` callback. `start_model_install(key)` runs the download on a daemon thread and
+  tracks `ModelInstallProgress` (status/received/total/detail) in a lock-guarded registry;
+  `get_model_install_progress(key)` reads it. Only one install runs at a time.
+- `POST /api/model-catalog/{key}/install` starts the thread and returns the progress record;
+  new `GET /api/model-catalog/{key}/install-progress` is polled by `ModelCatalogPanel`, which
+  draws a `<progress>` bar and reloads the catalogue on `done`. (Whisper/Qwen still install via
+  script — those are the 3 GB models the app never downloads.)
+- `opener` args default to `None` and resolve `urlopen` at call time so the thread path is
+  monkeypatchable. Tests in `tests/test_model_catalog.py`.
+
 ## 2026-09-04 - Cover the thin-tested media and worker code
 
 - `tests/test_face_tracking.py`: `_smooth_keyframes` step-clamp/easing, `_active_speech`

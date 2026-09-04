@@ -112,6 +112,14 @@ class ModelInstallRequest(BaseModel):
     confirm: bool = False
 
 
+class ModelInstallProgressRead(BaseModel):
+    key: str
+    status: str  # idle | running | done | error
+    received_bytes: int = 0
+    total_bytes: int = 0
+    detail: str = ""
+
+
 class ModelDiagnosticsRead(BaseModel):
     asr_adapter: str
     asr_ready: bool
@@ -163,6 +171,7 @@ __all__ = [
     "ProjectDiagnosticCheckRead",
     "ProjectDiagnosticsRead",
     "ModelCatalogEntryRead",
+    "ModelInstallProgressRead",
     "ModelInstallRequest",
     "ModelDiagnosticsRead",
     "CacheRead",

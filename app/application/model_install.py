@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import logging
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+logger = logging.getLogger(__name__)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = PROJECT_ROOT / "data" / "models"
+
+# Progress bytes reported by an in-flight download. delta = bytes just written,
+# content_length = Content-Length of the current file (0 if the server omits it).
+ProgressCallback = Callable[[int, int], None]
 
 FACE_MODELS = (
     (
@@ -143,7 +152,18 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download_verified(url: str, destination: Path, expected_hash: str, opener=urlopen) -> None:
+def _content_length(response: object) -> int:
+    headers = getattr(response, "headers", None)
+    try:
+        return int(headers.get("Content-Length", 0)) if headers is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _download_verified(
+    url: str, destination: Path, expected_hash: str, opener=None, on_progress: ProgressCallback | None = None
+) -> None:
+    opener = opener or urlopen
     if destination.exists() and _file_sha256(destination) == expected_hash:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -152,8 +172,11 @@ def _download_verified(url: str, destination: Path, expected_hash: str, opener=u
     request = Request(url, headers={"User-Agent": "SerialCuts local model installer"})
     try:
         with opener(request, timeout=120) as response, temporary.open("wb") as output:
+            total = _content_length(response)
             while chunk := response.read(1024 * 1024):
                 output.write(chunk)
+                if on_progress is not None:
+                    on_progress(len(chunk), total)
         actual = _file_sha256(temporary)
         if actual != expected_hash:
             raise RuntimeError(
@@ -180,7 +203,8 @@ def _verify_silero_model(path: Path) -> None:
         raise RuntimeError(f"Скачанная модель Silero не загружается: {exc}") from exc
 
 
-def _download_silero(*, opener=urlopen) -> None:
+def _download_silero(*, opener=None, on_progress: ProgressCallback | None = None) -> None:
+    opener = opener or urlopen
     destination = _tts_dir() / TTS_MODEL_NAME
     if destination.exists():
         _verify_silero_model(destination)
@@ -191,15 +215,20 @@ def _download_silero(*, opener=urlopen) -> None:
     request = Request(TTS_MODEL_URL, headers={"User-Agent": "SerialCuts local model installer"})
     try:
         with opener(request, timeout=300) as response, temporary.open("wb") as output:
+            total = _content_length(response)
             while chunk := response.read(1024 * 1024):
                 output.write(chunk)
+                if on_progress is not None:
+                    on_progress(len(chunk), total)
         _verify_silero_model(temporary)
         temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def install_model(key: str, *, confirm: bool, opener=urlopen) -> ModelCatalogEntry:
+def install_model(
+    key: str, *, confirm: bool, opener=None, on_progress: ProgressCallback | None = None
+) -> ModelCatalogEntry:
     entry = get_catalog_entry(key)
     if not entry.installable_in_app:
         raise ValueError(
@@ -212,9 +241,72 @@ def install_model(key: str, *, confirm: bool, opener=urlopen) -> ModelCatalogEnt
     if entry.installed:
         return entry
     if key == "tts":
-        _download_silero(opener=opener)
+        _download_silero(opener=opener, on_progress=on_progress)
         return get_catalog_entry(key)
     face_dir = _face_dir()
     for name, url, expected_hash in FACE_MODELS:
-        _download_verified(url, face_dir / name, expected_hash, opener=opener)
+        _download_verified(url, face_dir / name, expected_hash, opener=opener, on_progress=on_progress)
     return get_catalog_entry(key)
+
+
+@dataclass
+class ModelInstallProgress:
+    key: str
+    status: str  # "idle" | "running" | "done" | "error"
+    received_bytes: int = 0
+    total_bytes: int = 0
+    detail: str = ""
+
+
+_INSTALL_LOCK = threading.Lock()
+_INSTALL_PROGRESS: dict[str, ModelInstallProgress] = {}
+
+
+def get_model_install_progress(key: str) -> ModelInstallProgress:
+    with _INSTALL_LOCK:
+        current = _INSTALL_PROGRESS.get(key)
+        return (
+            ModelInstallProgress(**vars(current)) if current is not None else ModelInstallProgress(key, "idle")
+        )
+
+
+def start_model_install(key: str, *, confirm: bool) -> ModelInstallProgress:
+    """Kick a model download onto a daemon thread and track its byte progress."""
+    entry = get_catalog_entry(key)  # raises ValueError for an unknown key
+    with _INSTALL_LOCK:
+        if any(p.status == "running" for p in _INSTALL_PROGRESS.values()):
+            raise RuntimeError("Уже идёт установка другой модели — дождитесь её завершения")
+        if entry.installed:
+            return ModelInstallProgress(key, "done", detail="Уже установлено")
+        state = ModelInstallProgress(key, "running", detail=entry.title)
+        _INSTALL_PROGRESS[key] = state
+
+    received = {"n": 0, "total": 0}
+
+    def on_progress(delta: int, content_length: int) -> None:
+        received["n"] += delta
+        received["total"] = max(received["total"], content_length, received["n"])
+        with _INSTALL_LOCK:
+            live = _INSTALL_PROGRESS.get(key)
+            if live is not None:
+                live.received_bytes = received["n"]
+                live.total_bytes = received["total"]
+
+    def worker() -> None:
+        try:
+            install_model(key, confirm=confirm, on_progress=on_progress)
+            _finish(key, "done", "Готово")
+        except Exception as exc:  # noqa: BLE001 - surfaced to the panel
+            logger.warning("Model install failed: key=%s", key, exc_info=True)
+            _finish(key, "error", str(exc))
+
+    threading.Thread(target=worker, name=f"model-install-{key}", daemon=True).start()
+    return ModelInstallProgress(**vars(state))
+
+
+def _finish(key: str, status: str, detail: str) -> None:
+    with _INSTALL_LOCK:
+        live = _INSTALL_PROGRESS.get(key)
+        if live is not None:
+            live.status = status
+            live.detail = detail

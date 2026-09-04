@@ -221,7 +221,46 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ModelCatalogEntryRead"
+                  "$ref": "#/components/schemas/ModelInstallProgressRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/model-catalog/{key}/install-progress": {
+      "get": {
+        "summary": "Model Install Progress",
+        "operationId": "model_install_progress_api_model_catalog__key__install_progress_get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelInstallProgressRead"
                 }
               }
             }
@@ -5978,6 +6017,39 @@
           "recommendations"
         ],
         "title": "ModelDiagnosticsRead"
+      },
+      "ModelInstallProgressRead": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "received_bytes": {
+            "type": "integer",
+            "title": "Received Bytes",
+            "default": 0
+          },
+          "total_bytes": {
+            "type": "integer",
+            "title": "Total Bytes",
+            "default": 0
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "status"
+        ],
+        "title": "ModelInstallProgressRead"
       },
       "ModelInstallRequest": {
         "properties": {
