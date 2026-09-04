@@ -1,6 +1,20 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from app.api._shared import _ensure_episode_not_enqueued
+from app.api.dependencies import get_session
+from app.api.schemas import AutoCropResponse, CandidateEditRequest, CandidateEditResponse, CandidateQualityRead, CandidateSubtitlePayload, CandidateSubtitlesUpdate, JobRead, PreviewRenderResponse, RenderRequest, RenderResponse, ReviewRequest, ReviewResponse, SubtitleQualityRead
+from app.application.candidate_editor import EditableSubtitle, auto_split_candidate_subtitles, reset_candidate_subtitles, save_candidate_subtitles, subtitle_quality_report, subtitles_for_candidate
+from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.quality_report import candidate_quality_report
+from app.application.review import review_candidate, save_candidate_edits
+from app.application.settings import effective_settings
+from app.application.stage4 import render_candidate, render_candidate_preview
+from app.infrastructure.config import get_settings
+from app.models.entities import ClipCandidate, Episode
+from app.workers.queue import enqueue_candidate_render
 
 router = APIRouter(prefix="/api")
 

@@ -12,7 +12,6 @@ from app.analysis.schemas import (
     CandidatePayload,
     CandidateScores,
     EpisodeOutlinePayload,
-    extract_json_object,
     parse_candidate_json,
 )
 from app.models.entities import Scene
@@ -117,7 +116,7 @@ class LlamaCppHttpAnalyzer:
             )
         bucket_count = min(8, max(1, round(entries[-1][1] / 120)))
         bucket_size = max(1, (len(entries) + bucket_count - 1) // bucket_count)
-        ranges = []
+        ranges: list[dict] = []
         for index in range(0, len(entries), bucket_size):
             bucket = entries[index : index + bucket_size]
             summary = " ".join(entry[2] for entry in bucket).strip()[:500]

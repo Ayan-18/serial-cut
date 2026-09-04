@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.api._shared import _ensure_episode_not_enqueued, _get_episode
+from app.api.dependencies import get_session
+from app.api.schemas import BatchOutcomeRead, BatchRenderRequest, BatchReviewRequest
+from app.application.processing_guard import ProcessingBusyError
 from app.application.batch_ops import batch_enqueue_candidate_renders, batch_review_candidates
 
 router = APIRouter(prefix="/api")

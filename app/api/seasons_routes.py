@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+from app.api._shared import _get_episode, _story_context_read
+from app.api.dependencies import get_session
+from app.api.schemas import EpisodeOutlineRead, ImportResponse, SeasonImportRequest, SeasonRead, StoryContextRead, StoryContextUpdate
+from app.application.deletion import ResourceBusyError, delete_season, purge_artifacts
+from app.application.importer import import_season
+from app.application.settings import effective_settings
+from app.infrastructure.config import get_settings
+from app.models.entities import EpisodeOutline, Season
 
 router = APIRouter(prefix="/api")
 

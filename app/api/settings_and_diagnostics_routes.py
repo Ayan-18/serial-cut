@@ -1,6 +1,18 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.api._shared import _cache_protected_paths, _ensure_no_active_jobs, _is_legacy_default_cache
+from app.api.dependencies import get_session
+from app.api.loopback import local_api_token
+from app.api.schemas import CacheClearRequest, CacheRead, HealthRead, LocalApiTokenRead, LogTailRead, ModelCatalogEntryRead, ModelDiagnosticsRead, ModelInstallRequest, ProjectDiagnosticsRead, RuntimeSettingsRead, VersionRead
+from app.application.cache import cache_summary, clear_cache, prepare_cache_directory
+from app.application.model_diagnostics import check_models
+from app.application.processing_guard import ProcessingBusyError
+from app.application.project_diagnostics import run_project_diagnostics
+from app.application.settings import RuntimeSettings, effective_settings, get_runtime_settings, save_runtime_settings
+from app.application.system_check import report_as_dict, run_system_check
+from app.infrastructure.config import get_settings
 from app.application.log_reader import read_log_tail
 from app.application.model_install import install_model, model_catalog
 from app.application.runtime_info import health_report, version_report

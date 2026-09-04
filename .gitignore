@@ -11,3 +11,5 @@ frontend/dist/
 frontend/tsconfig.tsbuildinfo
 npm-debug.log*
 
+.coverage
+htmlcov/

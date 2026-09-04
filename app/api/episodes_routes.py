@@ -1,6 +1,21 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from pathlib import Path
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from app.api._shared import _ensure_episode_not_enqueued, _get_episode
+from app.api.dependencies import get_session
+from app.api.schemas import CandidateRead, EnqueueEpisodeRequest, EnqueueSeasonRequest, EpisodeQualityRead, JobRead, Stage2RunResponse, Stage3RunResponse
+from app.application.deletion import ResourceBusyError, delete_episode, purge_artifacts
+from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.quality_report import episode_quality_report
+from app.application.settings import effective_settings
+from app.infrastructure.config import get_settings
+from app.media.ffprobe import apply_probe_to_episode, probe_media
+from app.models.entities import ClipCandidate, Episode
+from app.workers.queue import enqueue_episode_analysis, enqueue_season_analysis
 
 router = APIRouter(prefix="/api")
 

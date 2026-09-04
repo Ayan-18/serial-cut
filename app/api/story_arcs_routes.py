@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.api._shared import _get_story_arc_export, _story_arc_read
+from app.api.dependencies import get_session
+from app.api.media_files import safe_file_response
+from app.api.schemas import NarrationAudioRead, NarrationRead, StoryArcCandidateAddRequest, StoryArcCreateRequest, StoryArcRead, StoryArcRenderJobResponse, StoryArcRenderRequest, StoryArcRenderResponse, StoryArcSegmentUpdateRequest, StoryArcUpdateRequest
+from app.application.derived_files import delete_derived_artifacts, delete_derived_tree
+from app.application.narration import story_arc_narration, synthesize_story_arc_narration
+from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.settings import effective_settings
+from app.application.story_arc_render import render_story_arc
+from app.application.story_arcs import StoryArcPlanRequest, StoryArcSegmentUpdate, StoryArcUpdate, add_candidate_to_story_arc, create_story_arc_plan, delete_story_arc, get_story_arc, list_story_arcs, rebuild_story_arc_plan, remove_story_arc_segment, update_story_arc, update_story_arc_segment
+from app.infrastructure.config import get_settings
+from app.workers.queue import enqueue_story_arc_render
 
 router = APIRouter(prefix="/api")
 
@@ -193,7 +206,7 @@ def create_story_arc_narration_audio(
 def story_arc_export_file(export_id: int, session: Session = Depends(get_session)):
     export = _get_story_arc_export(session, export_id)
     settings = effective_settings(session, get_settings())
-    return _safe_file_response(
+    return safe_file_response(
         settings,
         export.output_path,
         media_type="video/mp4",
@@ -205,7 +218,7 @@ def story_arc_export_file(export_id: int, session: Session = Depends(get_session
 def story_arc_export_cover(export_id: int, session: Session = Depends(get_session)):
     export = _get_story_arc_export(session, export_id)
     settings = effective_settings(session, get_settings())
-    return _safe_file_response(
+    return safe_file_response(
         settings,
         export.cover_path,
         media_type="image/jpeg",

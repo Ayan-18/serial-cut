@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import wave
 
 from app.application.global_search import search_season
 from app.application.importer import import_season

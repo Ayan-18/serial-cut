@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.api.dependencies import get_session
+from app.api.media_files import safe_file_response
+from app.api.schemas import KeyframeStripRead
+from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.settings import effective_settings
+from app.infrastructure.config import get_settings
 from app.application.candidate_keyframes import build_candidate_keyframes, candidate_keyframe_file
 
 router = APIRouter(prefix="/api")
@@ -35,7 +42,7 @@ def candidate_keyframe_image(
         path = candidate_keyframe_file(session, candidate_id, settings, index)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _safe_file_response(
+    return safe_file_response(
         settings,
         str(path),
         media_type="image/jpeg",

@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.api._shared import _publishing_plan_read, _video_script_read
+from app.api.dependencies import get_session
+from app.api.schemas import PublishingPackageRead, PublishingPlanCreateRequest, PublishingPlanRead, PublishingPlanUpdateRequest, VideoScriptCreateRequest, VideoScriptRead, VideoScriptUpdateRequest
+from app.application.publishing import PublishingPlanRequest, create_publishing_package, create_publishing_plan, list_publishing_plans, update_publishing_plan
+from app.application.settings import effective_settings
+from app.application.video_scripts import VideoScriptRequest, create_video_script, list_video_scripts, update_video_script
+from app.infrastructure.config import get_settings
 
 router = APIRouter(prefix="/api")
 

@@ -1,6 +1,20 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+import os
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from app.api._shared import _ensure_episode_not_enqueued, _get_export
+from app.api.dependencies import get_session
+from app.api.media_files import safe_file_response, served_media_roots
+from app.api.schemas import AutoExportRequest, AutoExportResponse, ExportRead
+from app.application.auto import auto_approve_and_export
+from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.settings import effective_settings
+from app.domain.paths import PathOutsideAllowedRootsError, resolve_within
+from app.infrastructure.config import get_settings
+from app.models.entities import Export
 
 router = APIRouter(prefix="/api")
 
@@ -13,7 +27,7 @@ def list_exports(session: Session = Depends(get_session)):
 def export_file(export_id: int, session: Session = Depends(get_session)):
     export = _get_export(session, export_id)
     settings = effective_settings(session, get_settings())
-    return _safe_file_response(
+    return safe_file_response(
         settings,
         export.output_path,
         media_type="video/mp4",
@@ -25,7 +39,7 @@ def export_file(export_id: int, session: Session = Depends(get_session)):
 def export_cover(export_id: int, session: Session = Depends(get_session)):
     export = _get_export(session, export_id)
     settings = effective_settings(session, get_settings())
-    return _safe_file_response(
+    return safe_file_response(
         settings,
         export.cover_path,
         media_type="image/jpeg",
@@ -38,7 +52,7 @@ def open_export_folder(export_id: int, session: Session = Depends(get_session)):
     export = _get_export(session, export_id)
     settings = effective_settings(session, get_settings())
     try:
-        path = resolve_within(export.output_path, _served_media_roots(settings))
+        path = resolve_within(export.output_path, served_media_roots(settings))
     except PathOutsideAllowedRootsError as exc:
         raise HTTPException(status_code=404, detail="Файл экспорта не найден") from exc
     if not path.exists():

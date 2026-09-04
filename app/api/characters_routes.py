@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from app.api._shared import *  # noqa: F403
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from pathlib import Path
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+from app.api._shared import _character_read, _ensure_episode_not_enqueued, _get_episode, _speaker_identity_read
+from app.api.dependencies import get_session
+from app.api.schemas import CharacterCreate, CharacterMergeRequest, CharacterPhotoAdd, CharacterRead, CharacterRecognitionResponse, NarrationVoiceUpdate, SpeakerIdentityRead, SpeakerIdentityUpdate, SpeakerLabelsRead, TtsVoiceCatalogRead
+from app.application.characters import add_character_photo, assign_speaker_identity, merge_characters, recognize_episode_characters, train_character_voice
+from app.application.processing_guard import ProcessingBusyError, processing_guard
+from app.application.settings import effective_settings
+from app.domain.paths import PathOutsideAllowedRootsError, resolve_within
+from app.infrastructure.config import get_settings
+from app.models.entities import Character, Season, SpeakerIdentity, TranscriptSegment
 from app.media.tts import SILERO_VOICE_IDS, voice_catalog
 
 router = APIRouter(prefix="/api")

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.application.review import review_candidate
-from app.application.stage4 import RenderResult, render_candidate
+from app.application.stage4 import render_candidate
 from app.infrastructure.config import Settings
 from app.models.entities import ClipCandidate
 

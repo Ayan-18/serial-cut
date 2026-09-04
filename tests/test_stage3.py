@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.analysis.llm import LlamaCppHttpAnalyzer
 from app.analysis.quality import calibrate_candidate
-from app.analysis.schemas import CandidatePayload, CandidateScores, EpisodeOutlinePayload, parse_candidate_json
+from app.analysis.schemas import CandidatePayload, CandidateScores, parse_candidate_json
 from app.analysis.validation import adjust_candidate_boundaries, dedupe_candidates
 from app.application.importer import import_season
 from app.application.stage3 import run_stage3_candidate_analysis

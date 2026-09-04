@@ -131,7 +131,7 @@ def recognize_episode_characters(
         settings.face_detector_model,
         settings.face_recognizer_model,
     )
-    voice_suggestions = []
+    voice_suggestions: list = []
     voice_embeddings: dict[str, VoiceEmbedding] = {}
     if audio_path is not None and audio_path.exists():
         voice_suggestions, voice_embeddings = recognize_voice_clusters(
