@@ -19,8 +19,11 @@ from app.models.entities import Export
 router = APIRouter(prefix="/api")
 
 @router.get("/exports", response_model=list[ExportRead])
-def list_exports(session: Session = Depends(get_session)):
-    return session.scalars(select(Export).order_by(Export.created_at.desc())).all()
+def list_exports(limit: int = 60, offset: int = 0, session: Session = Depends(get_session)):
+    limit = max(1, min(limit, 200))
+    return session.scalars(
+        select(Export).order_by(Export.created_at.desc()).limit(limit).offset(max(0, offset))
+    ).all()
 
 
 @router.get("/exports/{export_id}/file")

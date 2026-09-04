@@ -60,6 +60,24 @@ def test_jobs_endpoint_is_empty_without_jobs(api_client):
     }
 
 
+def test_jobs_endpoint_keeps_active_jobs_but_caps_finished_history(api_client):
+    session = api_client.db
+    episode_id = _episode(session)
+    for _ in range(60):
+        session.add(Job(episode_id=episode_id, kind=JobKind.ANALYZE_EPISODE.value, status=JobStatus.COMPLETED.value))
+    session.add(
+        Job(episode_id=episode_id, kind=JobKind.RENDER_CLIP.value, status=JobStatus.QUEUED.value, current_stage="render_clip")
+    )
+    session.commit()
+
+    items = api_client.get("/api/jobs").json()["items"]
+
+    statuses = [item["status"] for item in items]
+    assert "queued" in statuses  # the active job is always present
+    assert statuses.count("completed") == 40  # finished history is trimmed
+    assert len(items) == 41
+
+
 def test_delete_job_removes_it_and_its_stages(api_client):
     session = api_client.db
     episode_id = _episode(session)

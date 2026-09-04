@@ -14,6 +14,7 @@ from app.api.schemas import (
 from app.application.queue_control import get_queue_state, set_queue_paused
 from app.application.settings import effective_settings
 from app.bot.notifications import notify_job_finished
+from app.domain.enums import JobStatus
 from app.infrastructure.config import get_settings
 from app.models.entities import Job, JobStage
 from app.workers.queue import (
@@ -106,10 +107,32 @@ def delete_job_endpoint(job_id: int, session: Session = Depends(get_session)):
     return {"deleted": True}
 
 
+_ACTIVE_JOB_STATUSES = (
+    JobStatus.QUEUED.value,
+    JobStatus.RUNNING.value,
+    JobStatus.PAUSED.value,
+    JobStatus.CANCEL_REQUESTED.value,
+)
+_RECENT_TERMINAL_JOBS = 40
+
+
 def build_queue_data(session: Session) -> QueueDataRead:
-    """Shared queue+jobs payload used by GET /api/jobs and the SSE stream."""
+    """Shared queue+jobs payload for GET /api/jobs and the SSE stream.
+
+    Every active job plus the newest finished ones — an install that has run for
+    months must not ship its whole job history on every poll.
+    """
     snapshot = queue_snapshot(session)
-    items = session.scalars(select(Job).order_by(Job.updated_at.desc())).all()
+    active = session.scalars(
+        select(Job).where(Job.status.in_(_ACTIVE_JOB_STATUSES)).order_by(Job.updated_at.desc())
+    ).all()
+    terminal = session.scalars(
+        select(Job)
+        .where(Job.status.not_in(_ACTIVE_JOB_STATUSES))
+        .order_by(Job.updated_at.desc())
+        .limit(_RECENT_TERMINAL_JOBS)
+    ).all()
+    items = sorted([*active, *terminal], key=lambda job: job.updated_at, reverse=True)
     return QueueDataRead.model_validate(
         {
             "snapshot": {
