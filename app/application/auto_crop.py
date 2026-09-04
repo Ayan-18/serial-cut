@@ -74,8 +74,13 @@ def auto_crop_candidate(session: Session, candidate_id: int, settings: Settings)
     ]
     session.commit()
 
+    # Track on the source, not the low-res proxy: the proxy (~640px) loses small
+    # or distant faces. estimate_face_offset downscales each read frame to 720px.
+    source = Path(episode.file_path)
+    if not source.exists():
+        source = Path(episode.proxy_path or episode.file_path)
     result = estimate_face_offset(
-        Path(episode.proxy_path or episode.file_path),
+        source,
         candidate.start_time,
         candidate.end_time,
         speech_ranges=speech_ranges,

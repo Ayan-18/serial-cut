@@ -150,6 +150,23 @@ def test_render_clip_writes_metadata_and_uses_temp_output(tmp_path: Path):
     assert artifacts.output_path.exists()
     assert artifacts.metadata_path.read_text(encoding="utf-8")
     assert artifacts.subtitle_path is not None and artifacts.subtitle_path.exists()
+    assert artifacts.warnings == []
+
+
+def test_render_clip_reports_when_two_pass_loudnorm_falls_back(tmp_path: Path):
+    def runner(args: list[str], timeout: int) -> ProcessResult:
+        # loudnorm analysis pass fails (no JSON); the real render still succeeds.
+        if "null" in args and "-" in args:
+            return ProcessResult(args, 1, "", "loudnorm error")
+        Path(args[-1]).parent.mkdir(parents=True, exist_ok=True)
+        Path(args[-1]).write_bytes(b"x")
+        return ProcessResult(args, 0, "", "")
+
+    artifacts = render_clip(
+        "ffmpeg", tmp_path / "s.mp4", tmp_path / "o", "clip", 0, 35, "center-crop", None, {},
+        loudnorm_two_pass=True, runner=runner,
+    )
+    assert any("loudnorm" in w.lower() for w in artifacts.warnings), artifacts.warnings
 
 
 def test_export_slug_uses_template_and_sanitizes_windows_names(session, tmp_path: Path):
