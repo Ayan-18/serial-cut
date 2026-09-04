@@ -1,5 +1,65 @@
 # SerialCuts Worklog
 
+## 2026-09-04 - E2E simulation, face tracking and silent-failure hardening
+
+A full run of the real app (synthetic 3-episode season, stub ASR/LLM/TTS, real FFmpeg,
+YuNet/SFace weights installed) end to end: import -> analyze -> candidates ->
+keyframes/history/edit -> batch review -> render -> StoryArc -> narration -> publishing.json ->
+deletion. 50 automated API checks, all green after the fixes below.
+
+Live bugs found by the run:
+
+- `GET /api/jobs` returned HTTP 400 ("Unable to serialize unknown type: Job") - it returned raw
+  ORM rows with no `response_model`, so the whole queue panel was dead. Added `QueueDataRead` /
+  `QueueSnapshotRead` + an integration test.
+- `extract_audio` / `create_proxy` surfaced a bare `WinError 3` when FFmpeg exited 0 without
+  writing the file (long path / MAX_PATH). Now a clear message pointing at the cache path and the
+  Windows long-path setting.
+
+Face tracking — «трекинг по лицу не работает, просто центрирует»:
+
+- Root cause: OpenCV 5 dropped `cv2.CascadeClassifier` and the YuNet/SFace weights were not
+  installed, so `estimate_face_offset` found no faces, produced no trajectory, and `_crop_filter`
+  silently degraded auto-follow to a constant centre crop.
+- `LocalFaceRecognizer.can_detect`; `estimate_face_offset` returns
+  `face_detection_available=False` early. `POST /api/candidates/{id}/auto-crop` returns HTTP 422
+  with an install hint (route body moved to `app/application/auto_crop.py`).
+- Picking "По лицам" in the crop dropdown runs the tracker (`chooseCrop`) - the option always
+  means "tracked", never "centred".
+- `_apply_candidate_edits` keeps the auto-follow trajectory across pure offset/scale tweaks.
+- auto-crop tracks on the source, not the ~640px proxy (1 face detection vs 24 on the same clip).
+- Verified with real YuNet: a face crossing the frame yields a -0.53 -> +0.48 trajectory and the
+  rendered vertical clip pans to follow.
+
+Silent-degradation audit - every feature reviewed for the same class (gated on a missing
+model/dep, silently no-ops without telling the user):
+
+- `identify-characters` - the UI message distinguishes "no «Говорящий N» labels - run media
+  analysis first" and "no YuNet/SFace / check photos" from a plain "no matches".
+- Windows SAPI narration errors out when Windows has no ru-RU voice instead of reading Russian
+  text with an English voice.
+- Narration text carries a `source` flag (`llm` / `template` / `manual`, stored in
+  `plan_json.narration_source`); the arc card and the WAV action say "заглушка (Qwen недоступна)"
+  for templated text.
+- `select_cover_timestamp` uses YuNet when the model is present (was relying on the dead Haar
+  path); sharpness/brightness only without it.
+- Any pipeline stage result with a `.warnings` list is surfaced by `_run_stage` on the completed
+  `JobStage` note and `job.progress_message` - covers stage-2 speaker-clustering failures and
+  two-pass loudnorm dropping to single-pass. `EpisodeQualityReport.media_warnings` + the
+  candidate-panel quality strip.
+
+Also this session:
+
+- `LoopbackOnlyMiddleware` Host-header allowlist (`_has_allowed_host`) - closes the DNS-rebinding
+  gap where an attacker page resolving its domain to 127.0.0.1 would look same-origin.
+- Flat-config ESLint 10 (typescript-eslint, react-hooks, react-refresh) + a `typecheck` script,
+  both wired into the frontend CI job. 18 unused names pruned from the `AppView` destructure.
+
+Verification: `pytest` 178 passed; `ruff` + `mypy` (102 files) clean; `npm run lint` / `typecheck`
+/ `build` / `test` (10) clean; 50/50 end-to-end API checks green. YuNet/SFace weights were
+installed on this laptop to verify tracking - `data/` is gitignored.
+
+
 ## 2026-09-03 - Fix ctranslate2 pkg_resources crash, pin torch
 
 - `ctranslate2 4.6.0` → `4.6.3`. On Windows `ctranslate2/__init__.py` located its DLL folder via
@@ -691,18 +751,26 @@ Implemented:
 - Stage 5 Telegram: long polling, whitelist, idempotent approve/reject/export callbacks.
 - Product features: auto mode, persisted settings UI, season enqueue, YouTube Shorts / Instagram Reels render presets, NVENC detection, export with or without subtitles, optional two-pass loudnorm.
 - Operability: `/api/health` (version, boot_id, queue), `/api/version`, `/api/logs` tail + in-UI log
-  viewer, `/api/model-catalog` + in-app face-model install, candidate edit history/undo, batch
-  candidate review/render, keyframe-thumbnail crop strip, generated `docs/API.md`, path-traversal
-  guard on all file endpoints, `scripts/bootstrap.ps1`.
+  viewer, `/api/model-catalog` + in-app face/Silero model install, candidate edit history/undo,
+  batch candidate review/render, keyframe-thumbnail crop strip, generated `docs/API.md`,
+  path-traversal guard + Host-header allowlist on the API, `scripts/bootstrap.ps1`, season/episode/
+  job deletion.
+- Neural StoryArc narration (Silero v4_ru on CPU, `.[tts]` extra) with per-character voice or auto
+  by gender; Windows SAPI and stub adapters remain.
+- Face tracking (auto-follow crop) needs local YuNet/SFace weights; without them auto-crop returns
+  a clear 422 instead of silently centering. Degraded features (no Qwen, no ru-RU SAPI voice,
+  loudnorm fallback, speaker-clustering failure) now surface a visible warning.
 
 ## Verification Snapshot
 
-Last known checks from this project state (2026-09-02):
+Last known checks from this project state (2026-09-04):
 
-- `.\.venv\Scripts\python.exe -m pytest`: 144 passed, 0 skipped (with FFmpeg on PATH).
-- `python -m ruff check .` and `python -m mypy app`: clean.
-- `npm run build` and `npm run test`: passed (10 frontend tests).
-- `alembic upgrade head` then `downgrade base` then `upgrade head`: clean.
+- `.\.venv\Scripts\python.exe -m pytest`: 178 passed, 0 skipped (with FFmpeg on PATH; needs
+  `numpy`, `opencv-python-headless`, `scenedetect-headless` from the main dependency set).
+- `python -m ruff check .` and `python -m mypy app` (102 files): clean.
+- `npm run lint` / `npm run typecheck` / `npm run build` / `npm run test` (10): clean.
+- `alembic upgrade head` then `downgrade base` then `upgrade head`: clean (schema at `0015`).
+- 50/50 end-to-end API checks green (import → render → StoryArc → deletion, real FFmpeg + YuNet).
 - `.\scripts\check_system.ps1` / `.\scripts\bootstrap.ps1`: work; target machines need Python 3.11+
   and FFmpeg/ffprobe in `PATH`.
 
@@ -718,113 +786,36 @@ Last known checks from this project state (2026-09-02):
 
 ## Near-Term Next Steps
 
-Done in the 2026-09-02 batch: model installation assistant, keyframe-thumbnail crop UX, import
-progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo, batch
-candidate operations, in-UI log viewer, generated API docs, bootstrap script.
-
-## 2026-09-02 - Fix the "semi-visible" degradation cases
-
-- Narration text: `NarrationScript.source` (`llm` / `template` / `manual`),
-  stored in `plan_json.narration_source`. The arc card and the "WAV" action now
-  say "заглушка (Qwen недоступна)" when the text is templated.
-- Cover frame: `select_cover_timestamp` uses YuNet when the model is present
-  (it was relying on the dead OpenCV-5 Haar path); falls back to
-  sharpness/brightness only when there is no detector.
-- Any pipeline stage result with a `.warnings` list is now surfaced by
-  `_run_stage` on the completed `JobStage` (as a note, status stays COMPLETED)
-  and in `job.progress_message`. This covers stage-2 speaker-clustering
-  failures and the two-pass-loudnorm-fell-back-to-single-pass case.
-- `EpisodeQualityReport.media_warnings` reads `probe_json.serialcuts_warnings`
-  and the candidate panel's quality strip shows them.
-
-## 2026-09-02 - Audit of silent-degradation features (like face tracking)
-
-Reviewed every feature for the same failure class as face tracking (gated on a
-missing model/dep, silently degrades to a no-op without telling the user).
-Fixed the closest siblings:
-
-- `identify-characters` («Лица + губы + голоса») now distinguishes "no
-  «Говорящий N» labels — run media analysis first" and "no YuNet/SFace / check
-  photos" from a plain "no matches" in the UI message.
-- Windows SAPI narration exits with an error when Windows has no ru-RU voice
-  instead of silently reading Russian text with an English voice.
-
-Still known (reported, not yet changed): narration text falls back to generic
-template lines when Qwen is unavailable; cover-frame selection is not
-face-aware on OpenCV 5 (no crash, just sharpness/brightness); stage-2 speaker
-clustering failures surface only as a buried episode warning; loudnorm
-two-pass silently drops to single-pass on a bad analysis pass.
-
-## 2026-09-02 - Face tracking: fix silent "just centers"
-
-Root cause of "трекинг по лицу не работает, просто центрирует": with OpenCV 5
-(no `CascadeClassifier`) and no YuNet/SFace weights installed, the recognizer
-finds zero faces, `estimate_face_offset` returns no keyframes, and
-`_crop_filter` silently degrades auto-follow to a constant centre crop.
-Verified the rest of the chain is sound: YuNet/SFace load and detect once the
-weights exist, and a real ffmpeg render with a synthetic trajectory pans
-correctly (two sampled frames differ).
-
-- `LocalFaceRecognizer.can_detect`; `estimate_face_offset` returns
-  `face_detection_available=False` early when nothing can detect.
-- `auto-crop` now returns HTTP 422 with an install hint instead of pretending
-  it worked; extracted the route body into `app/application/auto_crop.py`.
-- Selecting "По лицам" in the crop dropdown now runs the tracker
-  (`chooseCrop`), so the option always means "tracked", not "centred".
-- `_apply_candidate_edits` keeps the auto-follow trajectory across pure
-  offset/scale tweaks (it is time-indexed to the clip, only boundary changes
-  or leaving auto-follow invalidate it).
-- The 39 MB YuNet/SFace weights install fine via the in-app catalog button.
-
-## 2026-09-02 - End-to-end simulation, two live bugs fixed
-
-Ran the real app against a synthetic 3-episode season (stub ASR/LLM/TTS, real
-FFmpeg) through import -> analyze -> candidates -> edit/keyframes/history ->
-approve -> render -> StoryArc -> narration -> publishing.json. The clip and
-StoryArc both rendered as real 1080x1920 H.264/AAC MP4s and served through the
-path guard. Two real bugs surfaced and were fixed:
-
-- `GET /api/jobs` returned HTTP 400 ("Unable to serialize unknown type: Job")
-  because it returned raw ORM objects with no `response_model` — the entire
-  queue panel was dead. Added `QueueDataRead`/`QueueSnapshotRead` + an
-  integration test.
-- `extract_audio` / `create_proxy` surfaced a bare `WinError 3` when FFmpeg
-  exited 0 without writing the output file (long path / MAX_PATH). They now
-  raise a clear message pointing at the cache path / long-path setting; tests
-  added.
-
-## 2026-09-02 - Follow-ups (loopback Host allowlist, frontend lint)
-
-- `LoopbackOnlyMiddleware` now rejects requests whose `Host` header is not a local
-  address (any port), closing the DNS-rebinding gap. `_has_allowed_host` + tests.
-- Frontend gets flat-config ESLint 10 (typescript-eslint, react-hooks, react-refresh)
-  and a `typecheck` script; both added to CI. Pruned 18 unused names from the
-  `AppView` controller destructure and 3 dead imports found by the new lint.
-  The React-19 `set-state-in-effect` rule is off (deliberate existing patterns);
-  two `exhaustive-deps` warnings remain, non-blocking.
+Done in the 2026-09-02..04 work: model installation assistant, keyframe-thumbnail crop UX,
+import progress + Windows diagnostics, end-to-end smoke fixture, candidate edit history/undo,
+batch candidate operations, in-UI log viewer, generated API docs, bootstrap script, Silero
+neural narration, season/episode/job deletion, loopback Host allowlist, frontend ESLint,
+face-tracking + silent-degradation hardening.
 
 Still open:
 
-- Install Silero on the main computer: `pip install -e ".[tts]"` + `scripts/install_tts_model.ps1`;
-  pin the resolved `torch` version in `pyproject.toml`.
-- Optional: number-to-words normalization for Russian digits before TTS.
-- Recreate the local `.venv` on Python 3.11 and re-pin dev extras that are only in `dependencies`.
+- Number-to-words normalization for Russian digits before TTS (Silero reads "2024" poorly).
+- Recreate the local `.venv` on Python 3.11 and re-pin dev extras that live only in `dependencies`.
 - Split `useSerialCutsController.ts` (750+ lines) into per-domain hooks.
-- Tighten the ruff/mypy ignore lists now that the router split has settled.
+- Tighten the ruff/mypy ignore lists (`from _shared import *`, 8 disabled mypy codes).
 - Persistent background queue loop option, while keeping `run-next` for testability.
 - Progress streaming (SSE) for long model downloads and season imports.
+- VLM keyframe analysis for top candidates (declared in ARCHITECTURE, not built).
 
 ## Useful Commands
 
 ```powershell
 git pull --ff-only
-Copy-Item .env.example .env
-.\scripts\setup.ps1
+.\scripts\bootstrap.ps1            # checks Python 3.11 / FFmpeg / Node, then venv + install + migrate + frontend
+.\.venv\Scripts\python.exe -m pip install -e ".[tts]"          # optional: Silero narration
+.\scripts\install_tts_model.ps1                                # optional: Silero v4_ru model
+.\scripts\install_identity_models.ps1                          # YuNet/SFace for face tracking
 .\scripts\check_system.ps1
 .\scripts\run.ps1
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe scripts\dump_openapi.py             # after changing any route
 Push-Location frontend
-npm run build
+npm run lint; npm run typecheck; npm run build; npm run test
 Pop-Location
 ```
 
