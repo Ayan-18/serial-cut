@@ -4,6 +4,7 @@ from threading import Event, Thread
 import logging
 
 from app.application.settings import effective_settings
+from app.bot.notifications import notify_job_finished
 from app.infrastructure.config import get_settings
 from app.infrastructure.database import SessionLocal
 from app.workers.queue import recover_interrupted_jobs
@@ -54,6 +55,9 @@ class BackgroundQueue:
                             result.message,
                         )
                         continue
+                    if result.ran and result.status in {"completed", "failed"}:
+                        notify_job_finished(session, settings, result.job_id)
+                        session.commit()
                 except Exception:
                     session.rollback()
                     logger.exception("Background queue iteration failed")

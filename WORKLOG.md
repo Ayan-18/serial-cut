@@ -1,5 +1,22 @@
 # SerialCuts Worklog
 
+## 2026-09-04 - Telegram bot becomes a real remote; drop dead Haar code
+
+- `bot/callbacks.py` `render`/`export` no longer runs FFmpeg inside the bot's async loop —
+  it calls `enqueue_candidate_render` so the app worker does the pass. Still idempotent via
+  the `telegram_callback:` marker in `app_settings`.
+- `bot/notifications.py` (`notify_job_finished`) posts straight to the Telegram HTTP API
+  from the app process when a job reaches `completed`/`failed`: analyze → candidate count +
+  `/candidates <id>`, render → the MP4 (or a path if > 49 MB), failure → the error. A
+  `telegram_notified:<job_id>` marker blocks double sends. Wired into `workers/background.py`
+  and the `/api/queue/run-next` route.
+- `bot/telegram.py`: new `/episodes` and `/candidates <id>` navigation, `/preview` now sends
+  the keyframe thumbnail, the export button is relabelled "Рендер".
+- Removed the Haar/DCT fallback from `media/character_recognition.py` (OpenCV 5 has no
+  `CascadeClassifier`, so it was unreachable) and the `neural` flag it fed through
+  `best_character_match`; fixed the model-diagnostics strings that still promised it.
+- `tests/test_telegram_notifications.py`, extra cases in `tests/test_telegram_callbacks.py`.
+
 ## 2026-09-04 - Live queue updates over SSE
 
 - `GET /api/events` streams `text/event-stream`: a fresh short-lived session every ~1.5 s builds

@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.application.review import review_candidate
-from app.application.stage4 import render_candidate
 from app.infrastructure.config import Settings
 from app.models.entities import AppSetting
+from app.workers.queue import enqueue_candidate_render
 
 
 @dataclass(frozen=True)
@@ -37,9 +37,13 @@ def handle_candidate_callback(
     elif action == "reject":
         reviewed = review_candidate(session, candidate_id, "reject")
         result = CallbackResult(key, action, reviewed.status, "Кандидат отклонён")
-    elif action == "export":
-        rendered = render_candidate(session, candidate_id, settings)
-        result = CallbackResult(key, action, "rendered", f"Экспорт готов: {rendered.output_path}")
+    elif action in {"render", "export"}:
+        # Never render inside the bot's event loop — queue it and let the app
+        # worker do the FFmpeg pass, then push the file back over Telegram.
+        job = enqueue_candidate_render(session, candidate_id, {"include_subtitles": True})
+        result = CallbackResult(
+            key, "render", "queued", f"Рендер в очереди, задача №{job.id}. Пришлю файл, когда будет готово."
+        )
     else:
         raise ValueError(f"Unknown Telegram callback action: {action}")
 

@@ -13,6 +13,7 @@ from app.api.schemas import (
 )
 from app.application.queue_control import get_queue_state, set_queue_paused
 from app.application.settings import effective_settings
+from app.bot.notifications import notify_job_finished
 from app.infrastructure.config import get_settings
 from app.models.entities import Job, JobStage
 from app.workers.queue import (
@@ -39,8 +40,12 @@ def recover_jobs(session: Session = Depends(get_session)) -> dict[str, int]:
 
 @router.post("/queue/run-next", response_model=QueueRunResponse)
 def run_queue_next(session: Session = Depends(get_session)):
-    result = run_next_job(session, effective_settings(session, get_settings()))
+    settings = effective_settings(session, get_settings())
+    result = run_next_job(session, settings)
     session.commit()
+    if result.ran and result.status in {"completed", "failed"}:
+        notify_job_finished(session, settings, result.job_id)
+        session.commit()
     return result
 
 
