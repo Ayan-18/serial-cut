@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal, cast
 
 from app.infrastructure.atomic import replace_atomically, temp_sibling, write_text_atomically
 from app.infrastructure.processes import ProcessResult, run_process
@@ -331,8 +331,8 @@ def select_cover_timestamp(
                     detector.setInputSize((frame.shape[1], frame.shape[0]))
                     _, found = detector.detect(frame)
                     if found is not None:
-                        for row in found:  # cv2 return is untyped
-                            face_areas.append(float(row[2]) * float(row[3]))  # type: ignore[index]
+                        for row in cast("list[Any]", found):  # cv2 returns an untyped ndarray
+                            face_areas.append(float(row[2]) * float(row[3]))
                 face_bonus = (max(face_areas, default=0.0) / max(1, gray.size)) * 5000
                 edge_penalty = min(index, 6 - index) * 2
                 score = sharpness + exposure * 35 + face_bonus + edge_penalty
