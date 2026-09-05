@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from sqlalchemy import select
@@ -125,14 +126,18 @@ def test_smooth_crop_keyframes_rails_a_teleport_but_passes_a_normal_swing():
 
 
 def test_smooth_crop_keyframes_caps_the_list_for_ffmpeg():
-    # A pathological trajectory must not produce a crop x-expression long enough
-    # to break FFmpeg's parser.
-    dense = [{"time": i * 0.05, "offset": -0.5 if i % 2 else 0.5} for i in range(800)]
+    # A very long trajectory must not produce a crop x-expression long enough to
+    # break FFmpeg's parser, and the cap must keep the shape (a slow sine here),
+    # not just decimate.
+    dense = [{"time": i * 0.05, "offset": 0.6 * math.sin(i * 0.05)} for i in range(1500)]
 
     capped = smooth_crop_keyframes(dense)
 
-    assert len(capped) <= 100
+    assert len(capped) <= 57  # FFmpeg-safe ceiling
     assert [p["time"] for p in capped] == sorted(p["time"] for p in capped)
+    # The kept points still trace the sine: peaks and troughs are represented.
+    assert max(p["offset"] for p in capped) > 0.5
+    assert min(p["offset"] for p in capped) < -0.5
 
 
 def test_render_clip_writes_metadata_and_uses_temp_output(tmp_path: Path):

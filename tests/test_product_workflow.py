@@ -311,8 +311,9 @@ def test_face_tracking_keyframes_create_a_time_based_crop_expression(tmp_path: P
     )
 
     video_filter = args[args.index("-vf") + 1]
-    assert "if(lt(t,5.000)" in video_filter
-    assert "(t-0.000)/5.000" in video_filter
+    # Flat sum of clamped ramps (no nested if() for FFmpeg's parser to choke on).
+    assert "clip((t-0.000)/5.000,0,1)" in video_filter
+    assert "(0.50000)*clip" in video_filter  # the -0.5 -> 0.5 offset delta as a ratio step
 
 
 def test_processing_guard_rejects_a_second_heavy_operation():

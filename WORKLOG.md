@@ -1,5 +1,26 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Auto-follow: very smooth, glued to the face
+
+Still read as jerky. Three fixes:
+
+- **Preview was the main culprit.** `FramedPreview` drove the crop off the `timeupdate`
+  event, which browsers fire only ~4x/s — so the follow stepped at 4 Hz no matter how
+  smooth the keyframes were. Now a `requestAnimationFrame` loop reads `video.currentTime`
+  and sets `objectPosition` on the DOM node at 60 fps.
+- **Trajectory smoothing.** Sampling raised to ~5 detections/s so the raw face track is a
+  curve. `_build_trajectory` pass 3 now resamples onto a 0.1 s grid, applies a centred
+  (zero-lag) moving average `_PRESMOOTH_SECONDS` wide to wipe detector jitter, then a
+  gentle critically-damped spring (`_FOLLOW_FREQ_HZ` 0.62) for the operator settle. No
+  dead zone. `_center_offset` aspect-aware, `_CENTERING_FRACTION` 0.7.
+- **Render expression.** `_tracking_ratio_expression` is now a flat sum of clamped ramps
+  (`r0 + Σ Δ·clip((t-tL)/dt,0,1)`) instead of nested `if()` — no recursion for FFmpeg's
+  parser. `_cap_keyframes` is priority-RDP (keep the biggest bends), `_MAX_RENDER_KEYFRAMES`
+  55, `_RDP_EPSILON` 0.012 — a smooth curve collapses to its real turns.
+
+OFFSIDE candidate 13: mean pan 0.29/s, peak 1.1/s, 55-keyframe / 2 KB expression, real
+render rc 0. `pytest` 225; ruff + mypy clean; frontend tsc + 12 tests.
+
 ## 2026-09-05 - Auto-follow: smooth spring, no cuts
 
 The locked-shot / hard-cut auto-follow read as jerky. Replaced it with a continuous

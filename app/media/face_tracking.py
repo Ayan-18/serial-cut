@@ -55,17 +55,22 @@ _LIP_REL_MARGIN = 0.06
 # Fraction of a run's samples that must resolve to a real talking subject for the
 # shot to frame that face; below this the shot is just centred.
 _CONFIDENT_RUN_FRACTION = 0.34
-# Smooth-follow spring: a critically-damped move toward the face, ~0.7 s to
-# settle after a speaker change — a gentle reframe, no overshoot, no whip.
-_FOLLOW_FREQ_HZ = 0.8
-# Frame the face at ~0.8 of the way to dead-centre: clearly on the speaker, in
-# the inner third, but the pans stay gentle rather than slamming to the edge.
-_CENTERING_FRACTION = 0.8
-# Face jitter below this (in crop-offset units) never moves the camera.
-_DEAD_ZONE = 0.03
-# Emit a keyframe only once the smoothed crop has moved this much, or after a gap.
-_EMIT_DELTA = 0.006
-_EMIT_MAX_GAP = 0.7
+# Frame the face this far toward dead-centre of the window (1.0 = perfectly
+# centred). Under 1 keeps the pans gentle and less sensitive to detector wobble.
+_CENTERING_FRACTION = 0.7
+# Zero-lag pre-smoothing of the raw face track: a centred moving average this
+# wide (seconds) wipes out detector jitter before anything else touches it.
+_PRESMOOTH_SECONDS = 0.9
+# Then a critically-damped spring adds the operator feel: a calm ~0.9 s settle
+# on a speaker change, no overshoot, and it glues to a steady face.
+_FOLLOW_FREQ_HZ = 0.62
+# Trajectory is resampled onto this grid so the render's piecewise-linear
+# interpolation between keyframes has no visible corners.
+_GRID_SECONDS = 0.10
+# Emit a keyframe once the smoothed crop has moved this much, or after a gap.
+# The render pass thins further (RDP); this just keeps the stored list sane.
+_EMIT_DELTA = 0.02
+_EMIT_MAX_GAP = 2.0
 
 
 def estimate_face_offset(
@@ -234,7 +239,8 @@ def _sample_times(
     start, so a cut to the next speaker is caught within ~0.1 s instead of a
     frame or more late."""
     duration = max(0.1, end_time - start_time)
-    base_n = samples or min(220, max(32, round(duration * 2.6)))
+    # ~5 detections/s: dense enough that the raw face track is a curve, not steps.
+    base_n = samples or min(360, max(40, round(duration * 5.0)))
     times = {start_time + duration * (index + 0.5) / base_n for index in range(base_n)}
     for item in ranges:
         segment_start = max(start_time, item.start_time)
@@ -341,36 +347,32 @@ def _build_trajectory(
             kept.append(run)
 
     # Pass 3 — smooth follow. Per-sample target (the tracked face centre for a
-    # confident run, the frame centre otherwise) fed through a critically-damped
-    # spring: the crop glides after the subject, holds still when they do, and
-    # takes a calm ~0.4 s swing when the speaker changes. No jitter, no cuts.
-    targets: list[tuple[float, float]] = []
+    # confident run, the frame centre otherwise), resampled onto a fine even grid
+    # and pushed through a One-Euro filter: heavy smoothing while the face is
+    # still (no detector jitter reaches the crop), light while it moves (the crop
+    # stays glued). No dead zone, no cuts — one continuous fluid trajectory.
+    raw: list[tuple[float, float]] = []
     for start, end in kept:
         run = points[start : end + 1]
         talking = sum(1 for p in run if p.kind in ("identified", "active_speaker", "lip"))
         confident = talking >= max(1, round(len(run) * _CONFIDENT_RUN_FRACTION))
         for point in run:
             centre = point.target if confident else 0.5
-            targets.append((point.rel_time, _center_offset(centre, source_aspect)))
+            raw.append((point.rel_time, _center_offset(centre, source_aspect)))
             _tally(stats, point.kind)
     stats["avg_lip"] = sum(p.lip for p in points) / len(points) if points else 0.0
-    if not targets:
+    if not raw:
         return [], stats
 
-    goals = [t[1] for t in targets]
-    goals = [median(goals[max(0, i - 1) : i + 2]) for i in range(len(goals))]  # de-spike
+    grid = _resample_even(raw, _GRID_SECONDS)
+    window = max(1, round(_PRESMOOTH_SECONDS / _GRID_SECONDS) | 1)  # odd
+    values = _moving_average([v for _, v in grid], window)
+    smoothed = _critically_damped(values, _GRID_SECONDS, _FOLLOW_FREQ_HZ)
 
     keyframes: list[dict[str, float]] = []
-    omega = 2.0 * math.pi * _FOLLOW_FREQ_HZ
-    x, v = goals[0], 0.0
-    prev_time = targets[0][0]
     last_x: float | None = None
     last_t: float | None = None
-    for (rel_time, _offset), goal_raw in zip(targets, goals):
-        dt = min(0.5, max(0.01, rel_time - prev_time))
-        prev_time = rel_time
-        goal = x if abs(goal_raw - x) < _DEAD_ZONE else goal_raw
-        x, v = _spring_step(x, v, goal, omega, dt)
+    for (rel_time, _), x in zip(grid, smoothed):
         x = max(-1.0, min(1.0, x))
         if (
             last_x is None
@@ -380,17 +382,56 @@ def _build_trajectory(
         ):
             keyframes.append(_kf_offset(rel_time, x, 0.0))
             last_x, last_t = x, rel_time
-    if last_t is not None and targets[-1][0] - last_t > 0.01:
-        keyframes.append(_kf_offset(targets[-1][0], x, 0.0))
+    if last_t is not None and grid[-1][0] - last_t > 0.01:
+        keyframes.append(_kf_offset(grid[-1][0], max(-1.0, min(1.0, smoothed[-1])), 0.0))
     return _dedupe_keyframes(keyframes), stats
 
 
-def _spring_step(x: float, v: float, goal: float, omega: float, dt: float) -> tuple[float, float]:
-    """One step of a critically-damped spring x'' + 2ω x' + ω²(x - goal) = 0."""
-    y0 = x - goal
-    c = v + omega * y0
+def _resample_even(series: list[tuple[float, float]], step: float) -> list[tuple[float, float]]:
+    """Linear-interpolate an unevenly sampled (time, value) series onto a fixed grid."""
+    t0, t1 = series[0][0], series[-1][0]
+    if t1 - t0 < step or len(series) < 2:
+        return list(series)
+    out: list[tuple[float, float]] = []
+    j = 0
+    t = t0
+    while t <= t1 + 1e-6:
+        while j + 1 < len(series) and series[j + 1][0] < t:
+            j += 1
+        (ta, va), (tb, vb) = series[j], series[min(j + 1, len(series) - 1)]
+        r = 0.0 if tb == ta else max(0.0, min(1.0, (t - ta) / (tb - ta)))
+        out.append((round(t, 3), va + (vb - va) * r))
+        t += step
+    return out
+
+
+def _moving_average(values: list[float], window: int) -> list[float]:
+    """Centred (zero-lag) moving average; edges shrink the window."""
+    if window <= 1 or len(values) <= 2:
+        return list(values)
+    half = window // 2
+    out: list[float] = []
+    for i in range(len(values)):
+        lo = max(0, i - half)
+        hi = min(len(values), i + half + 1)
+        out.append(sum(values[lo:hi]) / (hi - lo))
+    return out
+
+
+def _critically_damped(values: list[float], dt: float, freq_hz: float) -> list[float]:
+    """Run a no-overshoot spring over a value grid: adds the operator settle and
+    the swing on a speaker change without ever passing the target."""
+    omega = 2.0 * math.pi * freq_hz
     decay = math.exp(-omega * dt)
-    return goal + (y0 + c * dt) * decay, (v - omega * c * dt) * decay
+    x, v = values[0], 0.0
+    out = [x]
+    for goal in values[1:]:
+        y0 = x - goal
+        c = v + omega * y0
+        x = goal + (y0 + c * dt) * decay
+        v = (v - omega * c * dt) * decay
+        out.append(x)
+    return out
 
 
 def _center_offset(centre: float, source_aspect: float = 16 / 9) -> float:

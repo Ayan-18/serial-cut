@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import json
 import logging
 from dataclasses import dataclass, field
@@ -416,22 +417,58 @@ def smooth_crop_keyframes(keyframes: list[dict], max_step_per_second: float = _M
     return _cap_keyframes(points)
 
 
-# FFmpeg builds one nested if() per interval into the crop x-expression; ~100
-# points renders fine (~5 KB expression), 200 breaks the parser.
-_MAX_RENDER_KEYFRAMES = 100
+# FFmpeg's expression evaluator falls over around a few KB regardless of shape;
+# a smooth (pre-filtered) trajectory needs far fewer points than this anyway.
+_MAX_RENDER_KEYFRAMES = 55
 
 
 def _cap_keyframes(points: list[dict]) -> list[dict]:
-    if len(points) <= _MAX_RENDER_KEYFRAMES:
+    """Ramer-Douglas-Peucker: keep only points that bend the trajectory by more
+    than `_RDP_EPSILON`, so a smooth curve collapses to its real turns and the
+    FFmpeg crop expression stays short. A hard ceiling caps pathological input."""
+    if len(points) < 3:
         return points
     last = len(points) - 1
-    inner = list(range(1, last))
-    stride = max(1, len(inner) // (_MAX_RENDER_KEYFRAMES - 2) + 1)
-    keep = sorted({0, last, *inner[::stride]})
-    return [points[i] for i in keep]
+    keep = {0, last}
+
+    def worst(lo: int, hi: int) -> tuple[float, int]:
+        t0, o0 = points[lo]["time"], points[lo]["offset"]
+        span = (points[hi]["time"] - t0) or 1e-6
+        slope = (points[hi]["offset"] - o0) / span
+        wi, wd = -1, -1.0
+        for i in range(lo + 1, hi):
+            d = abs(points[i]["offset"] - (o0 + slope * (points[i]["time"] - t0)))
+            if d > wd:
+                wi, wd = i, d
+        return wd, wi
+
+    heap: list[tuple[float, int, int, int]] = []
+    d, i = worst(0, last)
+    if i >= 0:
+        heapq.heappush(heap, (-d, i, 0, last))
+    while heap:
+        neg_d, idx, lo, hi = heapq.heappop(heap)
+        if -neg_d < _RDP_EPSILON or len(keep) >= _MAX_RENDER_KEYFRAMES:
+            break
+        keep.add(idx)
+        for a, b in ((lo, idx), (idx, hi)):
+            if b - a >= 2:
+                sub_d, sub_i = worst(a, b)
+                if sub_i >= 0:
+                    heapq.heappush(heap, (-sub_d, sub_i, a, b))
+    return [points[i] for i in sorted(keep)]
+
+
+# A kept keyframe must sit at least this far off the line through its neighbours;
+# below it the segment is effectively straight and needs no inner point. The
+# tracker's trajectory is already smooth, so this thins it to real turns.
+_RDP_EPSILON = 0.012
 
 
 def _tracking_ratio_expression(keyframes: list[dict]) -> str:
+    """A flat sum of clamped ramps, not nested if()s: piecewise-linear
+    interpolation of the keyframes whose expression length grows linearly and,
+    crucially, has no recursion depth for FFmpeg's parser to choke on."""
     points: list[tuple[float, float]] = []
     for item in keyframes:
         try:
@@ -443,15 +480,16 @@ def _tracking_ratio_expression(keyframes: list[dict]) -> str:
     points.sort(key=lambda item: item[0])
     if not points:
         return "0.5000"
-    expression = f"{points[-1][1]:.5f}"
-    for (left_time, left_ratio), (right_time, right_ratio) in reversed(list(zip(points, points[1:]))):
+    if len(points) == 1:
+        return f"{points[0][1]:.5f}"
+    terms = [f"{points[0][1]:.5f}"]
+    for (left_time, left_ratio), (right_time, right_ratio) in zip(points, points[1:]):
         duration = max(0.001, right_time - left_time)
-        interpolation = (
-            f"{left_ratio:.5f}+({right_ratio - left_ratio:.5f})*"
-            f"(t-{left_time:.3f})/{duration:.3f}"
-        )
-        expression = f"if(lt(t,{right_time:.3f}),{interpolation},{expression})"
-    return expression
+        delta = right_ratio - left_ratio
+        # clip((t - left)/duration, 0, 1): 0 before the segment, ramps to 1
+        # across it, 1 after. Summed, these give the interpolated ratio.
+        terms.append(f"({delta:.5f})*clip((t-{left_time:.3f})/{duration:.3f},0,1)")
+    return "+".join(terms)
 
 
 def _escape_filter_path(path: Path) -> str:
