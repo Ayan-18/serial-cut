@@ -140,8 +140,11 @@ def estimate_face_offset(
             rel_time = round(timestamp - start_time, 3)
             active = _active_speech(timestamp, ranges)
             audio_energy = _audio_activity(audio, timestamp)
+            motion_center = _motion_center(current, previous)
             if not current_faces:
-                samples_data.append(_Sample(rel_time, [], [], [], {}, active, audio_energy, None))
+                samples_data.append(
+                    _Sample(rel_time, [], [], [], {}, active, audio_energy, None, motion_center)
+                )
                 continue
 
             centers = [face.center_x / max(1, width) for face in current_faces]
@@ -176,6 +179,7 @@ def estimate_face_offset(
                     active=active,
                     audio_energy=audio_energy,
                     identified_center=identified_center,
+                    motion_center=motion_center,
                 )
             )
     finally:
@@ -210,6 +214,7 @@ class _Sample:
     active: SpeechRange | None
     audio_energy: float
     identified_center: float | None
+    motion_center: float | None = None  # x of the busiest region when faces fail
 
 
 class _CentroidTracker:
@@ -319,7 +324,10 @@ def _build_trajectory(
     source_aspect: float = 16 / 9,
     cut_times: list[float] | None = None,
 ) -> tuple[list[dict[str, float]], dict[str, float]]:
-    stats = {k: 0.0 for k in ("active_speaker", "identified", "lip", "held", "largest", "avg_lip")}
+    stats = {
+        k: 0.0
+        for k in ("active_speaker", "identified", "lip", "held", "largest", "motion", "avg_lip")
+    }
 
     # Pass 1 — per-sample intent.
     points: list[_Point] = []
@@ -364,9 +372,10 @@ def _build_trajectory(
     # still (no detector jitter reaches the crop), light while it moves (the crop
     # stays glued). No dead zone, no cuts — one continuous fluid trajectory.
     raw: list[tuple[float, float]] = []
+    _tracked = ("identified", "active_speaker", "lip", "motion")
     for start, end in kept:
         run = points[start : end + 1]
-        talking = sum(1 for p in run if p.kind in ("identified", "active_speaker", "lip"))
+        talking = sum(1 for p in run if p.kind in _tracked)
         confident = talking >= max(1, round(len(run) * _CONFIDENT_RUN_FRACTION))
         for point in run:
             centre = point.target if confident else 0.5
@@ -532,6 +541,10 @@ def _resolve_target(
     owner: str | None,
 ) -> tuple[float | None, str | None, str]:
     if not sample.centers:
+        # No faces — follow the busiest part of the frame (the ball / the play
+        # in sports footage) if there's clear motion, otherwise hold/centre.
+        if sample.motion_center is not None:
+            return sample.motion_center, "motion", "motion"
         return None, None, "held"
 
     # 1. Confirmed character (photo/voiceprint match) — strongest signal.
@@ -598,6 +611,7 @@ def _tally(stats: dict[str, float], kind: str) -> None:
         "lip": "lip",
         "held": "held",
         "largest": "largest",
+        "motion": "motion",
     }.get(kind, "held")] += 1
 
 
@@ -607,6 +621,37 @@ def _kf_offset(rel_time: float, offset: float, lip: float) -> dict[str, float]:
         "offset": round(max(-1.0, min(1.0, offset)), 3),
         "lip_activity": round(max(0.0, lip), 3),
     }
+
+
+# Mean inter-frame abs-diff (0..255) below this is a still frame, above it is
+# probably a shot change — neither gives a usable "busiest region".
+_MOTION_MIN_MEAN = 3.5
+_MOTION_MAX_MEAN = 55.0
+
+
+def _motion_center(current, previous) -> float | None:
+    """x (0..1) of the busiest column between two frames — the ball / the play
+    when no face is on screen. None if the frame is still or just cut."""
+    if current is None or previous is None:
+        return None
+    try:
+        import cv2
+
+        cur = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY) if current.ndim == 3 else current
+        prev = cv2.cvtColor(previous, cv2.COLOR_BGR2GRAY) if previous.ndim == 3 else previous
+        if cur.shape != prev.shape:
+            return None
+        diff = cv2.absdiff(cur, prev).astype(np.float32)
+    except Exception:
+        return None
+    if not _MOTION_MIN_MEAN <= float(diff.mean()) <= _MOTION_MAX_MEAN:
+        return None
+    col = diff.sum(axis=0)
+    weight = float(col.sum())
+    if weight <= 0:
+        return None
+    centre = float((col * np.arange(col.size)).sum() / weight) / max(1, col.size - 1)
+    return max(0.0, min(1.0, centre))
 
 
 def _load_audio(audio_path: Path | None):
