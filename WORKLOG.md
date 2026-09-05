@@ -1,5 +1,16 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Transcription tuning (WhisperX evaluated, not adopted)
+
+WhisperX would add wav2vec2 forced alignment + pyannote diarization, but pyannote's models are
+HuggingFace-gated (account + token + licence) and it pulls transformers / torchaudio / pandas —
+a regression for a fully-local, no-accounts tool that already has word timestamps and its own
+`speakers.py` diarization. Took the dependency-free part instead: `FasterWhisperTranscriber`
+now passes `condition_on_previous_text=False` (dubbed series with music beds and crowd noise
+send the default decoder into hallucination loops) and tighter `vad_parameters`
+(`min_silence_duration_ms=500`, `speech_pad_ms=200`) so segment edges sit on real pauses.
+Re-run stage 2 to pick it up. `pytest` 233.
+
 ## 2026-09-05 - Split-screen crop mode
 
 Borrowed from OpenShorts' SPLIT layout. New `crop_mode = "split"`: `_split_filter` stacks the

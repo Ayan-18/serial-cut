@@ -135,6 +135,11 @@ class FasterWhisperTranscriber:
             language=self.language,
             word_timestamps=True,
             vad_filter=True,
+            # Series with music beds, crowd noise and repeated phrases send the
+            # default decoder into hallucination loops; drop the running text
+            # condition and tighten the VAD so segment edges sit on real pauses.
+            condition_on_previous_text=False,
+            vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 200},
         )
         chunks: list[TranscriptChunk] = []
         duration = max(0.1, float(getattr(info, "duration", 0.0) or 0.0))
