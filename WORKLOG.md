@@ -1,5 +1,16 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Split-screen crop mode
+
+Borrowed from OpenShorts' SPLIT layout. New `crop_mode = "split"`: `_split_filter` stacks the
+left ~60 % of the source over the right ~60 %, each filling half the 1080x1920 canvas, seam in
+the middle for the subtitles. `offset_x` nudges both windows together. No per-clip data shape
+(no migration) — a fixed left/right split, picked manually. `candidate_quality_report` now
+recommends it when the clip is carried by exactly two alternating speakers
+(`_is_two_speaker_dialogue`). `CropMode` literal, the two schema patterns, `auto.py` allowlist,
+the frontend `<select>` (`Split (два спикера)`) and types all updated; `docs/openapi.json`
+regenerated. Render verified via a real FFmpeg frame test. `pytest` 233.
+
 ## 2026-09-05 - MCP server
 
 Borrowed from OpenShorts. `app/mcp_server.py` (FastMCP, stdio) exposes 22 tools — import a

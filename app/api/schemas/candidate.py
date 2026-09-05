@@ -87,8 +87,8 @@ class ReviewRequest(BaseModel):
     adjusted_start_time: float | None = None
     adjusted_end_time: float | None = None
     crop_mode: str | None = Field(
-        default=None, pattern="^(auto-follow|center-crop|blurred-background)$",
-        description="Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — совместимый псевдоним центра.",
+        default=None, pattern="^(auto-follow|center-crop|blurred-background|split)$",
+        description="Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — псевдоним центра; split — два спикера стопкой.",
     )
     crop_offset_x: float | None = Field(default=None, ge=-1, le=1)
     crop_scale: float | None = Field(default=None, ge=1, le=2)
@@ -99,8 +99,8 @@ class CandidateEditRequest(BaseModel):
     adjusted_start_time: float | None = None
     adjusted_end_time: float | None = None
     crop_mode: str | None = Field(
-        default=None, pattern="^(auto-follow|center-crop|blurred-background)$",
-        description="Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — совместимый псевдоним центра.",
+        default=None, pattern="^(auto-follow|center-crop|blurred-background|split)$",
+        description="Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — псевдоним центра; split — два спикера стопкой.",
     )
     crop_offset_x: float | None = Field(default=None, ge=-1, le=1)
     crop_scale: float | None = Field(default=None, ge=1, le=2)

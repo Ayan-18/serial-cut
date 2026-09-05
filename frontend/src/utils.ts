@@ -12,7 +12,7 @@ export function voiceLabel(id: string | null | undefined) { return SILERO_VOICES
 export function splitLines(value: string) { return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); }
 export function fileDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Пустой файл")); reader.onerror = () => reject(reader.error ?? new Error("Ошибка чтения")); reader.readAsDataURL(file); }); }
 export function identityMethodLabel(method: string) { const labels: Record<string, string> = { manual: "подтверждено вручную", face: "лицо", "face+lip": "лицо + губы", voice: "голос", "face+lip+voice": "лицо + губы + голос" }; return labels[method] ?? method; }
-export function editFromCandidate(candidate: Candidate): CandidateEdit { return { start: candidate.start_time.toFixed(3), end: candidate.end_time.toFixed(3), crop: candidate.crop_mode === "auto-follow" ? "auto-follow" : "center-crop", offset: candidate.crop_offset_x, scale: candidate.crop_scale }; }
+export function editFromCandidate(candidate: Candidate): CandidateEdit { return { start: candidate.start_time.toFixed(3), end: candidate.end_time.toFixed(3), crop: ["auto-follow", "split"].includes(candidate.crop_mode) ? candidate.crop_mode : "center-crop", offset: candidate.crop_offset_x, scale: candidate.crop_scale }; }
 export function previewCropOffset(candidate: Candidate, edit: CandidateEdit, absoluteTime: number) {
   const points = candidate.crop_keyframes_json ?? [];
   if (edit.crop !== "auto-follow" || !points.length) return edit.offset;

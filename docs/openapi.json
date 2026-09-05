@@ -4380,14 +4380,14 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^(auto-follow|center-crop|blurred-background)$"
+                "pattern": "^(auto-follow|center-crop|blurred-background|split)$"
               },
               {
                 "type": "null"
               }
             ],
             "title": "Crop Mode",
-            "description": "Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — совместимый псевдоним центра."
+            "description": "Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — псевдоним центра; split — два спикера стопкой."
           },
           "crop_offset_x": {
             "anyOf": [
@@ -6748,14 +6748,14 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^(auto-follow|center-crop|blurred-background)$"
+                "pattern": "^(auto-follow|center-crop|blurred-background|split)$"
               },
               {
                 "type": "null"
               }
             ],
             "title": "Crop Mode",
-            "description": "Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — совместимый псевдоним центра."
+            "description": "Центр или По лицу: крупное видео занимает 2/3 высоты поверх размытого фона. blurred-background — псевдоним центра; split — два спикера стопкой."
           },
           "crop_offset_x": {
             "anyOf": [

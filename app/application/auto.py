@@ -38,7 +38,7 @@ def auto_approve_and_export(
     rendered = 0
     exports: list[str] = []
     for candidate in candidates[:max_clips]:
-        if candidate.crop_mode not in {"center-crop", "auto-follow"}:
+        if candidate.crop_mode not in {"center-crop", "auto-follow", "split"}:
             candidate.crop_mode = "center-crop"
         review_candidate(session, candidate.id, "approve", crop_mode=candidate.crop_mode)
         approved += 1

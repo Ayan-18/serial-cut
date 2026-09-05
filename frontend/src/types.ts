@@ -17,7 +17,7 @@ export type TtsVoiceCatalog = { adapter: string; voices: TtsVoice[] };
 export type Candidate = {
   id: number; episode_id: number; start_time: number; end_time: number; title: string; description: string;
   moment_type: string; score: number; scores_json: Record<string, number>; rationale: string; problems_json: string[];
-  crop_mode: "auto-follow" | "center-crop" | "blurred-background"; crop_offset_x: number; crop_scale: number;
+  crop_mode: "auto-follow" | "center-crop" | "blurred-background" | "split"; crop_offset_x: number; crop_scale: number;
   thumbnail_path: string | null; status: string; story_order: number | null; story_role: string | null; continuity_note: string | null;
   crop_keyframes_json: { time: number; offset: number }[];
 };

@@ -14,7 +14,7 @@ from app.infrastructure.processes import ProcessResult, run_process
 logger = logging.getLogger(__name__)
 
 
-CropMode = Literal["auto-follow", "center-crop", "blurred-background"]
+CropMode = Literal["auto-follow", "center-crop", "blurred-background", "split"]
 # Also used by the render fingerprint; changing framing must not reuse an old MP4.
 CROP_LAYOUT_VERSION = "balanced-v1"
 FOREGROUND_HEIGHT_FRACTION = 2 / 3
@@ -360,6 +360,8 @@ def _crop_filter(
 ) -> str:
     offset_x = max(-1.0, min(1.0, offset_x))
     scale = max(1.0, min(2.0, scale))
+    if crop_mode == "split":
+        return _split_filter(width, height, offset_x)
     keyframes = smooth_crop_keyframes(keyframes or [])
     # A large, sharp window in the middle of the vertical canvas: at 1080x1920
     # it is 1080x1280, revealing 1.5x more of a landscape source than full-height
@@ -381,6 +383,27 @@ def _crop_filter(
         f"[fg]scale={scaled_width}:{scaled_height}:force_original_aspect_ratio=increase:force_divisible_by=2,"
         f"crop={width}:{foreground_height}:x='max(0,min(iw-ow,(iw-ow)*({ratio_expression})))':y='(ih-oh)/2'[fit];"
         "[bg][fit]overlay=0:'(H-h)/2',setsar=1"
+    )
+
+
+def _split_filter(width: int, height: int, offset_x: float) -> str:
+    """Two-speaker split: the left ~60 % of the source stacked over the right
+    ~60 %, each filling half the vertical canvas. ``offset_x`` nudges both
+    windows the same way; subtitles land on the seam."""
+    half = max(2, round(height / 2 / 2) * 2)
+    src = 0.6
+    nudge = max(-0.35, min(0.35, offset_x)) * 0.1  # small shared pan
+    left_x = max(0.0, min(1.0 - src, nudge))
+    right_x = max(0.0, min(1.0 - src, (1.0 - src) + nudge))
+    scale_crop = (
+        f"scale={width}:{half}:force_original_aspect_ratio=increase:force_divisible_by=2,"
+        f"crop={width}:{half}"
+    )
+    return (
+        "split=2[l][r];"
+        f"[l]crop=iw*{src:.3f}:ih:iw*{left_x:.4f}:0,{scale_crop}[top];"
+        f"[r]crop=iw*{src:.3f}:ih:iw*{right_x:.4f}:0,{scale_crop}[bot];"
+        "[top][bot]vstack,setsar=1"
     )
 
 

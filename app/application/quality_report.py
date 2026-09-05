@@ -47,6 +47,9 @@ def candidate_quality_report(session: Session, candidate_id: int) -> CandidateQu
     duration = max(0.0, candidate.end_time - candidate.start_time)
     problems = list(candidate.problems_json or [])
     recommendations = _candidate_recommendations(candidate, scores, duration, problems)
+    if candidate.crop_mode != "split" and _is_two_speaker_dialogue(session, candidate):
+        recommendations.insert(0, "Диалог двух говорящих — попробуйте кадрирование «Split».")
+        recommendations = _unique(recommendations[:6])
     return CandidateQualityReport(
         candidate_id=candidate.id,
         duration_seconds=round(duration, 2),
@@ -107,6 +110,35 @@ def _word_count(session: Session, episode_id: int) -> int:
     return len(
         session.scalars(select(WordTimestamp).where(WordTimestamp.segment_id.in_(segments))).all()
     )
+
+
+def _is_two_speaker_dialogue(session: Session, candidate: ClipCandidate) -> bool:
+    """The clip is carried by exactly two people trading lines — the case a
+    stacked split frames better than picking one face."""
+    labels = [
+        label
+        for label in session.scalars(
+            select(TranscriptSegment.speaker_label)
+            .where(
+                TranscriptSegment.episode_id == candidate.episode_id,
+                TranscriptSegment.end_time >= candidate.start_time,
+                TranscriptSegment.start_time <= candidate.end_time,
+            )
+            .order_by(TranscriptSegment.start_time)
+        ).all()
+        if label
+    ]
+    if len(labels) < 4:
+        return False
+    counts: dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    top = sorted(counts.values(), reverse=True)
+    if len(top) < 2:
+        return False
+    two = top[0] + top[1]
+    turns = sum(1 for a, b in zip(labels, labels[1:]) if a != b)
+    return two >= len(labels) * 0.85 and turns >= 3
 
 
 def _candidate_recommendations(

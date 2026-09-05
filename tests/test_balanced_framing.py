@@ -45,6 +45,17 @@ def _render_frame(ffmpeg, source, output, mode, *, at=0.2, **kwargs):
         capture.release()
 
 
+def test_split_mode_stacks_two_windows(framing_source, tmp_path):
+    ffmpeg, source = framing_source
+    frame = _render_frame(ffmpeg, source, tmp_path / "split.mp4", "split")
+    h = frame.shape[0]
+    # Top half is the left of the source (red marker), bottom half the right (blue).
+    top = frame[: h // 2 - 20]
+    bottom = frame[h // 2 + 20 :]
+    assert top[:, :, 2].max() > 200 and top[:, :, 0].max() < 170  # red present, not blue
+    assert bottom[:, :, 0].max() > 200 and bottom[:, :, 2].max() < 170  # blue present, not red
+
+
 @pytest.mark.parametrize("mode", ["center-crop", "blurred-background"])
 def test_balanced_centre_reveals_more_source_with_fixed_blurred_borders(framing_source, tmp_path, mode):
     ffmpeg, source = framing_source
