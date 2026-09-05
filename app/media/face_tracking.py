@@ -44,14 +44,18 @@ class FaceTrackingResult:
 # Two adjacent keyframes closer than this in time are read downstream as a hard
 # cut to a new speaker, not a pan, and are exempt from step-rate smoothing.
 CUT_GAP_SECONDS = 0.08
-# Follow step per sample while staying on the same subject (0..1 centre units).
-_FOLLOW_STEP = 0.16
-# The camera stays on a chosen face at least this long; shorter speaker turns
+# The camera holds one framing at least this long; shorter speaker turns
 # (backchannel "да", "угу") are folded into the surrounding shot.
-_MIN_DWELL_SECONDS = 0.5
+_MIN_DWELL_SECONDS = 0.7
 # A lip-motion winner must beat the runner-up face by this margin to be trusted
 # for a frame-level switch (aggregate voting uses a lower bar).
 _LIP_REL_MARGIN = 0.06
+# Fraction of a run's samples that must resolve to a real talking subject for the
+# shot to frame that face; below this the shot is just centred.
+_CONFIDENT_RUN_FRACTION = 0.34
+# A 9:16 window is ~0.32 of a 16:9 frame's width, so a face centre 0.5 off the
+# middle needs the crop panned ~0.5/0.34 to actually sit the face in the middle.
+_CENTERING_GAIN = 2.6
 
 
 def estimate_face_offset(
@@ -324,26 +328,36 @@ def _build_trajectory(
         else:
             kept.append(run)
 
-    # Pass 3 — emit keyframes: gentle follow inside a run, hard cut at its start.
+    # Pass 3 — one locked framing per run, hard cut between runs. No pan, no
+    # drift: the crop is dead still until the speaker changes; a run with no
+    # confident talking subject is simply centred.
     keyframes: list[dict[str, float]] = []
-    current = points[kept[0][0]].target
     lip_sum = 0.0
-    for run_index, (start, end) in enumerate(kept):
-        if run_index > 0 and abs(points[start].target - current) > 0.12:
-            boundary = points[start].rel_time
-            keyframes.append(_kf(max(0.0, boundary - CUT_GAP_SECONDS), current, points[start].lip))
-            current = points[start].target
-            keyframes.append(_kf(boundary, current, points[start].lip))
-        for i in range(start, end + 1):
-            point = points[i]
-            clamped = max(current - _FOLLOW_STEP, min(current + _FOLLOW_STEP, point.target))
-            current = current * 0.5 + clamped * 0.5
-            keyframes.append(_kf(point.rel_time, current, point.lip))
+    prev_offset: float | None = None
+    for start, end in kept:
+        run = points[start : end + 1]
+        talking = sum(1 for p in run if p.kind in ("identified", "active_speaker", "lip"))
+        confident = talking >= max(1, round(len(run) * _CONFIDENT_RUN_FRACTION))
+        centre = median(p.target for p in run) if confident else 0.5
+        offset = _center_offset(centre) if confident else 0.0
+        t0, t1 = run[0].rel_time, run[-1].rel_time
+        run_lip = max((p.lip for p in run), default=0.0)
+        if prev_offset is not None and abs(offset - prev_offset) > 0.05:
+            keyframes.append(_kf_offset(max(0.0, t0 - CUT_GAP_SECONDS), prev_offset, run_lip))
+        keyframes.append(_kf_offset(t0, offset, run_lip))
+        if t1 > t0 + 0.01:
+            keyframes.append(_kf_offset(t1, offset, run_lip))
+        prev_offset = offset
+        for point in run:
             _tally(stats, point.kind)
             lip_sum += point.lip
 
     stats["avg_lip"] = lip_sum / len(points) if points else 0.0
-    return _decimate_keyframes(_dedupe_keyframes(keyframes)), stats
+    return _dedupe_keyframes(keyframes), stats
+
+
+def _center_offset(centre: float) -> float:
+    return max(-1.0, min(1.0, (centre - 0.5) * _CENTERING_GAIN))
 
 
 def _dedupe_keyframes(keyframes: list[dict[str, float]]) -> list[dict[str, float]]:
@@ -352,30 +366,6 @@ def _dedupe_keyframes(keyframes: list[dict[str, float]]) -> list[dict[str, float
         if out and abs(out[-1]["time"] - kf["time"]) < 0.02 and abs(out[-1]["offset"] - kf["offset"]) < 0.02:
             continue
         out.append(kf)
-    return out
-
-
-# FFmpeg compiles the crop x-expression into one nested if() per keyframe interval
-# and its parser falls over well before a thousand levels, so the *stored*
-# trajectory keeps the cuts verbatim but thins the smooth stretches between them.
-_MIN_KEYFRAME_GAP = 1.1
-_MIN_KEYFRAME_DELTA = 0.05
-
-
-def _decimate_keyframes(keyframes: list[dict[str, float]]) -> list[dict[str, float]]:
-    if len(keyframes) <= 3:
-        return keyframes
-    out = [keyframes[0]]
-    for kf, nxt in zip(keyframes[1:], keyframes[2:]):
-        is_cut_edge = (
-            kf["time"] - out[-1]["time"] < CUT_GAP_SECONDS + 1e-6
-            or nxt["time"] - kf["time"] < CUT_GAP_SECONDS + 1e-6
-        )
-        moved = abs(kf["offset"] - out[-1]["offset"]) >= _MIN_KEYFRAME_DELTA
-        spaced = kf["time"] - out[-1]["time"] >= _MIN_KEYFRAME_GAP
-        if is_cut_edge or (moved and spaced):
-            out.append(kf)
-    out.append(keyframes[-1])
     return out
 
 
@@ -455,10 +445,10 @@ def _tally(stats: dict[str, float], kind: str) -> None:
     }.get(kind, "held")] += 1
 
 
-def _kf(rel_time: float, offset: float, lip: float) -> dict[str, float]:
+def _kf_offset(rel_time: float, offset: float, lip: float) -> dict[str, float]:
     return {
         "time": round(max(0.0, rel_time), 3),
-        "offset": round(max(-1.0, min(1.0, (offset - 0.5) * 2)), 3),
+        "offset": round(max(-1.0, min(1.0, offset)), 3),
         "lip_activity": round(max(0.0, lip), 3),
     }
 

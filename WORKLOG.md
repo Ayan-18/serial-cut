@@ -1,5 +1,23 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Auto-follow: locked shots, centre when unsure
+
+Follow-up to the speaker-cut rewrite. The camera still eased/drifted inside a shot; now each
+owner run gets **one fixed framing** and is dead still until the next cut:
+
+- `_build_trajectory` pass 3 emits ~2 flat keyframes per run (no EMA, no per-sample follow step,
+  `_FOLLOW_STEP`/`_decimate_keyframes` removed) with a hard cut between runs.
+- A run is only framed on a face when ≥ `_CONFIDENT_RUN_FRACTION` (0.34) of its samples resolved
+  to a real talking subject (identified / diarised-label / lip winner). Otherwise — crowd scene,
+  speaker off-screen, wide shot — the shot is simply **centred** (`offset 0`).
+- `_center_offset` applies `_CENTERING_GAIN` (2.6) so a face in the left/right third actually sits
+  in the middle of the 9:16 window, not just shifted a little.
+- `_MIN_DWELL_SECONDS` 0.5 → 0.7.
+
+OFFSIDE candidate 13: 10 locked shots over ~55 s — diarised speakers framed left (Говорящий 2)
+and right (Говорящий 3), the ambiguous third speaker and the crowd/pitch wides centred, hard cuts
+between, zero movement within a shot. Verified on extracted render frames. `pytest` 220 passed.
+
 ## 2026-09-05 - Auto-follow cuts to the speaker instead of drifting
 
 Auto-follow crop drifted slowly toward the biggest face and lagged speaker changes by seconds.

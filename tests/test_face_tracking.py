@@ -111,21 +111,21 @@ class _SlidingFace:
                                 embedding=np.ones(3, dtype=np.float32))]
 
 
-def test_estimate_face_offset_follows_a_slowly_moving_face_without_cutting(monkeypatch):
+def test_estimate_face_offset_centres_when_nobody_is_talking(monkeypatch):
     monkeypatch.setattr(face_tracking, "LocalFaceRecognizer", _SlidingFace)
     monkeypatch.setattr(face_tracking, "build_reference_vectors", lambda engine, profiles: [])
     monkeypatch.setattr("cv2.VideoCapture", lambda path: _OpenCapture())
     monkeypatch.setattr(_OpenCapture, "retrieve",
                         lambda self: (True, np.full((100, 100, 3), min(255, self._grabbed), np.uint8)))
 
+    # No speech ranges -> no confident talking subject -> the shot is just centred
+    # and dead still, not a pan chasing the moving face.
     result = estimate_face_offset("clip.mp4", 0.0, 6.0, samples=18)
 
     assert result.face_detection_available is True
-    assert result.keyframes[0]["offset"] < result.keyframes[-1]["offset"]  # tracks rightward
-    # A single moving face must not trigger hard cuts: successive keyframes stay
-    # spaced out in time.
-    times = [k["time"] for k in result.keyframes]
-    assert all(b - a >= CUT_GAP_SECONDS - 1e-9 for a, b in zip(times, times[1:]))
+    offsets = [k["offset"] for k in result.keyframes]
+    assert all(abs(o) < 0.05 for o in offsets)  # centred
+    assert max(offsets) - min(offsets) < 0.02  # no jitter
 
 
 def _talk_sample(rel_time: float, label: str, talker_left: bool) -> _Sample:
