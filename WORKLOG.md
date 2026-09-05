@@ -1,5 +1,16 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Stage 3: classify the content, then tune the clip prompt
+
+Borrowed from AI-Youtube-Shorts-Generator. `LlamaCppHttpAnalyzer._content_style` makes one
+quick call before the candidate loop: classify the episode's genre (интервью / матч / ток-шоу /
+влог…) and get a one-line "what makes a strong clip here". That line is prepended to every chunk
+prompt so the model looks for the right signals (yellow cards + player reactions for a match,
+quotables + opinion bombs for an interview). Best-effort — any failure or missing model returns
+`""` and the prompt is unchanged. Tests in `tests/test_stage3.py`; the retry test in
+`test_adapter_failures.py` updated for the extra call. On the OFFSIDE episode the local Qwen
+returns `kind=матч`. `pytest` 229.
+
 ## 2026-09-05 - Auto-follow: scene-aware cuts, locked still shots
 
 Borrowed from MediaPipe AutoFlip and ClipsAI: the camera never pans across a real shot change.

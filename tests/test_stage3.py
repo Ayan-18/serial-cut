@@ -93,6 +93,46 @@ def test_llama_cpp_analyzer_uses_local_chat_completions(monkeypatch):
     assert captured["json"]["response_format"]["schema"]["title"] == "CandidateListPayload"
 
 
+def test_content_style_classifies_and_feeds_the_clip_prompt(monkeypatch):
+    calls: list[str] = []
+
+    class Response:
+        def __init__(self, body: dict) -> None:
+            self._body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": json.dumps(self._body, ensure_ascii=False)}}]}
+
+    def fake_post(url, json, timeout):
+        prompt = json["messages"][-1]["content"]
+        calls.append(prompt)
+        if "жанр этого видео" in prompt:
+            return Response({"kind": "матч", "clip_focus": "жёлтые карточки и реакции игроков"})
+        return Response({"candidates": [_candidate(0, 40).model_dump()]})
+
+    monkeypatch.setattr("app.analysis.llm.httpx.post", fake_post)
+    LlamaCppHttpAnalyzer("http://127.0.0.1:8081", "Qwen3-4B").candidates(
+        "[0.0-40.0] Судья показал жёлтую карточку.",
+        [Scene(episode_id=1, start_time=0, end_time=40)],
+    )
+
+    clip_prompt = next(p for p in calls if "Работай только с частью серии" in p)
+    assert "Тип видео: матч" in clip_prompt
+    assert "жёлтые карточки" in clip_prompt
+
+
+def test_content_style_failure_is_silent(monkeypatch):
+    def boom(url, json, timeout):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr("app.analysis.llm.httpx.post", boom)
+    analyzer = LlamaCppHttpAnalyzer("http://127.0.0.1:8081", "Qwen3-4B")
+    assert analyzer._content_style("[0.0-5.0] Привет") == ""
+
+
 def test_llama_cpp_analyzer_builds_outline_without_http():
     result = LlamaCppHttpAnalyzer("http://127.0.0.1:8081", "Qwen3-4B").outline(
         "[0.0-20.0] Начало.\n[20.1-40.0] Развязка."

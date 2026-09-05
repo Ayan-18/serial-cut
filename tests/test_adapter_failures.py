@@ -49,20 +49,26 @@ class _Response:
 
 
 def test_llm_retries_once_when_first_json_response_is_broken(monkeypatch):
-    responses = ["не json, а болтовня модели", _valid_candidates_payload()]
     calls: list[str] = []
 
     def fake_post(url, json, timeout):
-        calls.append(json["messages"][-1]["content"])
-        return _Response(responses[len(calls) - 1])
+        prompt = json["messages"][-1]["content"]
+        calls.append(prompt)
+        if "жанр этого видео" in prompt:  # the content-style classification call
+            return _Response('{"kind": "тест", "clip_focus": "тест"}')
+        # first candidates attempt: broken; the stricter retry: valid
+        candidate_attempts = [p for p in calls if "жанр этого видео" not in p]
+        return _Response(
+            "не json, а болтовня модели" if len(candidate_attempts) == 1 else _valid_candidates_payload()
+        )
 
     monkeypatch.setattr("app.analysis.llm.httpx.post", fake_post)
     analyzer = LlamaCppHttpAnalyzer("http://127.0.0.1:8081", "Qwen3-4B")
 
     result = analyzer.candidates("[0.0-40.0] Реплика", [])
 
-    assert len(calls) == 2
-    assert "не был валидным JSON" in calls[1]
+    retry_prompt = [p for p in calls if "не был валидным JSON" in p]
+    assert len(retry_prompt) == 1
     assert result.candidates and result.candidates[0].score == 80
 
 

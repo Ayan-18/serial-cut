@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Callable, Protocol
@@ -147,6 +148,7 @@ class LlamaCppHttpAnalyzer:
         outline: EpisodeOutlinePayload | None = None,
     ) -> CandidateListPayload:
         context = context or AnalysisContext()
+        style_hint = self._content_style(transcript)
         chunks = self._candidate_chunks(transcript, count=5 if context.candidate_mode == "story" else 3)
         all_candidates = []
         first_error: Exception | None = None
@@ -179,7 +181,9 @@ class LlamaCppHttpAnalyzer:
                 else "Найди 1-2 сильных самостоятельных момента. "
             )
             prompt = (
-                f"{selection_instruction}Работай только с частью серии "
+                f"{selection_instruction}"
+                + (f"{style_hint}\n" if style_hint else "")
+                + f"Работай только с частью серии "
                 f"{chunk_start:.1f}-{chunk_end:.1f} сек. Используй числовые таймкоды расшифровки. "
                 "Выбирай смысловой момент с понятной причиной и развязкой. Не начинай и не заканчивай "
                 "посередине реплики; итоговые границы приложение "
@@ -243,6 +247,38 @@ class LlamaCppHttpAnalyzer:
                 )
         assert last_error is not None
         raise last_error
+
+    def _content_style(self, transcript: str) -> str:
+        """One quick call classifying the episode, so the clip prompt targets
+        the virality signals that matter for *this* kind of content (interview
+        vs match vs talk-show vs vlog...). Best-effort: any failure returns ''."""
+        entries = self._transcript_entries(transcript)
+        if not entries:
+            return ""
+        sample = "\n".join(f"[{start:.0f}] {text}" for start, _, text in entries[:60])[:3000]
+        schema = {
+            "type": "object",
+            "properties": {"kind": {"type": "string"}, "clip_focus": {"type": "string"}},
+            "required": ["kind", "clip_focus"],
+        }
+        prompt = (
+            "Определи жанр этого видео одним словом (интервью, матч, ток-шоу, влог, обзор, "
+            "скетч, репортаж, драма…) и одним предложением скажи, что делает сильный "
+            "вертикальный клип именно в таком контенте — на какие сигналы смотреть. "
+            'Формат: {"kind": "…", "clip_focus": "…"}.\n\n'
+            f"Начало расшифровки:\n{sample}"
+        )
+        try:
+            data = json.loads(self._complete_json(prompt, schema, max_tokens=300))
+            kind = str(data.get("kind") or "").strip()
+            focus = str(data.get("clip_focus") or "").strip()
+        except (ValueError, KeyError, TypeError, RuntimeError):
+            logger.info("Content-style classification skipped (model unavailable or bad JSON)")
+            return ""
+        if not focus:
+            return ""
+        logger.info("Content style: kind=%s", kind or "?")
+        return f"Тип видео: {kind or 'не определён'}. Что важно для клипа здесь: {focus}"
 
     @staticmethod
     def _context_prompt(context: AnalysisContext) -> str:
