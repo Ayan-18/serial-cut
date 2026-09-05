@@ -11,26 +11,26 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastapi==0.141.1",
   "uvicorn[standard]==0.52.4",
-  "pydantic==2.13.4",
-  "pydantic-settings==2.10.1",
+  "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
   "SQLAlchemy==2.0.52",
   "alembic==1.19.1",
-  "python-dotenv==1.2.2",
+  "python-dotenv==1.2.3",
   "requests==2.34.2",
   "numpy==2.4.6",
   "opencv-python-headless==5.0.0.93",
-  "faster-whisper==1.2.0",
-  "ctranslate2==4.6.3",
+  "faster-whisper==1.2.1",
+  "ctranslate2==4.8.2",
   "scenedetect-headless==0.7.1",
   "httpx==0.28.1",
-  "python-telegram-bot==22.3",
+  "python-telegram-bot==22.8",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "ruff==0.14.9",
+  "ruff==0.16.5",
   "mypy==1.19.0",
-  "pytest==9.0.3",
+  "pytest==9.1.1",
   "pytest-cov==6.2.1",
   "mcp>=1.2,<2",
 ]
