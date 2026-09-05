@@ -32,11 +32,17 @@ dev = [
   "mypy==1.19.0",
   "pytest==9.0.3",
   "pytest-cov==6.2.1",
+  "mcp>=1.2,<2",
 ]
 # Local neural narration voice (Silero v4_ru). CPU-only is enough.
 # Resolved to torch 2.14.0 (CPU, win_amd64) on the target machine 2026-09-03.
 tts = [
   "torch==2.14.0",
+]
+# MCP server: drives the running app over its loopback API so Claude Code /
+# Cursor can analyse episodes and render clips. Talks HTTP, no DB access.
+mcp = [
+  "mcp>=1.2,<2",
 ]
 
 [tool.setuptools.packages.find]

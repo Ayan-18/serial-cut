@@ -415,6 +415,36 @@ NVENC можно включить вручную или оставить auto-de
 инструкцией по установке, а не молча центрирует кадр. На OpenCV 5 резервного Haar-детектора больше
 нет. Обложка ролика выбирается по резкости, экспозиции и (при наличии моделей) по лицу в кадре.
 
+## MCP-сервер
+
+Позволяет Claude Code, Cursor и другим MCP-клиентам управлять конвейером: импорт сезона,
+анализ серий, review и рендер клипов, сборка StoryArc. Это тонкий клиент loopback-API
+запущенного приложения — своей БД и моделей у него нет, `scripts\run_local.ps1` должен
+работать. Транспорт stdio: клиент сам запускает процесс.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_mcp.ps1
+```
+
+Регистрация в Claude Code (`.mcp.json` в корне проекта или `claude mcp add`):
+
+```json
+{
+  "mcpServers": {
+    "serialcuts": {
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/run_mcp.ps1"]
+    }
+  }
+}
+```
+
+Инструменты: `health`, `list_seasons`, `import_season`, `analyze_episode`, `auto_export_episode`,
+`analyze_season`, `list_candidates`, `candidate_quality`, `review_candidate`,
+`auto_crop_candidate`, `render_candidate`, `queue_status`, `run_queue_next`, `set_queue_paused`,
+`list_exports`, `list_story_arcs`, `create_story_arc`, `render_story_arc`, `search_season`,
+`project_diagnostics`, `model_diagnostics`.
+
 ## Telegram
 
 Мобильный пульт к запущенному локально приложению. Бот работает через long polling

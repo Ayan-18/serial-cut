@@ -1,5 +1,15 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - MCP server
+
+Borrowed from OpenShorts. `app/mcp_server.py` (FastMCP, stdio) exposes 22 tools — import a
+season, analyse an episode, review / auto-crop / render a candidate, build and render a
+StoryArc, read the queue and diagnostics. It is a thin loopback HTTP client of the running
+app (fetches `/api/security-token` for unsafe calls); no DB or model access. `[mcp]` extra
+(`mcp>=1.2,<2`), also added to `[dev]` so CI covers it. `scripts/run_mcp.ps1`, README section
+with a `.mcp.json` example. Tests in `tests/test_mcp_server.py`; verified live against the
+running app. `pytest` 232.
+
 ## 2026-09-05 - Stage 3: classify the content, then tune the clip prompt
 
 Borrowed from AI-Youtube-Shorts-Generator. `LlamaCppHttpAnalyzer._content_style` makes one
