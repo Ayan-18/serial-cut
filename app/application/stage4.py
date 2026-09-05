@@ -255,12 +255,14 @@ def render_candidate_preview(
 
 
 def export_slug(template: str, episode: Episode, candidate: ClipCandidate) -> str:
+    # Cap the free-text parts: the whole path (output dir + 64-char fingerprint +
+    # this name + a "-v001-xxxxxxxx-xxxxxxxx" suffix) must clear Windows MAX_PATH.
     values = {
-        "episode": Path(episode.file_name).stem,
+        "episode": Path(episode.file_name).stem[:40].rstrip(" .-_"),
         "episode_id": episode.id,
         "candidate": candidate.id,
         "candidate_id": candidate.id,
-        "title": candidate.title,
+        "title": candidate.title[:50].rstrip(" .-_"),
         "score": candidate.score,
         "moment_type": candidate.moment_type,
         "start": f"{candidate.start_time:.1f}",
@@ -278,4 +280,4 @@ def export_slug(template: str, episode: Episode, candidate: ClipCandidate) -> st
     slug = re.sub(r"-{2,}", "-", slug)
     if not slug:
         slug = f"episode-{episode.id}-candidate-{candidate.id}"
-    return slug[:120].rstrip(" .-_")
+    return slug[:96].rstrip(" .-_")
