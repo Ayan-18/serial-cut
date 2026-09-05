@@ -25,6 +25,21 @@ def test_runtime_settings_persist_ui_overrides(session, tmp_path: Path):
     assert loaded.subtitle_font_size == 42
 
 
+def test_stored_settings_keep_cache_dir_as_a_path(session, tmp_path: Path):
+    # The JSON store keeps cache_dir as a string; if it comes back as str,
+    # `settings.cache_dir / "episodes"` later crashes with `str / str`.
+    env = Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out")
+    save_runtime_settings(session, get_runtime_settings(session, env))
+    session.commit()
+
+    runtime = get_runtime_settings(session, env)
+    effective = effective_settings(session, env)
+
+    assert isinstance(runtime.cache_dir, Path)
+    assert isinstance(effective.cache_dir, Path)
+    assert (effective.cache_dir / "episodes").name == "episodes"
+
+
 def test_effective_settings_keep_env_tools_and_apply_ui_overrides(session, tmp_path: Path):
     env = Settings(
         ffmpeg_path="custom-ffmpeg",

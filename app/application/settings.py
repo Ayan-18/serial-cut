@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
 from app.infrastructure.config import Settings, validate_loopback_http_url
 from app.models.entities import AppSetting
+
+logger = logging.getLogger(__name__)
 
 
 SETTINGS_KEY = "ui_settings"
@@ -101,7 +104,14 @@ def get_runtime_settings(session: Session, env_settings: Settings) -> RuntimeSet
         for key, value in stored.value_json.items()
         if key not in ENV_OWNED_FIELDS
     }
-    return defaults.model_copy(update=overrides)
+    # Re-validate rather than model_copy(update=...): the JSON store keeps
+    # cache_dir / output_dir as strings, and a bare copy would leave them as str
+    # so `settings.cache_dir / "episodes"` later blows up with `str / str`.
+    try:
+        return RuntimeSettings.model_validate({**defaults.model_dump(), **overrides})
+    except ValidationError:
+        logger.warning("Stored UI settings are invalid; falling back to .env defaults")
+        return defaults
 
 
 def save_runtime_settings(session: Session, payload: RuntimeSettings) -> RuntimeSettings:
