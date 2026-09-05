@@ -5,7 +5,6 @@ import numpy as np
 from app.media import face_tracking
 from app.media.character_recognition import FaceObservation
 from app.media.face_tracking import (
-    CUT_GAP_SECONDS,
     SpeechRange,
     _active_speech,
     _aggregate_label_positions,
@@ -129,11 +128,11 @@ def test_estimate_face_offset_centres_when_nobody_is_talking(monkeypatch):
 
 
 def _talk_sample(rel_time: float, label: str, talker_left: bool) -> _Sample:
-    """Two faces at 0.15 and 0.85; the left or right one moves its mouth."""
+    """Two faces at 0.3 and 0.7; the left or right one moves its mouth."""
     lip = {0: 0.35, 1: 0.02} if talker_left else {0: 0.02, 1: 0.35}
     return _Sample(
         rel_time=rel_time,
-        centers=[0.15, 0.85],
+        centers=[0.3, 0.7],
         areas=[400.0, 400.0],
         track_ids=[0, 1],
         lip_scores=lip,
@@ -143,28 +142,44 @@ def _talk_sample(rel_time: float, label: str, talker_left: bool) -> _Sample:
     )
 
 
-def test_trajectory_cuts_hard_between_two_speakers():
-    # Speaker A (left) talks for 3 s, then speaker B (right) takes over.
-    samples = [_talk_sample(t / 2, "A", talker_left=True) for t in range(6)]
-    samples += [_talk_sample(3.0 + t / 2, "B", talker_left=False) for t in range(6)]
+def _offset_at(keyframes, t: float) -> float:
+    prev = keyframes[0]
+    for kf in keyframes:
+        if kf["time"] >= t:
+            if kf["time"] == prev["time"]:
+                return kf["offset"]
+            r = (t - prev["time"]) / (kf["time"] - prev["time"])
+            return prev["offset"] + (kf["offset"] - prev["offset"]) * r
+        prev = kf
+    return keyframes[-1]["offset"]
+
+
+def test_trajectory_glides_smoothly_between_speakers():
+    # Speaker A (left) talks for 3 s at 0.2 s cadence, then speaker B (right).
+    samples = [_talk_sample(i * 0.2, "A", talker_left=True) for i in range(15)]
+    samples += [_talk_sample(3.0 + i * 0.2, "B", talker_left=False) for i in range(20)]
 
     positions = _aggregate_label_positions(samples)
     assert positions["A"] < 0.4 < positions["B"]
 
     keyframes, _ = _build_trajectory(samples, positions)
-    cut_pairs = [
-        (a, b)
-        for a, b in zip(keyframes, keyframes[1:])
-        if b["time"] - a["time"] <= CUT_GAP_SECONDS + 1e-6 and abs(b["offset"] - a["offset"]) > 0.5
-    ]
-    assert cut_pairs, "a speaker change must produce one hard cut, not a slow pan"
-    # ...and only around the 3 s boundary, not on every frame.
-    assert len(cut_pairs) == 1
-    assert 2.5 < cut_pairs[0][1]["time"] < 3.2
+
+    # No teleport in a single step.
+    assert all(abs(b["offset"] - a["offset"]) < 0.7 for a, b in zip(keyframes, keyframes[1:]))
+    before = _offset_at(keyframes, 2.8)
+    after = _offset_at(keyframes, 4.5)
+    assert before < -0.3 and after > 0.3  # framed A, then B
+
+    # The swing is a glide: monotone (no overshoot), and it is neither an instant
+    # cut nor a multi-second drift.
+    swing = [_offset_at(keyframes, 3.0 + i * 0.1) for i in range(13)]
+    assert all(b >= a - 1e-6 for a, b in zip(swing, swing[1:]))  # monotone, no oscillation
+    assert swing[1] - swing[0] < 0.45  # not a cut in the first 0.1 s
+    assert swing[8] > 0.3  # but well across within ~0.8 s
 
 
-def test_trajectory_holds_steady_while_one_speaker_talks():
-    samples = [_talk_sample(t / 3, "A", talker_left=True) for t in range(12)]
+def test_trajectory_holds_still_while_one_speaker_talks():
+    samples = [_talk_sample(i * 0.25, "A", talker_left=True) for i in range(16)]
     keyframes, _ = _build_trajectory(samples, _aggregate_label_positions(samples))
-    offsets = [k["offset"] for k in keyframes]
-    assert max(offsets) - min(offsets) < 0.15  # basically still
+    tail = [k["offset"] for k in keyframes if k["time"] > 1.0]  # after it settles
+    assert max(tail) - min(tail) < 0.02  # dead still

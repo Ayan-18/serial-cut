@@ -115,32 +115,23 @@ def test_preview_preset_uses_fast_vertical_dimensions(tmp_path: Path):
     assert "1800k" in args
 
 
-def test_crop_keyframes_are_smoothed_for_preview_and_render():
-    smoothed = smooth_crop_keyframes([
-        {"time": 0, "offset": -0.9},
-        {"time": 1, "offset": 0.9},
-    ])
-    slow_move = smooth_crop_keyframes([
-        {"time": 0, "offset": -0.5},
-        {"time": 5, "offset": 0.5},
-    ])
-
-    assert smoothed[1]["offset"] == -0.62
-    assert slow_move[1]["offset"] == 0.5
+def test_smooth_crop_keyframes_rails_a_teleport_but_passes_a_normal_swing():
+    # A corrupt keyframe that jumps the full frame width in 0.4 s is clamped...
+    railed = smooth_crop_keyframes([{"time": 0, "offset": -1.0}, {"time": 0.4, "offset": 1.0}])
+    assert -1.0 < railed[1]["offset"] < 1.0
+    # ...but the tracker's own spring-smoothed reframe passes through untouched.
+    swing = smooth_crop_keyframes([{"time": 0, "offset": -0.4}, {"time": 0.5, "offset": 0.4}])
+    assert swing[1]["offset"] == 0.4
 
 
 def test_smooth_crop_keyframes_caps_the_list_for_ffmpeg():
-    # A pathological trajectory (dense samples + many cuts) must not produce a
-    # crop x-expression long enough to break FFmpeg's parser.
-    dense = []
-    for i in range(400):
-        t = i * 0.15
-        dense.append({"time": t, "offset": -0.5})
-        dense.append({"time": t + 0.05, "offset": 0.5})  # a "cut" pair every step
+    # A pathological trajectory must not produce a crop x-expression long enough
+    # to break FFmpeg's parser.
+    dense = [{"time": i * 0.05, "offset": -0.5 if i % 2 else 0.5} for i in range(800)]
 
     capped = smooth_crop_keyframes(dense)
 
-    assert len(capped) <= 70
+    assert len(capped) <= 100
     assert [p["time"] for p in capped] == sorted(p["time"] for p in capped)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,11 +42,12 @@ class FaceTrackingResult:
     face_detection_available: bool = True
 
 
-# Two adjacent keyframes closer than this in time are read downstream as a hard
-# cut to a new speaker, not a pan, and are exempt from step-rate smoothing.
+# Kept for the render/preview contract: keyframes closer than this were a hard
+# cut. The tracker no longer emits them — it glides — but downstream code and a
+# few callers still import the name.
 CUT_GAP_SECONDS = 0.08
-# The camera holds one framing at least this long; shorter speaker turns
-# (backchannel "да", "угу") are folded into the surrounding shot.
+# A speaker turn shorter than this (backchannel "да", "угу") is folded into the
+# surrounding shot instead of pulling the camera away and back.
 _MIN_DWELL_SECONDS = 0.7
 # A lip-motion winner must beat the runner-up face by this margin to be trusted
 # for a frame-level switch (aggregate voting uses a lower bar).
@@ -53,9 +55,17 @@ _LIP_REL_MARGIN = 0.06
 # Fraction of a run's samples that must resolve to a real talking subject for the
 # shot to frame that face; below this the shot is just centred.
 _CONFIDENT_RUN_FRACTION = 0.34
-# A 9:16 window is ~0.32 of a 16:9 frame's width, so a face centre 0.5 off the
-# middle needs the crop panned ~0.5/0.34 to actually sit the face in the middle.
-_CENTERING_GAIN = 2.6
+# Smooth-follow spring: a critically-damped move toward the face, ~0.7 s to
+# settle after a speaker change — a gentle reframe, no overshoot, no whip.
+_FOLLOW_FREQ_HZ = 0.8
+# Frame the face at ~0.8 of the way to dead-centre: clearly on the speaker, in
+# the inner third, but the pans stay gentle rather than slamming to the edge.
+_CENTERING_FRACTION = 0.8
+# Face jitter below this (in crop-offset units) never moves the camera.
+_DEAD_ZONE = 0.03
+# Emit a keyframe only once the smoothed crop has moved this much, or after a gap.
+_EMIT_DELTA = 0.006
+_EMIT_MAX_GAP = 0.7
 
 
 def estimate_face_offset(
@@ -99,6 +109,8 @@ def estimate_face_offset(
     audio = _load_audio(audio_path)
     wanted = sample_times + [max(start_time, t - 0.1) for t in sample_times]
     frames = _prefetch_frames(capture, wanted, cv2)
+    _seed = next(iter(frames.values()), None)
+    source_aspect = (_seed.shape[1] / _seed.shape[0]) if _seed is not None else 16 / 9
 
     samples_data: list[_Sample] = []
     faces_detected = 0
@@ -157,7 +169,7 @@ def estimate_face_offset(
         capture.release()
 
     label_positions = _aggregate_label_positions(samples_data)
-    keyframes, stats = _build_trajectory(samples_data, label_positions)
+    keyframes, stats = _build_trajectory(samples_data, label_positions, source_aspect)
 
     return FaceTrackingResult(
         offset_x=round(float(median(k["offset"] for k in keyframes)) if keyframes else 0.0, 3),
@@ -287,7 +299,7 @@ class _Point:
 
 
 def _build_trajectory(
-    samples: list[_Sample], label_positions: dict[str, float]
+    samples: list[_Sample], label_positions: dict[str, float], source_aspect: float = 16 / 9
 ) -> tuple[list[dict[str, float]], dict[str, float]]:
     stats = {k: 0.0 for k in ("active_speaker", "identified", "lip", "held", "largest", "avg_lip")}
 
@@ -328,36 +340,70 @@ def _build_trajectory(
         else:
             kept.append(run)
 
-    # Pass 3 — one locked framing per run, hard cut between runs. No pan, no
-    # drift: the crop is dead still until the speaker changes; a run with no
-    # confident talking subject is simply centred.
-    keyframes: list[dict[str, float]] = []
-    lip_sum = 0.0
-    prev_offset: float | None = None
+    # Pass 3 — smooth follow. Per-sample target (the tracked face centre for a
+    # confident run, the frame centre otherwise) fed through a critically-damped
+    # spring: the crop glides after the subject, holds still when they do, and
+    # takes a calm ~0.4 s swing when the speaker changes. No jitter, no cuts.
+    targets: list[tuple[float, float]] = []
     for start, end in kept:
         run = points[start : end + 1]
         talking = sum(1 for p in run if p.kind in ("identified", "active_speaker", "lip"))
         confident = talking >= max(1, round(len(run) * _CONFIDENT_RUN_FRACTION))
-        centre = median(p.target for p in run) if confident else 0.5
-        offset = _center_offset(centre) if confident else 0.0
-        t0, t1 = run[0].rel_time, run[-1].rel_time
-        run_lip = max((p.lip for p in run), default=0.0)
-        if prev_offset is not None and abs(offset - prev_offset) > 0.05:
-            keyframes.append(_kf_offset(max(0.0, t0 - CUT_GAP_SECONDS), prev_offset, run_lip))
-        keyframes.append(_kf_offset(t0, offset, run_lip))
-        if t1 > t0 + 0.01:
-            keyframes.append(_kf_offset(t1, offset, run_lip))
-        prev_offset = offset
         for point in run:
+            centre = point.target if confident else 0.5
+            targets.append((point.rel_time, _center_offset(centre, source_aspect)))
             _tally(stats, point.kind)
-            lip_sum += point.lip
+    stats["avg_lip"] = sum(p.lip for p in points) / len(points) if points else 0.0
+    if not targets:
+        return [], stats
 
-    stats["avg_lip"] = lip_sum / len(points) if points else 0.0
+    goals = [t[1] for t in targets]
+    goals = [median(goals[max(0, i - 1) : i + 2]) for i in range(len(goals))]  # de-spike
+
+    keyframes: list[dict[str, float]] = []
+    omega = 2.0 * math.pi * _FOLLOW_FREQ_HZ
+    x, v = goals[0], 0.0
+    prev_time = targets[0][0]
+    last_x: float | None = None
+    last_t: float | None = None
+    for (rel_time, _offset), goal_raw in zip(targets, goals):
+        dt = min(0.5, max(0.01, rel_time - prev_time))
+        prev_time = rel_time
+        goal = x if abs(goal_raw - x) < _DEAD_ZONE else goal_raw
+        x, v = _spring_step(x, v, goal, omega, dt)
+        x = max(-1.0, min(1.0, x))
+        if (
+            last_x is None
+            or last_t is None
+            or abs(x - last_x) >= _EMIT_DELTA
+            or rel_time - last_t >= _EMIT_MAX_GAP
+        ):
+            keyframes.append(_kf_offset(rel_time, x, 0.0))
+            last_x, last_t = x, rel_time
+    if last_t is not None and targets[-1][0] - last_t > 0.01:
+        keyframes.append(_kf_offset(targets[-1][0], x, 0.0))
     return _dedupe_keyframes(keyframes), stats
 
 
-def _center_offset(centre: float) -> float:
-    return max(-1.0, min(1.0, (centre - 0.5) * _CENTERING_GAIN))
+def _spring_step(x: float, v: float, goal: float, omega: float, dt: float) -> tuple[float, float]:
+    """One step of a critically-damped spring x'' + 2ω x' + ω²(x - goal) = 0."""
+    y0 = x - goal
+    c = v + omega * y0
+    decay = math.exp(-omega * dt)
+    return goal + (y0 + c * dt) * decay, (v - omega * c * dt) * decay
+
+
+def _center_offset(centre: float, source_aspect: float = 16 / 9) -> float:
+    """Crop pan (-1..1) that sits a face at source-x ``centre`` in the middle of
+    the 1080x1280 foreground window (rendering.FOREGROUND_HEIGHT_FRACTION)."""
+    window_w, window_h = 1080.0, 1280.0
+    scaled_w = max(window_w, window_h * max(0.2, source_aspect))
+    span = scaled_w - window_w
+    if span < 1.0:  # portrait source — horizontal barely moves
+        return max(-1.0, min(1.0, (centre - 0.5) * 2.0))
+    perfect_centre_gain = 2.0 * scaled_w / span
+    gain = min(4.0, _CENTERING_FRACTION * perfect_centre_gain)
+    return max(-1.0, min(1.0, (centre - 0.5) * gain))
 
 
 def _dedupe_keyframes(keyframes: list[dict[str, float]]) -> list[dict[str, float]]:

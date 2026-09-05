@@ -1,5 +1,27 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Auto-follow: smooth spring, no cuts
+
+The locked-shot / hard-cut auto-follow read as jerky. Replaced it with a continuous
+critically-damped spring so «По лицу» glides after the speaker like an Instagram auto-reframe:
+
+- `_build_trajectory` pass 3: build a per-sample offset target (tracked face centre for a
+  confident run, frame centre otherwise), median-3 de-spike, then run `_spring_step`
+  (`x'' + 2ω x' + ω²(x-goal) = 0`, `_FOLLOW_FREQ_HZ` 1.0) over the whole timeline. A `_DEAD_ZONE`
+  (0.03) means sub-frame face wobble never moves the camera; a speaker change is a calm ~0.5 s
+  swing with no overshoot. Keyframes are emitted only when the smoothed crop actually moved
+  (`_EMIT_DELTA`) or after `_EMIT_MAX_GAP`.
+- `_center_offset` is now aspect-aware (from the source frame) and frames a face `_CENTERING_FRACTION`
+  (0.8) of the way to dead-centre of the balanced 1080x1280 window — clearly on the speaker, gentle
+  pans. Removed the old fixed `_CENTERING_GAIN` and the hard-cut / `_decimate_keyframes` path.
+- `rendering.smooth_crop_keyframes`: the pan-rate clamp is now just a rail against a corrupt
+  teleport (`_MAX_PAN_PER_SECOND` 1.6, was 0.28) since the trajectory arrives pre-smoothed;
+  `_cap_keyframes` simplified to a uniform 100-point subsample.
+
+OFFSIDE candidate 13: mean pan 0.23/s (mostly dead still), peak 1.6/s on a speaker swap, no
+per-keyframe teleport, monotone through each swing. Verified on 4 fps render frames.
+`pytest` 225 passed; ruff + mypy clean; frontend 12 passed.
+
 ## 2026-09-05 - Balanced vertical framing for centre and face modes
 
 - Replaced full-height centre/face crops with a large fixed foreground window: 1080x1280

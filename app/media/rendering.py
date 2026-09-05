@@ -383,12 +383,16 @@ def _crop_filter(
     )
 
 
-# Keyframes closer together than this are an intentional speaker cut from the
-# face tracker, not a pan, and skip the step-rate clamp.
+# Keyframes closer together than this were a deliberate fast transition (a manual
+# cut in the editor / a test) and skip the pan-rate rail.
 _CUT_GAP_SECONDS = 0.12
+# The face tracker already spring-smooths its trajectory; this clamp is only a
+# rail against a corrupt keyframe teleporting the crop at a normal spacing. Well
+# above the spring's own peak speed so it never touches a real reframe.
+_MAX_PAN_PER_SECOND = 4.0
 
 
-def smooth_crop_keyframes(keyframes: list[dict], max_step_per_second: float = 0.28) -> list[dict]:
+def smooth_crop_keyframes(keyframes: list[dict], max_step_per_second: float = _MAX_PAN_PER_SECOND) -> list[dict]:
     points: list[dict] = []
     last_offset: float | None = None
     last_time: float | None = None
@@ -401,8 +405,7 @@ def smooth_crop_keyframes(keyframes: list[dict], max_step_per_second: float = 0.
         if last_offset is not None and last_time is not None:
             gap = timestamp - last_time
             if gap >= _CUT_GAP_SECONDS:
-                # A gradual move: clamp how fast the frame is allowed to pan.
-                max_step = max_step_per_second * max(0.25, gap)
+                max_step = max_step_per_second * gap
                 offset = max(last_offset - max_step, min(last_offset + max_step, offset))
         if points and abs(points[-1]["time"] - timestamp) < 0.03:
             points[-1] = {"time": timestamp, "offset": round(offset, 4)}
@@ -413,31 +416,19 @@ def smooth_crop_keyframes(keyframes: list[dict], max_step_per_second: float = 0.
     return _cap_keyframes(points)
 
 
-# FFmpeg builds one nested if() per interval into the crop x-expression; keep the
-# list well under the parser's limit even for pathological stored trajectories.
-_MAX_RENDER_KEYFRAMES = 64
+# FFmpeg builds one nested if() per interval into the crop x-expression; ~100
+# points renders fine (~5 KB expression), 200 breaks the parser.
+_MAX_RENDER_KEYFRAMES = 100
 
 
 def _cap_keyframes(points: list[dict]) -> list[dict]:
     if len(points) <= _MAX_RENDER_KEYFRAMES:
         return points
     last = len(points) - 1
-    cut_edges = [
-        i
-        for i in range(1, last)
-        if points[i]["time"] - points[i - 1]["time"] < _CUT_GAP_SECONDS
-        or points[i + 1]["time"] - points[i]["time"] < _CUT_GAP_SECONDS
-    ]
-    if len(cut_edges) > _MAX_RENDER_KEYFRAMES - 2:
-        stride = len(cut_edges) / (_MAX_RENDER_KEYFRAMES - 2)
-        cut_edges = [cut_edges[int(k * stride)] for k in range(_MAX_RENDER_KEYFRAMES - 2)]
-    keep = {0, last, *cut_edges}
-    budget = _MAX_RENDER_KEYFRAMES - len(keep)
-    remaining = [i for i in range(1, last) if i not in keep]
-    if budget > 0 and remaining:
-        stride = max(1, len(remaining) // budget)
-        keep.update(remaining[::stride])
-    return [points[i] for i in sorted(keep)]
+    inner = list(range(1, last))
+    stride = max(1, len(inner) // (_MAX_RENDER_KEYFRAMES - 2) + 1)
+    keep = sorted({0, last, *inner[::stride]})
+    return [points[i] for i in keep]
 
 
 def _tracking_ratio_expression(keyframes: list[dict]) -> str:
