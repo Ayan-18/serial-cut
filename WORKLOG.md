@@ -1,5 +1,23 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Auto-follow: scene-aware cuts, locked still shots
+
+Borrowed from MediaPipe AutoFlip and ClipsAI: the camera never pans across a real shot change.
+
+- `auto_crop` loads the `Scene` rows inside the clip window and passes their starts to
+  `estimate_face_offset(scene_boundaries=...)`.
+- `_build_trajectory` splits the 0.1 s grid at every scene cut (clipped to
+  `_scene_cut_times`) and smooths **within each shot only**. `_segment_offsets`: a shot where
+  the subject stays within `_STATIONARY_SPREAD` (0.11) of frame is locked to a fixed frame
+  (median), otherwise pre-smoothed + spring with the state reset at the shot start. At a
+  boundary the trajectory holds the outgoing frame to `CUT_GAP_SECONDS` before the cut, then
+  jumps — a real cut, invisible because the whole frame changed anyway.
+- `_MIN_DWELL_SECONDS` 0.7 -> 1.4 (ClipsAI uses 1.5): a sub-1.4 s speaker turn is folded into
+  the surrounding shot.
+
+OFFSIDE candidate 13: 16 source scene cuts in the window -> 4 framing cuts (only where the
+frame must move), stills locked dead-still, renders rc 0. `pytest` 227; ruff + mypy clean.
+
 ## 2026-09-05 - Auto-follow: very smooth, glued to the face
 
 Still read as jerky. Three fixes:

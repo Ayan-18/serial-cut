@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 from app.application.review import save_candidate_edits
 from app.infrastructure.config import Settings
 from app.media.rendering import smooth_crop_keyframes
-from app.models.entities import Character, ClipCandidate, Episode, SpeakerIdentity, TranscriptSegment
+from app.models.entities import (
+    Character,
+    ClipCandidate,
+    Episode,
+    Scene,
+    SpeakerIdentity,
+    TranscriptSegment,
+)
 
 
 class FaceDetectionUnavailableError(RuntimeError):
@@ -72,6 +79,17 @@ def auto_crop_candidate(session: Session, candidate_id: int, settings: Settings)
         ).all()
         if item.photos_json
     ]
+    scene_boundaries = list(
+        session.scalars(
+            select(Scene.start_time)
+            .where(
+                Scene.episode_id == episode.id,
+                Scene.start_time > candidate.start_time,
+                Scene.start_time < candidate.end_time,
+            )
+            .order_by(Scene.start_time)
+        ).all()
+    )
     session.commit()
 
     # Track on the source, not the low-res proxy: the proxy (~640px) loses small
@@ -88,6 +106,7 @@ def auto_crop_candidate(session: Session, candidate_id: int, settings: Settings)
         detector_model=settings.face_detector_model,
         recognizer_model=settings.face_recognizer_model,
         audio_path=Path(episode.audio_path) if episode.audio_path else None,
+        scene_boundaries=scene_boundaries,
     )
     if not result.face_detection_available:
         raise FaceDetectionUnavailableError(

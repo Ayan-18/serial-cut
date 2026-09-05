@@ -48,7 +48,7 @@ class FaceTrackingResult:
 CUT_GAP_SECONDS = 0.08
 # A speaker turn shorter than this (backchannel "да", "угу") is folded into the
 # surrounding shot instead of pulling the camera away and back.
-_MIN_DWELL_SECONDS = 0.7
+_MIN_DWELL_SECONDS = 1.4
 # A lip-motion winner must beat the runner-up face by this margin to be trusted
 # for a frame-level switch (aggregate voting uses a lower bar).
 _LIP_REL_MARGIN = 0.06
@@ -71,6 +71,13 @@ _GRID_SECONDS = 0.10
 # The render pass thins further (RDP); this just keeps the stored list sane.
 _EMIT_DELTA = 0.02
 _EMIT_MAX_GAP = 2.0
+# The camera never pans across a real shot change: the trajectory is cut at
+# every source scene boundary and smoothed within each shot only. (AutoFlip /
+# ClipsAI both do this.) A shot where the subject moves less than
+# _STATIONARY_SPREAD of the frame is locked to a fixed frame, not panned.
+_STATIONARY_SPREAD = 0.11
+# Snap a scene boundary this close to the clip edge away (nothing to cut).
+_SCENE_EDGE_MARGIN = 0.4
 
 
 def estimate_face_offset(
@@ -83,6 +90,7 @@ def estimate_face_offset(
     detector_model: Path | None = None,
     recognizer_model: Path | None = None,
     audio_path: Path | None = None,
+    scene_boundaries: list[float] | None = None,
 ) -> FaceTrackingResult:
     import cv2
 
@@ -173,8 +181,9 @@ def estimate_face_offset(
     finally:
         capture.release()
 
+    cut_times = _scene_cut_times(scene_boundaries, start_time, end_time)
     label_positions = _aggregate_label_positions(samples_data)
-    keyframes, stats = _build_trajectory(samples_data, label_positions, source_aspect)
+    keyframes, stats = _build_trajectory(samples_data, label_positions, source_aspect, cut_times)
 
     return FaceTrackingResult(
         offset_x=round(float(median(k["offset"] for k in keyframes)) if keyframes else 0.0, 3),
@@ -305,7 +314,10 @@ class _Point:
 
 
 def _build_trajectory(
-    samples: list[_Sample], label_positions: dict[str, float], source_aspect: float = 16 / 9
+    samples: list[_Sample],
+    label_positions: dict[str, float],
+    source_aspect: float = 16 / 9,
+    cut_times: list[float] | None = None,
 ) -> tuple[list[dict[str, float]], dict[str, float]]:
     stats = {k: 0.0 for k in ("active_speaker", "identified", "lip", "held", "largest", "avg_lip")}
 
@@ -365,15 +377,35 @@ def _build_trajectory(
         return [], stats
 
     grid = _resample_even(raw, _GRID_SECONDS)
-    window = max(1, round(_PRESMOOTH_SECONDS / _GRID_SECONDS) | 1)  # odd
-    values = _moving_average([v for _, v in grid], window)
-    smoothed = _critically_damped(values, _GRID_SECONDS, _FOLLOW_FREQ_HZ)
+    grid_times = [t for t, _ in grid]
+    grid_values = [v for _, v in grid]
+
+    # Split the grid at every source scene cut: the camera is smoothed *within*
+    # a shot and jumps instantly at the boundary — panning across a real cut is
+    # what read as jerky.
+    bounds = [0]
+    for cut in cut_times or []:
+        idx = _grid_index(grid_times, cut)
+        if idx is not None and idx - bounds[-1] >= 2:
+            bounds.append(idx)
+    bounds.append(len(grid))
+
+    smoothed: list[float] = []
+    for lo, hi in zip(bounds, bounds[1:]):
+        smoothed.extend(_segment_offsets(grid_values[lo:hi]))
+    cut_indices = set(bounds[1:-1])
 
     keyframes: list[dict[str, float]] = []
     last_x: float | None = None
     last_t: float | None = None
-    for (rel_time, _), x in zip(grid, smoothed):
+    for i, ((rel_time, _), x) in enumerate(zip(grid, smoothed)):
         x = max(-1.0, min(1.0, x))
+        # Hard cut at a scene boundary: hold the outgoing framing right up to it.
+        if i in cut_indices and last_x is not None and abs(x - last_x) > 0.04:
+            keyframes.append(_kf_offset(max(0.0, rel_time - CUT_GAP_SECONDS), last_x, 0.0))
+            keyframes.append(_kf_offset(rel_time, x, 0.0))
+            last_x, last_t = x, rel_time
+            continue
         if (
             last_x is None
             or last_t is None
@@ -385,6 +417,43 @@ def _build_trajectory(
     if last_t is not None and grid[-1][0] - last_t > 0.01:
         keyframes.append(_kf_offset(grid[-1][0], max(-1.0, min(1.0, smoothed[-1])), 0.0))
     return _dedupe_keyframes(keyframes), stats
+
+
+def _scene_cut_times(
+    scene_boundaries: list[float] | None, start_time: float, end_time: float
+) -> list[float]:
+    """Source scene starts that fall inside the clip, as clip-relative seconds."""
+    if not scene_boundaries:
+        return []
+    duration = end_time - start_time
+    out: list[float] = []
+    for boundary in sorted(scene_boundaries):
+        rel = boundary - start_time
+        if _SCENE_EDGE_MARGIN < rel < duration - _SCENE_EDGE_MARGIN:
+            if not out or rel - out[-1] > _MIN_DWELL_SECONDS:
+                out.append(round(rel, 3))
+    return out
+
+
+def _grid_index(grid_times: list[float], target: float) -> int | None:
+    for i, t in enumerate(grid_times):
+        if t >= target:
+            return i
+    return None
+
+
+def _segment_offsets(values: list[float]) -> list[float]:
+    """One shot's worth of grid values -> the crop offset per grid point.
+
+    A near-still subject is locked to a fixed frame (median); a moving one is
+    pre-smoothed then eased with a spring that starts fresh at the shot."""
+    if not values:
+        return []
+    window = max(1, round(_PRESMOOTH_SECONDS / _GRID_SECONDS) | 1)
+    pre = _moving_average(values, window)
+    if max(pre) - min(pre) < _STATIONARY_SPREAD:
+        return [median(pre)] * len(values)
+    return _critically_damped(pre, _GRID_SECONDS, _FOLLOW_FREQ_HZ)
 
 
 def _resample_even(series: list[tuple[float, float]], step: float) -> list[tuple[float, float]]:

@@ -178,6 +178,36 @@ def test_trajectory_glides_smoothly_between_speakers():
     assert swing[8] > 0.3  # but well across within ~0.8 s
 
 
+def test_trajectory_hard_cuts_on_a_source_scene_boundary():
+    # Same setup, but the source cuts to a new shot at 3.0 s exactly when the
+    # speaker changes: the camera must jump, not pan across the cut.
+    samples = [_talk_sample(i * 0.2, "A", talker_left=True) for i in range(15)]
+    samples += [_talk_sample(3.0 + i * 0.2, "B", talker_left=False) for i in range(20)]
+
+    keyframes, _ = _build_trajectory(
+        samples, _aggregate_label_positions(samples), cut_times=[3.0]
+    )
+
+    cut = [
+        (a, b)
+        for a, b in zip(keyframes, keyframes[1:])
+        if b["time"] - a["time"] <= 0.09 and abs(b["offset"] - a["offset"]) > 0.4
+    ]
+    assert len(cut) == 1 and 2.8 < cut[0][1]["time"] < 3.15
+    # Steady on A right up to the boundary, steady on B right after — no drift.
+    assert _offset_at(keyframes, 2.7) < -0.3
+    assert abs(_offset_at(keyframes, 2.9) - _offset_at(keyframes, 2.5)) < 0.05
+    assert _offset_at(keyframes, 3.3) > 0.3
+
+
+def test_trajectory_locks_a_still_shot():
+    # One speaker, barely moving: the frame is fixed, not micro-panned.
+    samples = [_talk_sample(i * 0.2, "A", talker_left=True) for i in range(20)]
+    keyframes, _ = _build_trajectory(samples, _aggregate_label_positions(samples))
+    tail = [k["offset"] for k in keyframes if k["time"] > 1.5]
+    assert max(tail) - min(tail) < 0.01
+
+
 def test_trajectory_holds_still_while_one_speaker_talks():
     samples = [_talk_sample(i * 0.25, "A", talker_left=True) for i in range(16)]
     keyframes, _ = _build_trajectory(samples, _aggregate_label_positions(samples))
