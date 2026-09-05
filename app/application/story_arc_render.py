@@ -421,18 +421,24 @@ def build_crossfade_args(
         video_label = video_out
         audio_label = audio_out
         elapsed += durations[index] - fade
+    # xfade negotiates its own pixel format and can land on 4:4:4, which browsers
+    # and most players refuse to decode — the export then shows a black screen.
+    # Force 4:2:0 back on the way out.
+    filters.append(f"[{video_label}]format=yuv420p[vout]")
     args.extend(
         [
             "-filter_complex",
             ";".join(filters),
             "-map",
-            f"[{video_label}]",
+            "[vout]",
             "-map",
             f"[{audio_label}]",
             "-c:v",
             "h264_nvenc" if use_nvenc else "libx264",
             "-preset",
             "p5" if use_nvenc else "medium",
+            "-pix_fmt",
+            "yuv420p",
             "-b:v",
             preset.video_bitrate,
             "-c:a",

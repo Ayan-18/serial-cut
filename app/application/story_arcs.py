@@ -59,6 +59,19 @@ class StoryArcUpdate:
     narration: list[dict] | None = None
 
 
+# (max segments, max total seconds) the output format is allowed to reach.
+_FORMAT_LIMITS: dict[str, tuple[int, int]] = {
+    "single_short": (1, 60),
+    "shorts_series": (12, 600),
+    "story_video": (16, 600),
+    "long_video": (40, 7200),
+}
+
+
+def _format_limits(output_format: str) -> tuple[int, int]:
+    return _FORMAT_LIMITS.get(output_format, (40, 7200))
+
+
 @dataclass(frozen=True)
 class StoryArcSegmentUpdate:
     sort_order: int | None = None
@@ -82,10 +95,16 @@ def create_story_arc_plan(
     if not candidates:
         raise ValueError("Для сезонной арки нужны готовые кандидаты. Сначала выполните поиск кандидатов по сериям сезона.")
 
+    cap_segments, cap_duration = _format_limits(request.output_format)
+    request = replace(
+        request,
+        max_segments=max(1, min(request.max_segments, cap_segments)),
+        max_duration_seconds=max(15, min(request.max_duration_seconds, cap_duration)),
+    )
     selected = _select_arc_items(
         candidates,
-        max_segments=max(1, request.max_segments),
-        max_duration_seconds=max(15, request.max_duration_seconds),
+        max_segments=request.max_segments,
+        max_duration_seconds=request.max_duration_seconds,
     )
     if settings is not None and settings.llm_adapter != "stub":
         selected = _llm_story_order(settings, season, request, candidates, selected)
@@ -303,6 +322,7 @@ def rebuild_story_arc_plan(
     if season is None:
         raise ValueError("Сезон не найден")
     constraints = dict((arc.plan_json or {}).get("constraints") or {})
+    cap_segments, cap_duration = _format_limits(arc.output_format)
     request = StoryArcPlanRequest(
         season_id=arc.season_id,
         title=arc.title,
@@ -310,10 +330,13 @@ def rebuild_story_arc_plan(
         arc_type=arc.arc_type,
         output_format=arc.output_format,
         target_character_id=arc.target_character_id,
-        max_segments=max(1, int(constraints.get("max_segments") or len(arc.segments))),
+        max_segments=max(1, min(cap_segments, int(constraints.get("max_segments") or len(arc.segments)))),
         max_duration_seconds=max(
             15,
-            int(constraints.get("max_duration_seconds") or round(arc.total_duration_seconds)),
+            min(
+                cap_duration,
+                int(constraints.get("max_duration_seconds") or round(arc.total_duration_seconds)),
+            ),
         ),
     )
     character = _target_character(session, request.target_character_id, arc.season_id)
