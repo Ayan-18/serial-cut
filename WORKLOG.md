@@ -1,5 +1,46 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Auto-follow cuts to the speaker instead of drifting
+
+Auto-follow crop drifted slowly toward the biggest face and lagged speaker changes by seconds.
+Rebuilt `media/face_tracking.py` around the diarisation we already have:
+
+- **Denser sampling** (~2.6/s, was ~1/s) with a tight probe cluster right after every speech-segment
+  start, so a turn is caught within ~0.12 s.
+- **`_CentroidTracker`** gives each face a stable id across samples — the trajectory keys on *which
+  person*, not the current screen bucket, so one moving face no longer triggers cuts.
+- **Per-clip label→position vote** (`_aggregate_label_positions`): aggregate the lip-motion winner
+  over all of a diarised label's segments to decide where that speaker sits; far steadier than any
+  single frame, and the backbone even with zero bound characters (the common case).
+- **Run-based trajectory** (`_build_trajectory`): group samples by owner, fold runs shorter than
+  `_MIN_DWELL_SECONDS` (0.5 s) into the surrounding shot (kills backchannel yank), hard-cut at run
+  starts (hold-then-jump keyframe pair `CUT_GAP_SECONDS` apart), gentle ease within a run.
+- `media/rendering.py::smooth_crop_keyframes` clamps pan speed only for gradual moves; a
+  close-spaced keyframe pair is a deliberate cut and passes through.
+- Priority per frame: confirmed character → diarised label position → this-frame lip winner (must
+  beat the runner-up) → hold on the tracked face → biggest face.
+- The denser sampling produced 200+ keyframes; FFmpeg builds one nested `if()` per interval into
+  the crop x-expression and its parser fell over ("Failed to configure input pad on Parsed_crop_1",
+  `-22`). `_decimate_keyframes` thins the smooth stretches (keeps every cut), and
+  `rendering._cap_keyframes` is a hard 64-point backstop for any stored trajectory. Verified: a
+  real 6 s auto-follow render of candidate 13 now succeeds (was `Conversion failed!`).
+
+On the OFFSIDE episode: candidate 13 went from a 0-cut slow drift to 8 speaker cuts over ~40 s
+(`held` now the dominant state, `largest` ~0); candidate 16 → 15 cuts over ~55 s. Full render of
+candidate 13 through the queue completed (54.9 MB MP4 + cover + subs).
+
+Tests: `tests/test_face_tracking.py` rewritten (centroid tracker, label aggregation, hard cut on
+speaker change, steady hold on one speaker, moving-face follow without cuts);
+`test_stage4.py` gains a keyframe-cap case. `pytest` 220 passed; ruff + mypy clean.
+
+## 2026-09-05 - Short atomic temp-file names (Windows MAX_PATH)
+
+`atomic.temp_sibling` built `.<full final name>.<32 hex>.tmp`, adding ~37 chars to an already long
+export path — the final `.ass` fit under 260 but its temp sibling did not, so subtitled renders
+died with `[Errno 2] No such file or directory: '...ass.<hex>.tmp'`. The temp name is now
+`.<16 hex>.tmp`, independent of the final name (137 chars vs 289 for the OFFSIDE clip). Callers
+that need an extension still add it with `.with_suffix()`. Tests in `tests/test_atomic.py`.
+
 ## 2026-09-04 - Model-download progress in the panel
 
 - `model_install.py`: `_download_verified`/`_download_silero` now take an `on_progress(delta,

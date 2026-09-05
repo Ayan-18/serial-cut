@@ -127,6 +127,21 @@ def test_crop_keyframes_are_smoothed_for_preview_and_render():
     assert slow_move[1]["offset"] == 0.5
 
 
+def test_smooth_crop_keyframes_caps_the_list_for_ffmpeg():
+    # A pathological trajectory (dense samples + many cuts) must not produce a
+    # crop x-expression long enough to break FFmpeg's parser.
+    dense = []
+    for i in range(400):
+        t = i * 0.15
+        dense.append({"time": t, "offset": -0.5})
+        dense.append({"time": t + 0.05, "offset": 0.5})  # a "cut" pair every step
+
+    capped = smooth_crop_keyframes(dense)
+
+    assert len(capped) <= 70
+    assert [p["time"] for p in capped] == sorted(p["time"] for p in capped)
+
+
 def test_render_clip_writes_metadata_and_uses_temp_output(tmp_path: Path):
     def fake_runner(args: list[str], timeout: int) -> ProcessResult:
         output = Path(args[-1])
