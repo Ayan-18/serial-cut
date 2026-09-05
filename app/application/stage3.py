@@ -131,7 +131,7 @@ def run_stage3_candidate_analysis(
                 scores_json=candidate.scores.model_dump(),
                 rationale=candidate.standalone_reason,
                 problems_json=candidate.possible_problems,
-                crop_mode="blurred-background",
+                crop_mode="center-crop",
                 status="new",
                 story_order=index if episode.candidate_mode == "story" else None,
                 story_role=story_role,

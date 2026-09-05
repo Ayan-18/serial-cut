@@ -292,7 +292,8 @@ def test_crop_offset_and_scale_are_in_ffmpeg_filter(tmp_path: Path):
     )
     video_filter = args[args.index("-vf") + 1]
 
-    assert "scale=-2:2400" in video_filter
+    assert "[fg]scale=1350:1600:force_original_aspect_ratio=increase" in video_filter
+    assert "crop=1080:1280" in video_filter
     assert "1.0000" in video_filter
 
 

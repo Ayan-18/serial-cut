@@ -1,5 +1,28 @@
 # SerialCuts Worklog
 
+## 2026-09-05 - Balanced vertical framing for centre and face modes
+
+- Replaced full-height centre/face crops with a large fixed foreground window: 1080x1280
+  centred on the 1080x1920 canvas, dim blurred background above/below. At scale 1, landscape
+  16:9 footage reveals 1.5x more source width. Zoom crops inside the window without filling
+  the borders; portrait inputs are also handled. Speaker trajectories remain unchanged.
+- UI exposes only «Центр» and «По лицу». New candidates and detached StoryArc segments default
+  to centre; legacy `blurred-background` remains accepted as a centre alias, with no bulk DB
+  rewrite or migration. API field descriptions and generated OpenAPI document the alias.
+- Extracted `FramedPreview` with the same window geometry and offset/zoom positioning as
+  FFmpeg. Background playback follows play/pause/seek/rate. Fixed the preview jumping to the
+  first tracking keyframe after the last point and removed CSS easing across speaker cuts.
+- Layout version/fraction participate in the shared candidate/StoryArc render fingerprint,
+  preventing reuse of an old full-screen export. Existing exports and original media are
+  untouched. Restart the backend and reload the page; re-render to update existing clips.
+- Verification: pytest **225 passed**, coverage **77.33%**; ruff clean; mypy clean (111 files);
+  frontend build and Vitest **12 passed**; migration check clean; OpenAPI regenerated.
+  Five real-FFmpeg cases cover wider centre/legacy framing, tracking cuts, zoom, and portrait
+  sources. Checked the local episode preview and two-option selector in the browser.
+- System check: Python/venv, FFmpeg/ffprobe, Node, NVIDIA, llama-server all present. Existing
+  Windows long-path warning remains (not changed); use short export names/depth.
+- No GitHub push requested for this change.
+
 ## 2026-09-05 - Auto-follow: locked shots, centre when unsure
 
 Follow-up to the speaker-cut rewrite. The camera still eased/drifted inside a shot; now each

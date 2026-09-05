@@ -174,7 +174,7 @@ def test_auto_crop_endpoint_returns_422_when_face_models_are_missing(api_client,
     assert response.status_code == 422
     assert "YuNet/SFace" in response.json()["detail"]
     # The candidate crop mode must be left untouched.
-    assert session.get(ClipCandidate, candidate.id).crop_mode == "blurred-background"
+    assert session.get(ClipCandidate, candidate.id).crop_mode == "center-crop"
 
 
 def test_recognize_speaker_clusters_returns_fallback_model_name_with_no_profiles(tmp_path: Path):

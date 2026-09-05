@@ -77,7 +77,11 @@ Audio/proxy не пересоздаются, если уже существую�
 - `analysis/validation.py` корректирует границы по словам/сценам и удаляет сильно пересекающиеся кандидаты.
 - `review.py` сохраняет approve/reject и не плодит одинаковые решения.
 - `subtitles.py` форматирует русские SRT/ASS для мобильного просмотра.
-- `rendering.py` строит 1080x1920 FFmpeg-команды для `center-crop`, `auto-follow` и `blurred-background`.
+- `rendering.py` строит FFmpeg-композицию 1080x1920: резкое окно 1080x1280 по центру и
+  затемнённый размытый фон. `center-crop` и `auto-follow` различаются только горизонтальным
+  положением окна в исходнике; legacy `blurred-background` — alias для центра. Zoom ограничен
+  окном, та же геометрия используется в `FramedPreview` и StoryArc. Версия компоновки и доля
+  высоты входят в общий render fingerprint, поэтому старый MP4 не подменяет новый результат.
 - `stage4.py` создаёт MP4, subtitle artifact, cover и JSON metadata, затем сохраняет `Export`.
 - `bot/callbacks.py` ставит одобрение/рендер выбранного кандидата в общую очередь (`enqueue`)
   и хранит idempotency key в `AppSetting`, поэтому повторное нажатие кнопки не создаёт дубль.

@@ -164,7 +164,7 @@ class ClipCandidate(TimestampMixin, Base):
     scores_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     problems_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    crop_mode: Mapped[str] = mapped_column(String(64), default="blurred-background", nullable=False)
+    crop_mode: Mapped[str] = mapped_column(String(64), default="center-crop", nullable=False)
     crop_offset_x: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     crop_scale: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     crop_keyframes_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)

@@ -110,6 +110,8 @@ def test_preview_preset_uses_fast_vertical_dimensions(tmp_path: Path):
 
     video_filter = args[args.index("-vf") + 1]
     assert "crop=540:960" in video_filter
+    assert "crop=540:640" in video_filter
+    assert "[bg][fit]overlay=0:'(H-h)/2'" in video_filter
     assert "1800k" in args
 
 
@@ -317,3 +319,11 @@ def test_review_and_render_are_idempotent(session, tmp_path: Path, monkeypatch):
     exports = session.scalars(select(Export).order_by(Export.version)).all()
     assert [item.version for item in exports] == [1, 2]
     assert exports[0].render_fingerprint == exports[1].render_fingerprint
+
+    # A new composition must render a new immutable export even if the user's
+    # settings and candidate revision have not changed.
+    monkeypatch.setattr("app.application.render_fingerprint.CROP_LAYOUT_VERSION", "next-layout")
+    changed_layout = render_candidate(session, candidate.id, Settings(output_dir=tmp_path / "out"))
+    assert changed_layout.export_id not in {first_render.export_id, forced_render.export_id}
+    assert Path(first_render.output_path).exists()
+    assert render_calls == 3

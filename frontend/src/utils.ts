@@ -12,8 +12,30 @@ export function voiceLabel(id: string | null | undefined) { return SILERO_VOICES
 export function splitLines(value: string) { return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); }
 export function fileDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Пустой файл")); reader.onerror = () => reject(reader.error ?? new Error("Ошибка чтения")); reader.readAsDataURL(file); }); }
 export function identityMethodLabel(method: string) { const labels: Record<string, string> = { manual: "подтверждено вручную", face: "лицо", "face+lip": "лицо + губы", voice: "голос", "face+lip+voice": "лицо + губы + голос" }; return labels[method] ?? method; }
-export function editFromCandidate(candidate: Candidate): CandidateEdit { return { start: candidate.start_time.toFixed(3), end: candidate.end_time.toFixed(3), crop: candidate.crop_mode, offset: candidate.crop_offset_x, scale: candidate.crop_scale }; }
-export function previewCropOffset(candidate: Candidate, edit: CandidateEdit, absoluteTime: number) { const points = candidate.crop_keyframes_json ?? []; if (edit.crop !== "auto-follow" || !points.length) return edit.offset; const time = Math.max(0, absoluteTime - candidate.start_time); const rightIndex = points.findIndex((item) => item.time >= time); if (rightIndex <= 0) return points[0].offset; if (rightIndex < 0) return points.at(-1)?.offset ?? edit.offset; const left = points[rightIndex - 1]; const right = points[rightIndex]; const ratio = (time - left.time) / Math.max(0.001, right.time - left.time); return left.offset + (right.offset - left.offset) * ratio; }
+export function editFromCandidate(candidate: Candidate): CandidateEdit { return { start: candidate.start_time.toFixed(3), end: candidate.end_time.toFixed(3), crop: candidate.crop_mode === "auto-follow" ? "auto-follow" : "center-crop", offset: candidate.crop_offset_x, scale: candidate.crop_scale }; }
+export function previewCropOffset(candidate: Candidate, edit: CandidateEdit, absoluteTime: number) {
+  const points = candidate.crop_keyframes_json ?? [];
+  if (edit.crop !== "auto-follow" || !points.length) return edit.offset;
+  const time = Math.max(0, absoluteTime - candidate.start_time);
+  const rightIndex = points.findIndex((item) => item.time >= time);
+  if (rightIndex < 0) return points.at(-1)?.offset ?? edit.offset;
+  if (rightIndex === 0) return points[0].offset;
+  const left = points[rightIndex - 1];
+  const right = points[rightIndex];
+  const ratio = (time - left.time) / Math.max(0.001, right.time - left.time);
+  return left.offset + (right.offset - left.offset) * ratio;
+}
+
+// Match FFmpeg's (iw-ow)*(offset+1)/2 crop, including zoom around the selected
+// horizontal position. Zoom stays clipped inside the fixed foreground window.
+export function previewForegroundStyle(offset: number, scale: number) {
+  const position = `${50 + Math.max(-1, Math.min(1, offset)) * 50}% 50%`;
+  return {
+    objectPosition: position,
+    transformOrigin: position,
+    transform: `scale(${Math.max(1, Math.min(2, scale))})`,
+  };
+}
 export function formatBytes(value: number) { if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`; if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value} B`; }
 export function formatEta(value: number | null | undefined) { if (value == null) return "—"; if (value < 60) return `${Math.round(value)} сек`; return `${Math.round(value / 60)} мин`; }
 export function formatElapsed(value: number) { const hours = Math.floor(value / 3600); const minutes = Math.floor((value % 3600) / 60); const seconds = value % 60; const base = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`; return hours > 0 ? `${String(hours).padStart(2, "0")}:${base}` : base; }

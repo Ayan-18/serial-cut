@@ -5,10 +5,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.media.rendering import CROP_LAYOUT_VERSION, FOREGROUND_HEIGHT_FRACTION
+
 
 def canonical_render_fingerprint(payload: dict[str, Any]) -> str:
     encoded = json.dumps(
-        payload,
+        {**payload, "crop_layout": CROP_LAYOUT_VERSION, "foreground_height_fraction": FOREGROUND_HEIGHT_FRACTION},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

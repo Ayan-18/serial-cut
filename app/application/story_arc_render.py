@@ -143,7 +143,7 @@ def render_story_arc(
         episode = session.get(Episode, segment.episode_id)
         if episode is None:
             raise ValueError(f"Серия сегмента {segment.id} не найдена")
-        crop_mode = candidate.crop_mode if candidate else "blurred-background"
+        crop_mode = candidate.crop_mode if candidate else "center-crop"
         crop_offset_x = candidate.crop_offset_x if candidate else 0.0
         crop_scale = candidate.crop_scale if candidate else 1.0
         crop_keyframes = candidate.crop_keyframes_json if candidate else []
@@ -579,7 +579,7 @@ def _story_arc_render_fingerprint(
                 "candidate_id": segment.candidate_id,
                 "candidate_revision": candidate.edit_revision if candidate else segment.candidate_revision,
                 "crop": {
-                    "mode": candidate.crop_mode if candidate else "blurred-background",
+                    "mode": candidate.crop_mode if candidate else "center-crop",
                     "offset_x": candidate.crop_offset_x if candidate else 0.0,
                     "scale": candidate.crop_scale if candidate else 1.0,
                     "keyframes": candidate.crop_keyframes_json if candidate else [],

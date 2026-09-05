@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { editFromCandidate, formatElapsed, previewCropOffset, splitLines, stageLabel, statusLabel } from "./utils";
+import { editFromCandidate, formatElapsed, previewCropOffset, previewForegroundStyle, splitLines, stageLabel, statusLabel } from "./utils";
 import type { Candidate } from "./types";
 
 const candidate: Candidate = {
@@ -25,5 +25,20 @@ describe("frontend utilities", () => {
     const edit = editFromCandidate(candidate);
     expect(previewCropOffset(candidate, edit, 15)).toBeCloseTo(0);
     expect(previewCropOffset(candidate, { ...edit, crop: "center-crop" }, 15)).toBe(0);
+    expect(previewCropOffset(candidate, edit, 30)).toBe(0.5);
+  });
+
+  it("opens legacy blurred candidates with the centre choice", () => {
+    expect(editFromCandidate({ ...candidate, crop_mode: "blurred-background" }).crop).toBe("center-crop");
+  });
+
+  it("matches FFmpeg crop position and zoom at both frame edges", () => {
+    expect(previewForegroundStyle(-1, 1)).toEqual({
+      objectPosition: "0% 50%", transformOrigin: "0% 50%", transform: "scale(1)",
+    });
+    expect(previewForegroundStyle(1, 1.25)).toEqual({
+      objectPosition: "100% 50%", transformOrigin: "100% 50%", transform: "scale(1.25)",
+    });
+    expect(previewForegroundStyle(0, 1).objectPosition).toBe("50% 50%");
   });
 });

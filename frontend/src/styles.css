@@ -932,32 +932,33 @@ button.danger {
   left: 0;
   position: absolute;
   top: 0;
-  transition: object-position 160ms ease, transform 160ms ease;
   width: 100%;
 }
 
-.preview-frame.center-crop .preview-foreground,
-.preview-frame.auto-follow .preview-foreground {
-  object-fit: cover;
-}
-
-.preview-frame.blurred-background .preview-foreground {
-  object-fit: contain;
+.preview-window {
+  /* Same 1080x1280 foreground as FFmpeg on a 1080x1920 canvas. */
+  height: 66.6666667%;
+  left: 0;
+  overflow: hidden;
+  position: absolute;
+  top: 16.6666667%;
+  width: 100%;
+  z-index: 1;
 }
 
 .preview-background {
-  display: none;
   filter: blur(24px) brightness(0.65);
   object-fit: cover;
-  transform: scale(1.14);
-}
-
-.preview-frame.blurred-background .preview-background {
-  display: block;
 }
 
 .preview-foreground {
-  z-index: 1;
+  object-fit: cover;
+}
+
+.framing-hint {
+  color: #667085;
+  font-size: 13px;
+  margin: 0 0 12px;
 }
 
 .subtitle-preview {

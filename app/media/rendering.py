@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 CropMode = Literal["auto-follow", "center-crop", "blurred-background"]
+# Also used by the render fingerprint; changing framing must not reuse an old MP4.
+CROP_LAYOUT_VERSION = "balanced-v1"
+FOREGROUND_HEIGHT_FRACTION = 2 / 3
 
 
 @dataclass(frozen=True)
@@ -357,27 +360,26 @@ def _crop_filter(
     offset_x = max(-1.0, min(1.0, offset_x))
     scale = max(1.0, min(2.0, scale))
     keyframes = smooth_crop_keyframes(keyframes or [])
-    if crop_mode == "center-crop" or crop_mode == "auto-follow":
-        target_height = round(height * scale)
-        x_ratio = (offset_x + 1.0) / 2.0
-        ratio_expression = (
-            _tracking_ratio_expression(keyframes)
-            if crop_mode == "auto-follow" and keyframes
-            else f"{x_ratio:.4f}"
-        )
-        return (
-            f"scale=-2:{target_height},"
-            f"crop={width}:{height}:x='max(0,min(iw-ow,(iw-ow)*({ratio_expression})))':y='(ih-oh)/2'"
-        )
-    foreground_width = round(width * scale)
-    foreground_height = round(height * scale)
+    # A large, sharp window in the middle of the vertical canvas: at 1080x1920
+    # it is 1080x1280, revealing 1.5x more of a landscape source than full-height
+    # cropping. Zoom changes the crop inside that window, never its outer size.
+    # The old blurred-background value remains a readable alias for centre mode.
+    foreground_height = max(2, round(height * FOREGROUND_HEIGHT_FRACTION / 2) * 2)
+    scaled_width = max(2, round(width * scale / 2) * 2)
+    scaled_height = max(2, round(foreground_height * scale / 2) * 2)
     x_ratio = (offset_x + 1.0) / 2.0
+    ratio_expression = (
+        _tracking_ratio_expression(keyframes)
+        if crop_mode == "auto-follow" and keyframes
+        else f"{x_ratio:.4f}"
+    )
     return (
         "split=2[base][fg];"
         f"[base]scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},gblur=sigma=28[bg];"
-        f"[fg]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease[fit];"
-        f"[bg][fit]overlay='max(0,min(W-w,(W-w)*{x_ratio:.4f}))':'(H-h)/2'"
+        f"crop={width}:{height},gblur=sigma=28,lutrgb=r='val*0.65':g='val*0.65':b='val*0.65'[bg];"
+        f"[fg]scale={scaled_width}:{scaled_height}:force_original_aspect_ratio=increase:force_divisible_by=2,"
+        f"crop={width}:{foreground_height}:x='max(0,min(iw-ow,(iw-ow)*({ratio_expression})))':y='(ih-oh)/2'[fit];"
+        "[bg][fit]overlay=0:'(H-h)/2',setsar=1"
     )
 
 

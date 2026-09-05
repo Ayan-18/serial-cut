@@ -133,7 +133,7 @@ def _candidate_recommendations(
     if any("похож" in problem.casefold() for problem in problems):
         recommendations.append("Сравните с соседними кандидатами и оставьте более сильный дубль.")
     if candidate.crop_mode == "center-crop":
-        recommendations.append("Для диалога стоит попробовать auto-follow или фон с размытием.")
+        recommendations.append("Для диалога попробуйте кадрирование «По лицу».")
     return _unique(recommendations[:6])
 
 
