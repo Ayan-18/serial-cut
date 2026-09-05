@@ -3,6 +3,7 @@ import { History, Undo2 } from "lucide-react";
 
 import { api } from "../api";
 import type { CandidateSnapshot } from "../types";
+import { parseServerDate } from "../utils";
 
 type CandidateHistoryProps = {
   candidateId: number;
@@ -61,7 +62,7 @@ export function CandidateHistory({ candidateId, editRevision, onRestored }: Cand
           <option value="">выберите точку отката</option>
           {snapshots.map((snapshot) => (
             <option key={snapshot.id} value={snapshot.id}>
-              {new Date(snapshot.created_at).toLocaleTimeString()} · {KIND_LABEL[snapshot.kind] ?? snapshot.kind} ·{" "}
+              {parseServerDate(snapshot.created_at).toLocaleTimeString()} · {KIND_LABEL[snapshot.kind] ?? snapshot.kind} ·{" "}
               {snapshot.start_time.toFixed(1)}–{snapshot.end_time.toFixed(1)} · {snapshot.subtitle_rows} стр.
             </option>
           ))}

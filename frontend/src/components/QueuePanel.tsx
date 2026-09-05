@@ -1,4 +1,4 @@
-import { Pause, Play, Server } from "lucide-react";
+import { Pause, Play, Server, SkipForward } from "lucide-react";
 import type { JobStage, QueueData } from "../types";
 import { elapsedFrom, formatEta, jobLabel, stageLabel, statusLabel } from "../utils";
 
@@ -20,9 +20,10 @@ export function QueuePanel({
   return <div className="panel">
     <div className="panel-title"><Server size={19} /><h2>Очередь</h2><span className={queue?.snapshot.paused ? "badge warn" : "badge ok"}>{queue?.snapshot.paused ? "пауза" : "авто"}</span></div>
     <div className="queue-actions">
-      <button className="icon-button" title="Выполнить следующую сейчас" onClick={onRunNext}><Play size={18} /></button>
-      <button className="icon-button secondary" title="Пауза" onClick={() => onSetPaused(true)}><Pause size={18} /></button>
-      <button className="icon-button" title="Продолжить" onClick={() => onSetPaused(false)}><Play size={18} /></button>
+      <button title="Взять следующую задачу из очереди прямо сейчас, не дожидаясь фонового воркера" onClick={onRunNext}><SkipForward size={16} /> Следующая</button>
+      {queue?.snapshot.paused
+        ? <button title="Возобновить автоматическую обработку очереди" onClick={() => onSetPaused(false)}><Play size={16} /> Продолжить</button>
+        : <button className="secondary" title="Остановить автоматическую обработку — текущая задача доработает до конца" onClick={() => onSetPaused(true)}><Pause size={16} /> Пауза</button>}
     </div>
     <div className="queue-stats"><span><strong>{queue?.snapshot.queued ?? 0}</strong> ожидают</span><span><strong>{queue?.snapshot.running ?? 0}</strong> работают</span><span><strong>{queue?.snapshot.failed ?? 0}</strong> ошибок</span><span><strong>{formatEta(queue?.snapshot.eta_seconds)}</strong> ETA</span></div>
     <div className="job-list">{(queue?.items ?? []).slice(0, 6).map((job) => <article className="job" key={job.id}>

@@ -289,6 +289,37 @@ def test_stage3_smoke_generates_outline_and_candidates(session, tmp_path):
     assert session.scalar(select(ClipCandidate).where(ClipCandidate.episode_id == episode_id)) is not None
 
 
+def test_stage3_replaces_candidates_that_have_edits_and_exports(session, tmp_path):
+    from app.models.entities import CandidateEditSnapshot, Export
+
+    season = tmp_path / "Сезон"
+    season.mkdir()
+    (season / "episode.mkv").write_bytes(b"video")
+    episode_id = import_season(session, season).episode_ids[0]
+    segment = TranscriptSegment(episode_id=episode_id, start_time=0, end_time=39, text="Сцена.")
+    session.add_all([segment, Scene(episode_id=episode_id, start_time=0, end_time=40)])
+    session.flush()
+
+    settings = Settings(asr_adapter="stub", llm_adapter="stub")
+    run_stage3_candidate_analysis(session, episode_id, settings)
+    session.commit()
+    candidate = session.scalar(select(ClipCandidate).where(ClipCandidate.episode_id == episode_id))
+    assert candidate is not None
+    # The user edited and rendered this candidate: a snapshot + an export now
+    # point at it (both FK -> clip_candidates.id).
+    session.add(CandidateEditSnapshot(candidate_id=candidate.id, edit_revision=1, kind="geometry", label="x", state_json={}))
+    session.add(Export(candidate_id=candidate.id, output_path="out.mp4"))
+    session.commit()
+
+    # Re-running stage 3 must not trip the FK constraint on those rows.
+    run_stage3_candidate_analysis(session, episode_id, settings)
+    session.commit()
+
+    assert session.scalar(select(CandidateEditSnapshot).where(CandidateEditSnapshot.candidate_id == candidate.id)) is None
+    assert session.scalar(select(Export).where(Export.candidate_id == candidate.id)) is None
+    assert session.scalar(select(ClipCandidate).where(ClipCandidate.episode_id == episode_id)) is not None
+
+
 def test_story_mode_uses_context_and_numbers_candidates(session, tmp_path):
     season_dir = tmp_path / "story-season"
     season_dir.mkdir()

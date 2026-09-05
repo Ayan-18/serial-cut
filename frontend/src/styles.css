@@ -276,6 +276,12 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.queue-actions button {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
 .settings-sections {
   display: grid;
   gap: 18px;

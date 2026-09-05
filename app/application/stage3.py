@@ -15,6 +15,7 @@ from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessCancelledError
 from app.application.derived_files import delete_derived_artifacts, delete_derived_tree
 from app.models.entities import (
+    CandidateEditSnapshot,
     CandidateSubtitle,
     ClipCandidate,
     Episode,
@@ -173,6 +174,11 @@ def run_stage3_candidate_analysis(
         session.flush()
         session.execute(
             delete(CandidateSubtitle).where(CandidateSubtitle.candidate_id.in_(previous_candidate_ids))
+        )
+        session.execute(
+            delete(CandidateEditSnapshot).where(
+                CandidateEditSnapshot.candidate_id.in_(previous_candidate_ids)
+            )
         )
         session.execute(
             delete(ReviewDecision).where(ReviewDecision.candidate_id.in_(previous_candidate_ids))
