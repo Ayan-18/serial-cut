@@ -145,6 +145,22 @@ def test_crossfade_uses_video_and_audio_transitions(tmp_path):
     assert "offset=9.750" in filters
 
 
+def test_crossfade_forces_yuv420p_so_players_can_decode_it(tmp_path):
+    # xfade negotiates its own pixel format and can settle on 4:4:4, which
+    # browsers and most players refuse — the export opened as a black screen.
+    args = build_crossfade_args(
+        "ffmpeg",
+        [tmp_path / "one.mp4", tmp_path / "two.mp4"],
+        [10, 12],
+        tmp_path / "out.mp4",
+    )
+    filters = args[args.index("-filter_complex") + 1]
+    assert "format=yuv420p" in filters
+    assert filters.rstrip().endswith("[vout]")
+    assert args[args.index("-map") + 1] == "[vout]"
+    assert args[args.index("-pix_fmt") + 1] == "yuv420p"
+
+
 def test_crossfade_respects_nvenc_and_render_preset(tmp_path):
     args = build_crossfade_args(
         "ffmpeg",

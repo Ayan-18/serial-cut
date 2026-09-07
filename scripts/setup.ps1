@@ -11,7 +11,7 @@ Write-Host "SerialCuts setup: creating local virtual environment"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & .\.venv\Scripts\python.exe -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+& .\.venv\Scripts\python.exe -m pip install -e ".[dev,mcp]"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & .\.venv\Scripts\python.exe -m alembic upgrade head
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -130,7 +130,7 @@ def test_content_style_failure_is_silent(monkeypatch):
 
     monkeypatch.setattr("app.analysis.llm.httpx.post", boom)
     analyzer = LlamaCppHttpAnalyzer("http://127.0.0.1:8081", "Qwen3-4B")
-    assert analyzer._content_style("[0.0-5.0] Привет") == ""
+    assert analyzer.content_style("[0.0-5.0] Привет") == ""
 
 
 def test_llama_cpp_analyzer_builds_outline_without_http():
@@ -287,6 +287,36 @@ def test_stage3_smoke_generates_outline_and_candidates(session, tmp_path):
 
     assert result.candidates == 1
     assert session.scalar(select(ClipCandidate).where(ClipCandidate.episode_id == episode_id)) is not None
+
+
+def test_stage3_classifies_content_style_once_and_caches_it(session, tmp_path):
+    from app.analysis.llm import StubEpisodeAnalyzer
+    from app.models.entities import AppSetting
+
+    season = tmp_path / "Сезон"
+    season.mkdir()
+    (season / "episode.mkv").write_bytes(b"video")
+    episode_id = import_season(session, season).episode_ids[0]
+    segment = TranscriptSegment(episode_id=episode_id, start_time=0, end_time=39, text="Сцена.")
+    session.add_all([segment, Scene(episode_id=episode_id, start_time=0, end_time=40)])
+    session.flush()
+    episode = session.get(Episode, episode_id)
+
+    class _CountingAnalyzer(StubEpisodeAnalyzer):
+        calls = 0
+
+        def content_style(self, transcript: str) -> str:
+            _CountingAnalyzer.calls += 1
+            return "Тип видео: интервью. Что важно: острые ответы."
+
+    settings = Settings(asr_adapter="stub", llm_adapter="stub")
+    run_stage3_candidate_analysis(session, episode_id, settings, analyzer=_CountingAnalyzer())
+    run_stage3_candidate_analysis(session, episode_id, settings, analyzer=_CountingAnalyzer())
+    session.commit()
+
+    assert _CountingAnalyzer.calls == 1  # second run reads the cached value
+    cached = session.get(AppSetting, f"content_style:{episode.fingerprint}")
+    assert cached is not None and "интервью" in cached.value_json["style"]
 
 
 def test_stage3_replaces_candidates_that_have_edits_and_exports(session, tmp_path):

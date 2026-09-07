@@ -72,7 +72,9 @@ Audio/proxy не пересоздаются, если уже существую�
 
 ## Stage 3-5
 
-- `stage3.py` строит outline, вызывает analyzer и сохраняет кандидатов.
+- `stage3.py` строит outline, вызывает analyzer и сохраняет кандидатов. Классификация типа
+  контента (`analyzer.content_style`) выполняется один раз на серию и кэшируется в `AppSetting`
+  под ключом `content_style:<fingerprint>`, затем подмешивается в каждый chunk-промпт Qwen.
 - `analysis/schemas.py` задаёт строгий JSON-контракт LLM.
 - `analysis/validation.py` корректирует границы по словам/сценам и удаляет сильно пересекающиеся кандидаты.
 - `review.py` сохраняет approve/reject и не плодит одинаковые решения.

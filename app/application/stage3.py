@@ -15,6 +15,7 @@ from app.infrastructure.config import Settings
 from app.infrastructure.processes import ProcessCancelledError
 from app.application.derived_files import delete_derived_artifacts, delete_derived_tree
 from app.models.entities import (
+    AppSetting,
     CandidateEditSnapshot,
     CandidateSubtitle,
     ClipCandidate,
@@ -94,7 +95,8 @@ def run_stage3_candidate_analysis(
     session.commit()
 
     _report(progress_callback, 0.28, "Поиск сюжетных кандидатов")
-    generated = analyzer.candidates(text, scenes, context, outline).candidates
+    style_hint = _episode_content_style(session, episode, analyzer, text)
+    generated = analyzer.candidates(text, scenes, context, outline, style_hint=style_hint).candidates
     _raise_if_cancelled(cancel_check)
     adjusted = []
     for index, candidate in enumerate(generated, start=1):
@@ -199,6 +201,25 @@ def run_stage3_candidate_analysis(
         outline_created=True,
         candidates=len(ordered_candidates),
     )
+
+
+def _episode_content_style(
+    session: Session, episode: Episode, analyzer: EpisodeAnalyzer, transcript: str
+) -> str:
+    """Content-type classification, cached per episode so it costs one LLM call.
+
+    The genre of an episode file does not change between re-runs; only a re-import
+    (new fingerprint) invalidates it. An empty result is cached too, so a model
+    that was offline once is not retried on every pass.
+    """
+    key = f"content_style:{episode.fingerprint}"
+    cached = session.get(AppSetting, key)
+    if cached is not None:
+        return str((cached.value_json or {}).get("style", ""))
+    style = analyzer.content_style(transcript)
+    session.add(AppSetting(key=key, value_json={"style": style}))
+    session.flush()
+    return style
 
 
 def _build_analyzer(

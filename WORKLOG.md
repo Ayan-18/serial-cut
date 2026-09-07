@@ -1,5 +1,19 @@
 # SerialCuts Worklog
 
+## 2026-09-07 - Hygiene: crossfade pix_fmt test, content-style cache, mcp extra
+
+- `build_crossfade_args` forces `yuv420p` (fix `fa8e7be`) but had no regression test —
+  `test_crossfade_forces_yuv420p_so_players_can_decode_it` now pins `format=yuv420p` in the
+  filtergraph, the `[vout]` map and the `-pix_fmt` flag.
+- `_content_style` was one uncached Qwen call on *every* stage-3 run (and every re-run of the
+  same episode). Renamed to the public `content_style`, added to the `EpisodeAnalyzer` protocol
+  and the stub; `candidates()` takes an optional `style_hint`. `stage3._episode_content_style`
+  classifies once and caches it in `AppSetting` under `content_style:<fingerprint>` (empty
+  result cached too, so an offline model is not retried each pass). A re-import (new
+  fingerprint) invalidates it.
+- `mcp>=1.2,<2` was listed in both the `dev` and `mcp` extras. Kept it only in `mcp`; CI and
+  `bootstrap.ps1` / `setup.ps1` now install `.[dev,mcp]`.
+
 ## 2026-09-05 - Transcription tuning (WhisperX evaluated, not adopted)
 
 WhisperX would add wav2vec2 forced alignment + pyannote diarization, but pyannote's models are
@@ -1046,14 +1060,25 @@ face-tracking + silent-degradation hardening.
 
 Still open:
 
-- Recreate the local `.venv` on Python 3.11 and re-pin dev extras that live only in `dependencies`.
-- Split `useSerialCutsController.ts` (850+ lines) into per-domain hooks.
+- Recreate the local `.venv` on Python 3.11 — `numpy==2.4.6` has no 3.10 wheel, so a 3.10
+  venv cannot install the pinned set (the laptop runs 3.10 for wiring only).
+- Split `useSerialCutsController.ts` (850+ lines) into per-domain hooks and `story_arcs.py`
+  (785 lines) into CRUD vs planning.
 - Tighten the remaining mypy ignore list (6 disabled codes: arg-type, assignment, attr-defined,
   list-item, misc, union-attr).
 - Persistent background queue loop option, while keeping `run-next` for testability.
-- Per-file SSE progress for long model downloads (queue/job SSE already shipped).
+- Karaoke word-level ASS subtitles (active-word highlight / pop), borrowable from OpenShorts.
+- Active-speaker signal with an audio gate + per-speaker mouth-motion normalisation
+  (OpenShorts `active_speaker.py`) — the current score favours the better-lit face.
+- Face-aware `_split_filter` (OpenShorts `split_layout.py` finds the two face centres;
+  ours is a fixed 60/60 crop).
+- TextTiling transcript pre-segmentation to feed Qwen better windows and work without it.
+- Retention / auto-prune of finished jobs and their temp files.
+- `large-v3-turbo` default + optional Parakeet ASR adapter; TransNetV2 scene detection.
+- Render resume from mid-file (segmented concat).
 - VLM keyframe analysis for top candidates (declared in ARCHITECTURE, not built).
-- Semantic candidate search via a local sentence-transformer (new ~90 MB dependency).
+- Semantic candidate search via a local sentence-transformer (new ~90 MB dependency;
+  `analysis/text_similarity.py` covers the basic case).
 
 ## Useful Commands
 

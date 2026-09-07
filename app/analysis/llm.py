@@ -32,7 +32,11 @@ class EpisodeAnalyzer(Protocol):
         scenes: list[Scene],
         context: AnalysisContext | None = None,
         outline: EpisodeOutlinePayload | None = None,
+        style_hint: str | None = None,
     ) -> CandidateListPayload:
+        ...
+
+    def content_style(self, transcript: str) -> str:
         ...
 
 
@@ -46,12 +50,16 @@ class StubEpisodeAnalyzer:
             summary=(context.episode_summary if context and context.episode_summary else "Локальная тестовая карта эпизода для проверки конвейера."),
         )
 
+    def content_style(self, transcript: str) -> str:
+        return ""
+
     def candidates(
         self,
         transcript: str,
         scenes: list[Scene],
         context: AnalysisContext | None = None,
         outline: EpisodeOutlinePayload | None = None,
+        style_hint: str | None = None,
     ) -> CandidateListPayload:
         start = scenes[0].start_time if scenes else 0.0
         end = scenes[0].end_time if scenes else 45.0
@@ -146,9 +154,14 @@ class LlamaCppHttpAnalyzer:
         scenes: list[Scene],
         context: AnalysisContext | None = None,
         outline: EpisodeOutlinePayload | None = None,
+        style_hint: str | None = None,
     ) -> CandidateListPayload:
         context = context or AnalysisContext()
-        style_hint = self._content_style(transcript)
+        # ``style_hint`` lets the caller supply (and cache) the content-type
+        # classification so it is not re-run on every stage-3 pass. ``None`` means
+        # "classify here" — kept for direct callers and tests.
+        if style_hint is None:
+            style_hint = self.content_style(transcript)
         chunks = self._candidate_chunks(transcript, count=5 if context.candidate_mode == "story" else 3)
         all_candidates = []
         first_error: Exception | None = None
@@ -248,10 +261,13 @@ class LlamaCppHttpAnalyzer:
         assert last_error is not None
         raise last_error
 
-    def _content_style(self, transcript: str) -> str:
+    def content_style(self, transcript: str) -> str:
         """One quick call classifying the episode, so the clip prompt targets
         the virality signals that matter for *this* kind of content (interview
-        vs match vs talk-show vs vlog...). Best-effort: any failure returns ''."""
+        vs match vs talk-show vs vlog...). Best-effort: any failure returns ''.
+
+        Stage 3 caches the result per episode (``content_style:<fingerprint>``)
+        so it costs one call per episode, not one per re-run."""
         entries = self._transcript_entries(transcript)
         if not entries:
             return ""
