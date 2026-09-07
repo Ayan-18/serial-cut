@@ -20,6 +20,10 @@ class SubtitleCue:
     end_time: float
     text: str
     speaker_label: str | None = None
+    # Per-word (start, end) relative to the clip, aligned to the whitespace/\\N
+    # tokens of ``text``. Populated only on the word-timed path; empty otherwise,
+    # in which case the animated renderer falls back to an even sweep.
+    word_times: tuple[tuple[float, float], ...] = ()
 
 
 def cues_for_range(segments: list[TranscriptSegment], start_time: float, end_time: float) -> list[SubtitleCue]:
@@ -64,12 +68,22 @@ def cues_for_words(
         pages = wrap_russian_subtitle(text, max_chars=max_chars_per_line)
         cue_text = pages[0] if pages else text
         speaker = (speaker_by_segment or {}).get(current[0].segment_id)
+        cue_start = max(0.0, current[0].start_time - start_time)
+        cue_end = max(0.2, min(end_time, current[-1].end_time) - start_time)
+        word_times = tuple(
+            (
+                max(cue_start, word.start_time - start_time),
+                max(cue_start, min(cue_end, word.end_time - start_time)),
+            )
+            for word in current
+        )
         cues.append(
             SubtitleCue(
-                start_time=max(0.0, current[0].start_time - start_time),
-                end_time=max(0.2, min(end_time, current[-1].end_time) - start_time),
+                start_time=cue_start,
+                end_time=cue_end,
                 text=cue_text,
                 speaker_label=speaker,
+                word_times=word_times if len(word_times) == _token_count(cue_text) else (),
             )
         )
         current.clear()
@@ -110,7 +124,11 @@ def improve_cue_timing(
         next_start = cues[index + 1].start_time if index + 1 < len(cues) else clip_duration
         latest_end = max(cue.end_time, min(clip_duration, next_start - 0.04 if index + 1 < len(cues) else clip_duration))
         end = min(latest_end, max(cue.end_time, cue.start_time + desired))
-        result.append(SubtitleCue(cue.start_time, max(cue.start_time + 0.2, end), cue.text, cue.speaker_label))
+        result.append(
+            SubtitleCue(
+                cue.start_time, max(cue.start_time + 0.2, end), cue.text, cue.speaker_label, cue.word_times
+            )
+        )
     return result
 
 
@@ -155,6 +173,12 @@ def render_srt(cues: list[SubtitleCue]) -> str:
     return "\n".join(blocks)
 
 
+# The word lit up in animated mode: gold fill, brief scale-up "pop". Fixed for
+# now — a per-project palette can come later.
+_HIGHLIGHT_COLOUR = "&H0000D7FF"  # #FFD700 as ASS BGR
+_ACTIVE_PREFIX = f"{{\\c{_HIGHLIGHT_COLOUR}\\fscx104\\fscy104\\t(0,120,\\fscx112\\fscy112)}}"
+
+
 def render_ass(
     cues: list[SubtitleCue],
     font_name: str = "Segoe UI",
@@ -162,6 +186,7 @@ def render_ass(
     play_res_x: int = 1080,
     play_res_y: int = 1920,
     safe_zone: str = "standard",
+    animate: bool = False,
 ) -> str:
     margin_l, margin_r, margin_v = _scaled_margins(safe_zone, play_res_x, play_res_y)
     font_name = _safe_ass_font_name(font_name)
@@ -179,11 +204,64 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H00111111,&H99000000,0,0,0,0,
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    events = [
-        f"Dialogue: 0,{_ass_time(cue.start_time)},{_ass_time(cue.end_time)},Default,,0,0,0,,{_escape_ass_text(cue.text)}"
-        for cue in cues
-    ]
+    events: list[str] = []
+    for cue in cues:
+        if animate:
+            events.extend(_animated_events(cue))
+        else:
+            events.append(
+                f"Dialogue: 0,{_ass_time(cue.start_time)},{_ass_time(cue.end_time)},Default,,0,0,0,,"
+                f"{_escape_ass_text(cue.text)}"
+            )
     return header + "\n".join(events) + ("\n" if events else "")
+
+
+_TOKEN_SPLIT = re.compile(r"(\\N|\s+)")
+
+
+def _token_count(text: str) -> int:
+    return sum(1 for part in _TOKEN_SPLIT.split(text) if part and not _TOKEN_SPLIT.fullmatch(part))
+
+
+def _animated_events(cue: SubtitleCue) -> list[str]:
+    """One Dialogue per word: the whole line is redrawn each time with the
+    current word lit up, so the highlight tracks the audio without flicker.
+
+    A cue that carries inline override tags (a bold speaker-name prefix) is left
+    as one static event — animating around them is not worth it.
+    """
+    static = (
+        f"Dialogue: 0,{_ass_time(cue.start_time)},{_ass_time(cue.end_time)},Default,,0,0,0,,"
+        f"{_escape_ass_text(cue.text)}"
+    )
+    if "{" in cue.text:
+        return [static]
+    parts = [part for part in _TOKEN_SPLIT.split(cue.text) if part]
+    word_indexes = [i for i, part in enumerate(parts) if not _TOKEN_SPLIT.fullmatch(part)]
+    if len(word_indexes) < 2:
+        return [static]
+
+    if len(cue.word_times) == len(word_indexes):
+        starts = [span[0] for span in cue.word_times]
+    else:
+        step = (cue.end_time - cue.start_time) / len(word_indexes)
+        starts = [cue.start_time + i * step for i in range(len(word_indexes))]
+
+    def rendered_part(index: int, part: str, active_index: int) -> str:
+        if _TOKEN_SPLIT.fullmatch(part):  # separator: raw \N or literal spaces
+            return part
+        escaped = _escape_ass_text(part)
+        return f"{_ACTIVE_PREFIX}{escaped}{{\\r}}" if index == active_index else escaped
+
+    events: list[str] = []
+    for order, active_part_index in enumerate(word_indexes):
+        ev_start = cue.start_time if order == 0 else starts[order]
+        ev_end = starts[order + 1] if order + 1 < len(word_indexes) else cue.end_time
+        if ev_end <= ev_start:
+            continue
+        line = "".join(rendered_part(i, part, active_part_index) for i, part in enumerate(parts))
+        events.append(f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,{line}")
+    return events or [static]
 
 
 def _srt_time(seconds: float) -> str:

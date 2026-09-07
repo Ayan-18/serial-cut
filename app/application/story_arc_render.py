@@ -164,6 +164,7 @@ def render_story_arc(
                 font_name=settings.subtitle_font_name,
                 font_size=settings.subtitle_font_size,
                 safe_zone=settings.subtitle_safe_zone,
+                animate=settings.subtitle_animate,
             )
             if include_subtitles
             else None
@@ -570,6 +571,7 @@ def _story_arc_render_fingerprint(
                 font_name=settings.subtitle_font_name,
                 font_size=settings.subtitle_font_size,
                 safe_zone=settings.subtitle_safe_zone,
+                animate=settings.subtitle_animate,
             )
             if include_subtitles
             else None
@@ -608,6 +610,7 @@ def _story_arc_render_fingerprint(
                 "size": settings.subtitle_font_size,
                 "safe_zone": settings.subtitle_safe_zone,
                 "speaker_names": settings.subtitle_show_speaker_names,
+                "animate": settings.subtitle_animate,
             },
             "preset": preset_name,
             "loudnorm_two_pass": loudnorm_two_pass,

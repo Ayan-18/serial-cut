@@ -67,6 +67,7 @@ def render_candidate(
             font_name=settings.subtitle_font_name,
             font_size=settings.subtitle_font_size,
             safe_zone=settings.subtitle_safe_zone,
+            animate=settings.subtitle_animate,
         )
         if include_subtitles
         else None
@@ -93,6 +94,7 @@ def render_candidate(
                 "size": settings.subtitle_font_size,
                 "safe_zone": settings.subtitle_safe_zone,
                 "speaker_names": settings.subtitle_show_speaker_names,
+                "animate": settings.subtitle_animate,
             },
             "include_subtitles": include_subtitles,
             "preset": resolved_preset,
@@ -209,6 +211,7 @@ def render_candidate_preview(
             play_res_x=540,
             play_res_y=960,
             safe_zone=settings.subtitle_safe_zone,
+            animate=settings.subtitle_animate,
         )
         if include_subtitles
         else None

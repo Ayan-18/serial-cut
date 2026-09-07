@@ -22,6 +22,7 @@ class RuntimeSettingsRead(BaseModel):
     subtitle_font_size: int
     subtitle_safe_zone: str
     subtitle_show_speaker_names: bool
+    subtitle_animate: bool
     export_filename_template: str
     tts_adapter: str
     tts_narrator_voice: str

@@ -25,6 +25,19 @@ def test_runtime_settings_persist_ui_overrides(session, tmp_path: Path):
     assert loaded.subtitle_font_size == 42
 
 
+def test_subtitle_animate_round_trips_into_effective_settings(session, tmp_path: Path):
+    env = Settings(cache_dir=tmp_path / "cache", output_dir=tmp_path / "out")
+    assert get_runtime_settings(session, env).subtitle_animate is False
+
+    save_runtime_settings(
+        session, get_runtime_settings(session, env).model_copy(update={"subtitle_animate": True})
+    )
+    session.commit()
+
+    assert get_runtime_settings(session, env).subtitle_animate is True
+    assert effective_settings(session, env).subtitle_animate is True
+
+
 def test_stored_settings_keep_cache_dir_as_a_path(session, tmp_path: Path):
     # The JSON store keeps cache_dir as a string; if it comes back as str,
     # `settings.cache_dir / "episodes"` later crashes with `str / str`.

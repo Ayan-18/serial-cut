@@ -34,6 +34,7 @@ class RuntimeSettings(BaseModel):
     subtitle_font_size: int = Field(ge=24, le=96)
     subtitle_safe_zone: Literal["standard", "shorts", "reels", "high"]
     subtitle_show_speaker_names: bool
+    subtitle_animate: bool
     export_filename_template: str = Field(min_length=1, max_length=160)
     tts_adapter: Literal["windows-sapi", "silero", "stub"]
     tts_narrator_voice: str = Field(min_length=1, max_length=32)
@@ -82,6 +83,7 @@ def runtime_settings_from_env(settings: Settings) -> RuntimeSettings:
         subtitle_font_size=settings.subtitle_font_size,
         subtitle_safe_zone=settings.subtitle_safe_zone,
         subtitle_show_speaker_names=settings.subtitle_show_speaker_names,
+        subtitle_animate=settings.subtitle_animate,
         export_filename_template=settings.export_filename_template,
         tts_adapter=settings.tts_adapter,
         tts_narrator_voice=settings.tts_narrator_voice,
@@ -145,6 +147,7 @@ def effective_settings(session: Session, env_settings: Settings) -> Settings:
             "subtitle_font_size": runtime.subtitle_font_size,
             "subtitle_safe_zone": runtime.subtitle_safe_zone,
             "subtitle_show_speaker_names": runtime.subtitle_show_speaker_names,
+            "subtitle_animate": runtime.subtitle_animate,
             "export_filename_template": runtime.export_filename_template,
             "tts_adapter": runtime.tts_adapter,
             "tts_narrator_voice": runtime.tts_narrator_voice,

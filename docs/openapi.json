@@ -6919,6 +6919,10 @@
             "type": "boolean",
             "title": "Subtitle Show Speaker Names"
           },
+          "subtitle_animate": {
+            "type": "boolean",
+            "title": "Subtitle Animate"
+          },
           "export_filename_template": {
             "type": "string",
             "maxLength": 160,
@@ -6979,6 +6983,7 @@
           "subtitle_font_size",
           "subtitle_safe_zone",
           "subtitle_show_speaker_names",
+          "subtitle_animate",
           "export_filename_template",
           "tts_adapter",
           "tts_narrator_voice",
@@ -7054,6 +7059,10 @@
             "type": "boolean",
             "title": "Subtitle Show Speaker Names"
           },
+          "subtitle_animate": {
+            "type": "boolean",
+            "title": "Subtitle Animate"
+          },
           "export_filename_template": {
             "type": "string",
             "title": "Export Filename Template"
@@ -7097,6 +7106,7 @@
           "subtitle_font_size",
           "subtitle_safe_zone",
           "subtitle_show_speaker_names",
+          "subtitle_animate",
           "export_filename_template",
           "tts_adapter",
           "tts_narrator_voice",

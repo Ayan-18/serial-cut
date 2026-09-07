@@ -8,7 +8,7 @@ export type RuntimeSettings = {
   min_clip_seconds: number; max_clip_seconds: number; auto_mode_enabled: boolean; background_queue_enabled: boolean;
   auto_score_threshold: number; max_clips_per_episode: number; render_preset: "youtube_shorts" | "instagram_reels";
   render_use_nvenc: boolean; render_loudnorm_two_pass: boolean; subtitle_font_name: string; subtitle_font_size: number;
-  subtitle_safe_zone: "standard" | "shorts" | "reels" | "high"; subtitle_show_speaker_names: boolean; export_filename_template: string;
+  subtitle_safe_zone: "standard" | "shorts" | "reels" | "high"; subtitle_show_speaker_names: boolean; subtitle_animate: boolean; export_filename_template: string;
   tts_adapter: "windows-sapi" | "silero" | "stub"; tts_narrator_voice: string;
   asr_adapter: "stub" | "faster-whisper"; llm_adapter: "stub" | "llama-cpp-http"; llm_base_url: string;
 };

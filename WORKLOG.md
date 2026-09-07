@@ -1,5 +1,17 @@
 # SerialCuts Worklog
 
+## 2026-09-07 - Animated (karaoke) subtitles
+
+Optional word-level highlight, borrowed from OpenShorts' `generate_ass`. New setting
+`subtitle_animate` (off by default). When on, `render_ass` emits one Dialogue event per word
+— the whole line redrawn each time with the current word in gold and a brief scale-up
+`\t(0,120,\fscx112\fscy112)` "pop", `{\r}` resetting the rest. Exact per-word timing comes
+from `SubtitleCue.word_times` (filled on the word-timed path, carried through
+`improve_cue_timing`); a cue without it falls back to an even sweep, so every cue animates.
+Cues with inline tags (a bold speaker-name prefix) stay static. `\N` line breaks survive
+every frame. `subtitle_animate` flows through `RuntimeSettings` / `effective_settings` and
+into the render fingerprint, so flipping it re-renders. `tests/test_subtitles.py`.
+
 ## 2026-09-07 - Hygiene: crossfade pix_fmt test, content-style cache, mcp extra
 
 - `build_crossfade_args` forces `yuv420p` (fix `fa8e7be`) but had no regression test —
@@ -1067,7 +1079,6 @@ Still open:
 - Tighten the remaining mypy ignore list (6 disabled codes: arg-type, assignment, attr-defined,
   list-item, misc, union-attr).
 - Persistent background queue loop option, while keeping `run-next` for testability.
-- Karaoke word-level ASS subtitles (active-word highlight / pop), borrowable from OpenShorts.
 - Active-speaker signal with an audio gate + per-speaker mouth-motion normalisation
   (OpenShorts `active_speaker.py`) — the current score favours the better-lit face.
 - Face-aware `_split_filter` (OpenShorts `split_layout.py` finds the two face centres;
