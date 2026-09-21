@@ -1,0 +1,38 @@
+import { BookOpen, Save, Sparkles, Trash2, UserRound, WandSparkles } from "lucide-react";
+
+import type { SerialCutsController } from "../hooks/useSerialCutsController";
+import { formatClock, identityMethodLabel, SILERO_VOICES, splitLines, voiceLabel } from "../utils";
+
+type StoryContextSectionProps = {
+  controller: SerialCutsController;
+};
+
+/** Story context / candidate mode for the open episode, plus the character roster and speaker mapping. */
+export function StoryContextSection({ controller }: StoryContextSectionProps) {
+  const {
+    selectedEpisodeId, storyContext, setStoryContext, saveStoryContext, isEpisodeBusy, regenerateStoryCandidates, episodeOutline,
+    characters, characterName, setCharacterName, characterDescription, setCharacterDescription, characterPhotos,
+    readCharacterPhotos, createCharacter, deleteCharacterPhoto, addCharacterPhotos, setCharacterNarrationVoice, mergeCharacter, deleteCharacter,
+    speakerLabels, speakerIdentities, assignSpeaker, identifyCharacters,
+  } = controller;
+
+  if (!selectedEpisodeId || !storyContext) return null;
+
+  return <section className="story-dashboard section-gap">
+    <div className="panel story-panel"><div className="panel-title"><BookOpen size={19} /><h2>Сюжетный контекст</h2><span className="badge">{storyContext.candidate_mode === "story" ? "Связный пересказ" : "Лучшие моменты"}</span></div>
+      <div className="story-mode"><button className={storyContext.candidate_mode === "highlights" ? "" : "secondary"} onClick={() => setStoryContext({ ...storyContext, candidate_mode: "highlights" })}>Лучшие моменты</button><button className={storyContext.candidate_mode === "story" ? "" : "secondary"} onClick={() => setStoryContext({ ...storyContext, candidate_mode: "story" })}>Сюжет серии</button></div>
+      <label className="story-field"><span>Общая суть сезона</span><textarea rows={4} value={storyContext.season_context} onChange={(event) => setStoryContext({ ...storyContext, season_context: event.target.value })} placeholder="Главные персонажи, отношения, общая история и тон сезона…" /></label>
+      <label className="story-field"><span>Суть этой серии</span><textarea rows={4} value={storyContext.episode_summary} onChange={(event) => setStoryContext({ ...storyContext, episode_summary: event.target.value })} placeholder="Завязка, конфликт, важный поворот и итог серии…" /></label>
+      <div className="story-columns"><label className="story-field"><span>Обязательно показать</span><textarea rows={3} value={storyContext.required_events.join("\n")} onChange={(event) => setStoryContext({ ...storyContext, required_events: splitLines(event.target.value) })} placeholder="По одному событию на строку" /></label><label className="story-field"><span>Не включать</span><textarea rows={3} value={storyContext.excluded_events.join("\n")} onChange={(event) => setStoryContext({ ...storyContext, excluded_events: splitLines(event.target.value) })} placeholder="Второстепенные линии или нежелательные сцены" /></label></div>
+      <label className="inline-check"><input type="checkbox" checked={storyContext.spoilers_allowed} onChange={(event) => setStoryContext({ ...storyContext, spoilers_allowed: event.target.checked })} /> Можно показывать концовку серии</label>
+      <div className="story-actions"><button onClick={saveStoryContext}><Save size={16} /> Сохранить контекст</button><button className="secondary" disabled={isEpisodeBusy(selectedEpisodeId)} onClick={regenerateStoryCandidates}><Sparkles size={16} /> Пересоздать кандидатов</button></div>
+      {episodeOutline && <details className="outline-card"><summary>Построенная карта серии</summary><p>{episodeOutline.summary}</p><ol>{episodeOutline.time_ranges.map((item, index) => <li key={`${item.start_time}-${index}`}><strong>{formatClock(item.start_time)}–{formatClock(item.end_time)}</strong> {item.summary}</li>)}</ol></details>}
+    </div>
+    <div className="panel character-panel"><div className="panel-title"><UserRound size={19} /><h2>Персонажи и голоса</h2><span className="badge">{characters.length}</span></div>
+      <div className="character-create"><input value={characterName} onChange={(event) => setCharacterName(event.target.value)} placeholder="Имя персонажа" /><input value={characterDescription} onChange={(event) => setCharacterDescription(event.target.value)} placeholder="Краткое описание" /><label className="file-picker">{characterPhotos.length ? `Выбрано фото: ${characterPhotos.length}` : "Выбрать несколько фото"}<input multiple type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => readCharacterPhotos(event.target.files)} /></label><button disabled={!characterName.trim()} onClick={createCharacter}>Добавить</button></div>
+      <div className="character-list">{characters.map((character) => <article className="character-card" key={character.id}><div className="character-photos">{character.photo_urls.map((url, index) => <span className="character-photo" key={url}><img src={url} alt={`${character.name}, фото ${index + 1}`} /><button title="Удалить это фото" onClick={() => deleteCharacterPhoto(character.id, index)}>×</button></span>)}{!character.photo_urls.length && <span className="character-placeholder"><UserRound /></span>}<label className="character-photo-add" title="Добавить фотографии">+<input multiple type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => addCharacterPhotos(character.id, event.target.files)} /></label></div><div className="character-info"><strong>{character.name}</strong><small>{character.description || "Без описания"}</small><small>{character.photo_count} фото · голосовых образцов: {character.voice_sample_count}</small><label className="character-voice" title="Голос закадровой озвучки для арок от лица этого героя"><span>Голос озвучки</span><select value={character.narration_voice ?? ""} onChange={(event) => setCharacterNarrationVoice(character.id, event.target.value || null)}><option value="">Авто ({voiceLabel(character.narration_voice_auto)})</option>{SILERO_VOICES.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</select></label><select title="Объединить дубль в другого персонажа" value="" onChange={(event) => mergeCharacter(character.id, Number(event.target.value))}><option value="">Объединить в…</option>{characters.filter((item) => item.id !== character.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><button className="icon-button danger" title="Удалить персонажа" onClick={() => deleteCharacter(character.id)}><Trash2 size={15} /></button></article>)}{!characters.length && <p className="empty">Добавьте имя и 3–8 фотографий с разными ракурсами. Все файлы останутся на компьютере.</p>}</div>
+      {!!speakerLabels.length && <div className="speaker-map"><h3>Кто скрывается за голосами</h3>{speakerLabels.map((label) => { const current = speakerIdentities.find((item) => item.source_label === label); return <label key={label}><span>{label}</span><select value={current?.character_id ?? ""} onChange={(event) => assignSpeaker(label, Number(event.target.value))}><option value="">Не определён</option>{characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select>{current && <small>{current.confidence != null ? `${Math.round(current.confidence * 100)}% · ` : ""}{identityMethodLabel(current.method)}</small>}</label>; })}</div>}
+      <button className="secondary identify-button" disabled={!characters.some((item) => item.photo_count > 0 || item.voice_sample_count > 0) || isEpisodeBusy(selectedEpisodeId)} onClick={identifyCharacters}><WandSparkles size={16} /> Лица + губы + голоса</button>
+    </div>
+  </section>;
+}
